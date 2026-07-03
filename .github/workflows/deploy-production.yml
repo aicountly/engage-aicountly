@@ -1,5 +1,7 @@
 name: Deploy Production via SSH
 
+# Manual only — run from Actions → Deploy Production via SSH → Run workflow.
+# Never triggered by push; server api/.env is not modified by this workflow.
 on:
   workflow_dispatch:
 

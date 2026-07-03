@@ -1,5 +1,7 @@
 name: Deploy to GitHub Pages
 
+# Auto-deploy on every push to main. Optional manual re-run via Actions tab.
+# Production deploy (deploy-production.yml) is manual-only and never runs here.
 on:
   push:
     branches:

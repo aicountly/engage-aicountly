@@ -26,8 +26,8 @@ engage-aicountly/
 │   ├── cpanel-rsync-api.filters    rsync rules (preserve server api/.env)
 │   └── cpanel-post-deploy-api.sh   migrate/seed hook (never edits api/.env)
 ├── .github/workflows/
-│   ├── deploy-github-pages.yml     GitHub Pages (push main / manual)
-│   └── deploy-production.yml       Production cPanel via SSH (manual)
+│   ├── deploy-github-pages.yml     GitHub Pages (auto on push to main)
+│   └── deploy-production.yml       Production cPanel via SSH (manual only)
 └── README.md
 ```
 
@@ -59,16 +59,14 @@ npm run dev
 
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
-| **Deploy to GitHub Pages** | `.github/workflows/deploy-github-pages.yml` | Push to `main` or manual | Builds `web/` and publishes to GitHub Pages (demo/staging UI) |
-| **Deploy Production via SSH** | `.github/workflows/deploy-production.yml` | Manual only | Builds web + server-php, rsyncs to cPanel via SSH; **does not modify server `api/.env`** |
+| **Deploy to GitHub Pages** | `.github/workflows/deploy-github-pages.yml` | **Automatic** on every push to `main` (optional manual re-run) | Builds `web/` and publishes to GitHub Pages |
+| **Deploy Production via SSH** | `.github/workflows/deploy-production.yml` | **Manual only** (`workflow_dispatch`) | Builds web + server-php, rsyncs to cPanel via SSH; **does not modify server `api/.env`** |
 
 ### GitHub Pages setup
 
 1. Repo **Settings → Pages → Build and deployment**: Source = **GitHub Actions**.
-2. Add repository secrets (or variables):
-   - `VITE_API_URL` — e.g. `https://engage.aicountly.org/api`
-   - `VITE_APP_NAME` — e.g. `AICOUNTLY Engage Portal`
-3. Push to `main` or run **Deploy to GitHub Pages** from the Actions tab.
+2. Add repository secrets (or variables): `VITE_API_URL`, `VITE_APP_NAME`.
+3. Every push to **`main`** triggers **Deploy to GitHub Pages** automatically.
 
 For project pages (`https://<org>.github.io/engage-aicountly/`), Vite sets the base path automatically when `GITHUB_PAGES=true`.
 
