@@ -12,6 +12,16 @@ concurrency:
   group: engage-production
   cancel-in-progress: true
 
+env:
+  PROD_SFTP_HOST: ${{ secrets.PROD_SFTP_HOST }}
+  PROD_SFTP_PORT: ${{ secrets.PROD_SFTP_PORT }}
+  PROD_SFTP_USER: ${{ secrets.PROD_SFTP_USER }}
+  PROD_SFTP_REMOTE_ROOT: ${{ secrets.PROD_SFTP_REMOTE_ROOT }}
+  # Keep non-interactive SSH quiet; -T avoids cPanel motd breaking rsync protocol.
+  SSH_OPTS: -T -o BatchMode=yes -o LogLevel=ERROR -o RequestTTY=no
+  SCP_OPTS: -o BatchMode=yes -o LogLevel=ERROR -o RequestTTY=no
+  RSYNC_PATH: env -i PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/cpanel/3rdparty/bin rsync
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -74,30 +84,54 @@ jobs:
 
       - name: Add server to known_hosts
         working-directory: .
-        env:
-          SFTP_HOST: ${{ secrets.PROD_SFTP_HOST }}
-          SFTP_PORT: ${{ secrets.PROD_SFTP_PORT }}
         run: |
-          if [ -z "${SFTP_HOST:-}" ] || [ -z "${SFTP_PORT:-}" ]; then
+          if [ -z "${PROD_SFTP_HOST:-}" ] || [ -z "${PROD_SFTP_PORT:-}" ]; then
             echo "::error::Missing repository secrets: set PROD_SFTP_HOST and PROD_SFTP_PORT under Settings → Secrets → Actions."
             exit 1
           fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          if ! ssh-keyscan -T 15 -p "$SFTP_PORT" "$SFTP_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
-            echo "::warning::ssh-keyscan could not reach $SFTP_HOST:$SFTP_PORT — falling back to StrictHostKeyChecking=accept-new"
-            printf 'Host %s\n  Port %s\n  StrictHostKeyChecking accept-new\n' "$SFTP_HOST" "$SFTP_PORT" >> ~/.ssh/config
+          if ! ssh-keyscan -T 15 -p "$PROD_SFTP_PORT" "$PROD_SFTP_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+            echo "::warning::ssh-keyscan could not reach $PROD_SFTP_HOST:$PROD_SFTP_PORT — falling back to StrictHostKeyChecking=accept-new"
+            printf 'Host %s\n  Port %s\n  StrictHostKeyChecking accept-new\n' "$PROD_SFTP_HOST" "$PROD_SFTP_PORT" >> ~/.ssh/config
             chmod 600 ~/.ssh/config
           fi
 
+      - name: Verify SSH and remote rsync
+        working-directory: .
+        run: |
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          SSH_CMD=(ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}")
+
+          echo "Testing SSH login..."
+          "${SSH_CMD[@]}" "echo SSH_OK"
+
+          echo "Checking for unexpected login output (breaks rsync protocol)..."
+          LOGIN_OUT=$("${SSH_CMD[@]}" "printf RSYNC_SHELL_OK" 2>/dev/null || true)
+          if [ "$LOGIN_OUT" != "RSYNC_SHELL_OK" ]; then
+            echo "::warning::SSH stdout was not clean: $(printf %q "$LOGIN_OUT")"
+          fi
+
+          echo "Remote rsync:"
+          "${SSH_CMD[@]}" "command -v rsync && rsync --version | head -1" || {
+            echo "::error::rsync is not available for ${PROD_SFTP_USER}@${PROD_SFTP_HOST}. Enable rsync/SSH in cPanel or contact hosting support."
+            exit 1
+          }
+
+          echo "Ensuring remote deploy paths exist..."
+          "${SSH_CMD[@]}" "test -d \"${REMOTE_ROOT}\" || mkdir -p \"${REMOTE_ROOT}\" \"${REMOTE_ROOT}/api\""
+
       - name: Deploy dist contents into public_html
         run: |
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          RSYNC_RSH="ssh -p ${PROD_SFTP_PORT} ${SSH_OPTS}"
           rsync -avz --delete \
+            --rsync-path="${RSYNC_PATH}" \
             --exclude 'api/' \
             --exclude 'php.ini' \
-            -e "ssh -p ${{ secrets.PROD_SFTP_PORT }}" \
+            -e "$RSYNC_RSH" \
             dist/ \
-            "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}:${{ secrets.PROD_SFTP_REMOTE_ROOT }}/"
+            "${PROD_SFTP_USER}@${PROD_SFTP_HOST}:${REMOTE_ROOT}/"
 
       - name: Stamp API revision for deploy verification
         working-directory: .
@@ -106,33 +140,38 @@ jobs:
       - name: Deploy server-php into public_html/api
         working-directory: .
         run: |
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          RSYNC_RSH="ssh -p ${PROD_SFTP_PORT} ${SSH_OPTS}"
           rsync -avz --delete \
+            --rsync-path="${RSYNC_PATH}" \
             --filter='merge scripts/cpanel-rsync-api.filters' \
-            -e "ssh -p ${{ secrets.PROD_SFTP_PORT }}" \
+            -e "$RSYNC_RSH" \
             server-php/ \
-            "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}:${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/"
+            "${PROD_SFTP_USER}@${PROD_SFTP_HOST}:${REMOTE_ROOT}/api/"
 
       - name: Post-deploy api setup (preserve .env, ship .env.example)
         working-directory: .
         run: |
-          scp -P "${{ secrets.PROD_SFTP_PORT }}" scripts/cpanel-post-deploy-api.sh \
-            "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}:${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/cpanel-post-deploy-api.sh"
-          ssh -p "${{ secrets.PROD_SFTP_PORT }}" "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}" \
-            "chmod +x '${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/cpanel-post-deploy-api.sh' && \
-             bash '${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/cpanel-post-deploy-api.sh' '${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api'"
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          scp -P "$PROD_SFTP_PORT" ${SCP_OPTS} scripts/cpanel-post-deploy-api.sh \
+            "${PROD_SFTP_USER}@${PROD_SFTP_HOST}:${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh"
+          ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" \
+            "chmod +x '${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh' && \
+             bash '${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh' '${REMOTE_ROOT}/api'"
 
       - name: Verify files on remote server
         working-directory: .
         run: |
-          ssh -p "${{ secrets.PROD_SFTP_PORT }}" "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}" '
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" '
             echo "---- public_html listing ----"
-            ls -lah '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/
+            ls -lah '"${REMOTE_ROOT}"'/
             echo "---- assets listing ----"
-            ls -lah '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/assets || true
+            ls -lah '"${REMOTE_ROOT}"'/assets || true
             echo "---- index.html top lines ----"
-            sed -n "1,80p" '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/index.html
+            sed -n "1,80p" '"${REMOTE_ROOT}"'/index.html
             echo "---- api listing ----"
-            ls -lah '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/api/ || true
+            ls -lah '"${REMOTE_ROOT}"'/api/ || true
             echo "---- api/.env present (content not shown) ----"
-            test -f '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/api/.env && echo "api/.env exists" || echo "MISSING api/.env"
+            test -f '"${REMOTE_ROOT}"'/api/.env && echo "api/.env exists" || echo "MISSING api/.env"
           '
