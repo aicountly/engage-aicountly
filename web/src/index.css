@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+@layer components {
+  .engage-card {
+    @apply rounded-xl border border-neutral-200 bg-white p-5 shadow-sm;
+  }
+  .engage-input {
+    @apply block w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm
+      focus:border-aicountly-500 focus:outline-none focus:ring-2 focus:ring-aicountly-500/30
+      disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-500;
+  }
+  .engage-label {
+    @apply block text-xs font-medium uppercase tracking-wide text-neutral-600 mb-1;
+  }
+  .engage-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium shadow-sm
+      transition focus:outline-none focus:ring-2 focus:ring-offset-1;
+  }
+  .engage-btn-primary {
+    @apply engage-btn bg-aicountly-600 text-white hover:bg-aicountly-700 focus:ring-aicountly-500
+      disabled:bg-neutral-300 disabled:cursor-not-allowed;
+  }
+  .engage-btn-secondary {
+    @apply engage-btn bg-white text-neutral-800 border border-neutral-300 hover:bg-neutral-50;
+  }
+  .engage-btn-danger {
+    @apply engage-btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  .engage-badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .engage-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .engage-table th {
+    @apply bg-aicountly-50 text-left text-xs font-semibold uppercase tracking-wide text-aicountly-700
+      px-3 py-2 border-b border-aicountly-100;
+  }
+  .engage-table td {
+    @apply px-3 py-2 border-b border-neutral-100 text-neutral-800;
+  }
+  .engage-pill {
+    @apply inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium border;
+  }
+  .engage-drawer-backdrop {
+    @apply fixed inset-0 bg-black/30 z-40;
+  }
+  .engage-drawer {
+    @apply fixed right-0 top-0 z-50 h-screen w-full max-w-2xl overflow-y-auto bg-white shadow-xl;
+  }
+}

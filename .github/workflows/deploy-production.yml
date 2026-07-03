@@ -1,0 +1,137 @@
+name: Deploy Production via SSH
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engage-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create web .env for production build
+        env:
+          VITE_API_URL_SECRET: ${{ secrets.VITE_API_URL }}
+          VITE_API_URL_VAR: ${{ vars.VITE_API_URL }}
+          VITE_APP_NAME_SECRET: ${{ secrets.VITE_APP_NAME }}
+          VITE_APP_NAME_VAR: ${{ vars.VITE_APP_NAME }}
+        run: |
+          API_URL="${VITE_API_URL_SECRET:-}"
+          if [ -z "$API_URL" ]; then API_URL="${VITE_API_URL_VAR:-}"; fi
+          if [ -z "$API_URL" ]; then
+            echo "::error::Set VITE_API_URL in GitHub Actions secrets or repository variables."
+            exit 1
+          fi
+
+          APP_NAME="${VITE_APP_NAME_SECRET:-}"
+          if [ -z "$APP_NAME" ]; then APP_NAME="${VITE_APP_NAME_VAR:-AICOUNTLY Engage Portal}"; fi
+
+          printf 'VITE_API_URL=%s\nVITE_APP_NAME=%s\n' "$API_URL" "$APP_NAME" > .env
+          echo "Frontend build env configured from GitHub secrets/variables (server api/.env is not touched by deploy)"
+
+      - name: Build for production
+        run: npm run build
+
+      - name: Verify build output
+        run: |
+          test -d dist || (echo "dist missing — build failed" && exit 1)
+          echo "Build ready: $(find dist -type f | wc -l) files in dist"
+
+      - name: Install server-php Composer dependencies (production)
+        working-directory: ..
+        run: |
+          cd server-php
+          composer install --no-dev --no-interaction --no-progress --optimize-autoloader --prefer-dist
+          test -d vendor/codeigniter4/framework || (echo "CI4 framework missing after install" && exit 1)
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
+        working-directory: ..
+        env:
+          SFTP_HOST: ${{ secrets.PROD_SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.PROD_SFTP_PORT }}
+        run: |
+          if [ -z "${SFTP_HOST:-}" ] || [ -z "${SFTP_PORT:-}" ]; then
+            echo "::error::Missing repository secrets: set PROD_SFTP_HOST and PROD_SFTP_PORT under Settings → Secrets → Actions."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if ! ssh-keyscan -T 15 -p "$SFTP_PORT" "$SFTP_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+            echo "::warning::ssh-keyscan could not reach $SFTP_HOST:$SFTP_PORT — falling back to StrictHostKeyChecking=accept-new"
+            printf 'Host %s\n  Port %s\n  StrictHostKeyChecking accept-new\n' "$SFTP_HOST" "$SFTP_PORT" >> ~/.ssh/config
+            chmod 600 ~/.ssh/config
+          fi
+
+      - name: Deploy dist contents into public_html
+        run: |
+          rsync -avz --delete \
+            --exclude 'api/' \
+            --exclude 'php.ini' \
+            -e "ssh -p ${{ secrets.PROD_SFTP_PORT }}" \
+            dist/ \
+            "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}:${{ secrets.PROD_SFTP_REMOTE_ROOT }}/"
+
+      - name: Stamp API revision for deploy verification
+        working-directory: ..
+        run: echo "${{ github.sha }}" > server-php/REVISION
+
+      - name: Deploy server-php into public_html/api
+        working-directory: ..
+        run: |
+          rsync -avz --delete \
+            --filter='merge scripts/cpanel-rsync-api.filters' \
+            -e "ssh -p ${{ secrets.PROD_SFTP_PORT }}" \
+            server-php/ \
+            "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}:${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/"
+
+      - name: Post-deploy api setup (preserve .env, ship .env.example)
+        working-directory: ..
+        run: |
+          scp -P "${{ secrets.PROD_SFTP_PORT }}" scripts/cpanel-post-deploy-api.sh \
+            "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}:${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/cpanel-post-deploy-api.sh"
+          ssh -p "${{ secrets.PROD_SFTP_PORT }}" "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}" \
+            "chmod +x '${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/cpanel-post-deploy-api.sh' && \
+             bash '${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api/cpanel-post-deploy-api.sh' '${{ secrets.PROD_SFTP_REMOTE_ROOT }}/api'"
+
+      - name: Verify files on remote server
+        working-directory: ..
+        run: |
+          ssh -p "${{ secrets.PROD_SFTP_PORT }}" "${{ secrets.PROD_SFTP_USER }}@${{ secrets.PROD_SFTP_HOST }}" '
+            echo "---- public_html listing ----"
+            ls -lah '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/
+            echo "---- assets listing ----"
+            ls -lah '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/assets || true
+            echo "---- index.html top lines ----"
+            sed -n "1,80p" '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/index.html
+            echo "---- api listing ----"
+            ls -lah '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/api/ || true
+            echo "---- api/.env present (content not shown) ----"
+            test -f '"${{ secrets.PROD_SFTP_REMOTE_ROOT }}"'/api/.env && echo "api/.env exists" || echo "MISSING api/.env"
+          '

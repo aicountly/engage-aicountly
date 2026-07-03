@@ -1,0 +1,19 @@
+RewriteEngine On
+RewriteBase /api/
+
+# Pass Authorization header to PHP (required for JWT on Apache/CGI/FPM)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Block direct access to sensitive paths (CodeIgniter layout)
+RewriteRule ^(app|database|writable|vendor)/ - [F,L]
+
+<FilesMatch "^\.env">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+</FilesMatch>
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]

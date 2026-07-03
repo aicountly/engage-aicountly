@@ -1,0 +1,84 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (with cache)
+        if: hashFiles('web/package-lock.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Node
+        if: hashFiles('web/package-lock.json') == ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm install
+
+      - name: Create web .env from secrets
+        working-directory: web
+        run: |
+          printf 'VITE_API_URL=%s\nVITE_APP_NAME=%s\n' \
+            "${{ secrets.VITE_API_URL }}" \
+            "${{ secrets.VITE_APP_NAME }}" \
+            > .env
+
+      - name: Build web for GitHub Pages
+        working-directory: web
+        env:
+          GITHUB_PAGES: "true"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npm run build
+
+      - name: SPA fallback for GitHub Pages
+        run: cp web/dist/index.html web/dist/404.html
+
+      - name: Verify dist output
+        run: ls -la web/dist/ && echo "Build artifact verified"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

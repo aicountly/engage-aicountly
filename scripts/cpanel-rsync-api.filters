@@ -1,0 +1,16 @@
+# cPanel api/ rsync filters (use: rsync --filter='merge scripts/cpanel-rsync-api.filters')
+#
+# - .env     do not copy from CI checkout (secrets live only on the server)
+# P .env     never delete the server's .env when using --delete
+#
+# .env.example is NOT listed here — it is deployed from git on every release.
+
+P .env
+- .env
+
+# Preserve server runtime data across --delete deploys
+P writable/.engage_seed_complete
+P writable/cache/
+P writable/logs/
+P writable/session/
+P writable/uploads/
