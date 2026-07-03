@@ -2,6 +2,8 @@ name: Deploy to GitHub Pages
 
 # Auto-deploy on every push to main. Optional manual re-run via Actions tab.
 # Production deploy (deploy-production.yml) is manual-only and never runs here.
+#
+# Prerequisite: repo Settings → Pages → Build and deployment → Source = GitHub Actions
 on:
   push:
     branches:
@@ -12,10 +14,11 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read
 
 concurrency:
-  group: github-pages
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -27,31 +30,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node (with cache)
-        if: hashFiles('web/package-lock.json') != ''
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Setup Node
-        if: hashFiles('web/package-lock.json') == ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
       - name: Install web dependencies
         working-directory: web
-        run: npm install
+        run: npm ci
 
-      - name: Create web .env from secrets
+      - name: Create web .env for GitHub Pages build
         working-directory: web
+        env:
+          VITE_API_URL_SECRET: ${{ secrets.VITE_API_URL }}
+          VITE_API_URL_VAR: ${{ vars.VITE_API_URL }}
+          VITE_APP_NAME_SECRET: ${{ secrets.VITE_APP_NAME }}
+          VITE_APP_NAME_VAR: ${{ vars.VITE_APP_NAME }}
         run: |
-          printf 'VITE_API_URL=%s\nVITE_APP_NAME=%s\n' \
-            "${{ secrets.VITE_API_URL }}" \
-            "${{ secrets.VITE_APP_NAME }}" \
-            > .env
+          API_URL="${VITE_API_URL_SECRET:-}"
+          if [ -z "$API_URL" ]; then API_URL="${VITE_API_URL_VAR:-}"; fi
+          if [ -z "$API_URL" ]; then
+            echo "::error::Set VITE_API_URL in GitHub Actions secrets or repository variables."
+            exit 1
+          fi
+
+          APP_NAME="${VITE_APP_NAME_SECRET:-}"
+          if [ -z "$APP_NAME" ]; then APP_NAME="${VITE_APP_NAME_VAR:-AICOUNTLY Engage Portal}"; fi
+
+          printf 'VITE_API_URL=%s\nVITE_APP_NAME=%s\n' "$API_URL" "$APP_NAME" > .env
+          echo "Frontend build env configured from GitHub secrets/variables"
 
       - name: Build web for GitHub Pages
         working-directory: web
@@ -60,11 +69,12 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: npm run build
 
-      - name: SPA fallback for GitHub Pages
-        run: cp web/dist/index.html web/dist/404.html
-
-      - name: Verify dist output
-        run: ls -la web/dist/ && echo "Build artifact verified"
+      - name: Prepare GitHub Pages artifact
+        working-directory: web
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+          ls -la dist/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -77,10 +87,13 @@ jobs:
     permissions:
       pages: write
       id-token: write
+      actions: read
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
+        with:
+          timeout: 600000

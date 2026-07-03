@@ -64,11 +64,18 @@ npm run dev
 
 ### GitHub Pages setup
 
-1. Repo **Settings → Pages → Build and deployment**: Source = **GitHub Actions**.
+1. Repo **Settings → Pages → Build and deployment**: Source = **GitHub Actions** (required — deploy fails with “Deployment failed, try again later” if this is still “Deploy from a branch”).
 2. Add repository secrets (or variables): `VITE_API_URL`, `VITE_APP_NAME`.
 3. Every push to **`main`** triggers **Deploy to GitHub Pages** automatically.
 
 For project pages (`https://<org>.github.io/engage-aicountly/`), Vite sets the base path automatically when `GITHUB_PAGES=true`.
+
+**If the deploy job fails after “Created deployment”:**
+
+- Confirm step 1 above (Source = GitHub Actions), then re-run the workflow.
+- **Settings → Environments → `github-pages`**: remove required reviewers if deploys should be automatic (first deploy may create this environment).
+- **Settings → Pages**: if a custom domain is set, verify DNS and HTTPS status; try clearing the domain temporarily to test.
+- Transient GitHub Pages errors often succeed on **Re-run failed jobs** without code changes.
 
 ### Production SSH deploy setup (same secret names as books-react-app)
 
