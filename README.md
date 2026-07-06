@@ -90,7 +90,7 @@ Production deploy uses **GitHub Secrets / Variables only for SSH access and the 
    | `PROD_SFTP_PORT` | cPanel SSH port (usually `22`) |
    | `PROD_SFTP_USER` | cPanel SSH username |
    | `PROD_SFTP_REMOTE_ROOT` | Document root (e.g. `/home/engage/public_html`) |
-   | `VITE_API_URL` | Frontend build only — use `/api` on `engage.aicountly.org` |
+   | `VITE_API_URL` | Frontend build only — use `/api` or `https://engage.aicountly.org/api` (not the domain root) |
    | `VITE_APP_NAME` | Frontend build only (optional; defaults in workflow) |
 
 2. On cPanel: authorize the deploy key for `PROD_SFTP_USER`.

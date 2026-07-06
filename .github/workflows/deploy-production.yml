@@ -56,15 +56,24 @@ jobs:
             echo "::error::Set VITE_API_URL in GitHub Actions secrets or repository variables."
             exit 1
           fi
+          API_URL="$(bash ../scripts/normalize-vite-api-url.sh "$API_URL")"
 
           APP_NAME="${VITE_APP_NAME_SECRET:-}"
           if [ -z "$APP_NAME" ]; then APP_NAME="${VITE_APP_NAME_VAR:-AICOUNTLY Engage Portal}"; fi
 
           printf 'VITE_API_URL=%s\nVITE_APP_NAME=%s\n' "$API_URL" "$APP_NAME" > .env
-          echo "Frontend build env configured from GitHub secrets/variables (server api/.env is not touched by deploy)"
+          echo "Frontend build env configured (VITE_API_URL=${API_URL})"
 
       - name: Build for production
         run: npm run build
+
+      - name: Verify API URL baked into production bundle
+        run: |
+          if grep -rqE 'engage\.aicountly\.org/v1/' dist/assets/*.js 2>/dev/null; then
+            echo "::error::Build calls engage.aicountly.org/v1/* without /api. Set VITE_API_URL=/api or https://engage.aicountly.org/api"
+            exit 1
+          fi
+          echo "API URL check passed"
 
       - name: Verify build output
         run: |

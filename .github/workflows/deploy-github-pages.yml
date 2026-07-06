@@ -55,12 +55,13 @@ jobs:
             echo "::error::Set VITE_API_URL in GitHub Actions secrets or repository variables."
             exit 1
           fi
+          API_URL="$(bash ../scripts/normalize-vite-api-url.sh "$API_URL")"
 
           APP_NAME="${VITE_APP_NAME_SECRET:-}"
           if [ -z "$APP_NAME" ]; then APP_NAME="${VITE_APP_NAME_VAR:-AICOUNTLY Engage Portal}"; fi
 
           printf 'VITE_API_URL=%s\nVITE_APP_NAME=%s\n' "$API_URL" "$APP_NAME" > .env
-          echo "Frontend build env configured from GitHub secrets/variables"
+          echo "Frontend build env configured (VITE_API_URL=${API_URL})"
 
       - name: Build web for GitHub Pages
         working-directory: web
