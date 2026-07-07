@@ -19,6 +19,19 @@ mkdir -p writable/cache writable/session writable/logs writable/uploads
 chmod -R 775 writable/cache writable/session writable/logs writable/uploads 2>/dev/null || \
   chmod -R 777 writable/cache writable/session writable/logs writable/uploads
 
+if [ ! -f app/Views/errors/html/production.php ]; then
+  echo "Installing CI4 error views (required for production exception pages)..."
+  mkdir -p app/Views/errors
+  cp -r vendor/codeigniter4/framework/app/Views/errors/. app/Views/errors/ 2>/dev/null || true
+fi
+mkdir -p app/Language/en
+if [ ! -f app/Language/en/Errors.php ]; then
+  cp vendor/codeigniter4/framework/system/Language/en/Errors.php app/Language/en/Errors.php 2>/dev/null || true
+fi
+
+echo "---- Console SSO env (values masked) ----"
+grep -E '^(CONSOLE_API_URL|CONSOLE_API_BASE_URL|CONTROLLER_APP_CODE)=' .env | sed 's/=.*/=***/' || echo "WARNING: add CONSOLE_API_URL and CONTROLLER_APP_CODE=engage to api/.env"
+
 echo "---- Running database migrations ----"
 CI_ENVIRONMENT=production php spark migrate 2>&1
 

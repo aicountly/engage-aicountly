@@ -69,8 +69,12 @@ class AuthController extends BaseApiController
     public function ssoCallback()
     {
         try {
-            if ($fail = $this->ensureJwtConfigured()) {
-                return $this->ssoCallbackHtml('Engage Portal is not configured for Console SSO yet.', 503);
+            $jwtSecret = (string) env('ENGAGE_JWT_SECRET', '');
+            if ($jwtSecret === '' || strlen($jwtSecret) < 32) {
+                return $this->ssoCallbackHtml(
+                    'Server misconfigured: set ENGAGE_JWT_SECRET (32+ chars) in api/.env',
+                    503,
+                );
             }
 
             $token = trim((string) ($this->request->getGet('token') ?? ''));
@@ -81,27 +85,22 @@ class AuthController extends BaseApiController
             $identity = Services::consoleIdentity()->exchangeLaunchToken($token);
             if ($identity === null) {
                 return $this->ssoCallbackHtml(
-                    'This sign-in link expired. Go back to Console and click Engage again.',
+                    'This sign-in link expired or Console SSO is not configured. Add CONSOLE_API_URL and CONTROLLER_APP_CODE=engage to api/.env, then try again from Console.',
                     401,
                 );
             }
 
             $session = $this->buildSessionFromConsoleIdentity($identity, 'controller_sso_callback');
             if ($session instanceof ResponseInterface) {
-                $message = 'You do not have access to the Engage controller app.';
-                if (method_exists($session, 'getJSON')) {
-                    $json = $session->getJSON(true);
-                    if (is_array($json) && ! empty($json['error'])) {
-                        $message = (string) $json['error'];
-                    }
-                }
-
-                return $this->ssoCallbackHtml($message, 403);
+                return $this->ssoCallbackHtml(
+                    'You do not have access to the Engage controller app, or your Engage account could not be provisioned.',
+                    403,
+                );
             }
 
             return $this->completeSsoInBrowser((string) $session['token']);
         } catch (Throwable $e) {
-            log_message('error', 'SSO callback failed: ' . $e->getMessage());
+            log_message('error', 'SSO callback failed: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
 
             return $this->ssoCallbackHtml('Console SSO sign-in failed. Try again from Console.', 500);
         }
@@ -283,7 +282,7 @@ HTML;
 
         return $this->response
             ->setStatusCode(200)
-            ->setContentType('text/html')
+            ->setHeader('Content-Type', 'text/html; charset=UTF-8')
             ->setBody($html);
     }
 
@@ -316,7 +315,7 @@ HTML;
 
         return $this->response
             ->setStatusCode($status)
-            ->setContentType('text/html')
+            ->setHeader('Content-Type', 'text/html; charset=UTF-8')
             ->setBody($html);
     }
 

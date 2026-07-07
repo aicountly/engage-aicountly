@@ -21,7 +21,7 @@ class UsersModel extends Model
 
     public function findByEmail(string $email): ?array
     {
-        return $this->where('email', $email)->first();
+        return $this->where('LOWER(email)', strtolower(trim($email)))->first();
     }
 
     public function roleCodes(int $userId): array
