@@ -7,65 +7,51 @@ const api = axios.create({
   baseURL,
   headers: {
     Accept: 'application/json',
+    'Content-Type': 'application/json',
   },
   timeout: 45_000,
+  withCredentials: true,
 })
 
-const TOKEN_KEY  = 'engage.access_token'
-const REFRESH_KEY = 'engage.refresh_token'
-const USER_KEY    = 'engage.user'
+const TOKEN_KEY = 'engage.access_token'
 
-export const tokenStore = {
-  get access() { return localStorage.getItem(TOKEN_KEY) || null },
-  get refresh() { return localStorage.getItem(REFRESH_KEY) || null },
-  get user() {
-    try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null') } catch { return null }
-  },
-  set({ access, refresh, user }) {
-    if (access) localStorage.setItem(TOKEN_KEY, access)
-    if (refresh) localStorage.setItem(REFRESH_KEY, refresh)
-    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user))
-  },
-  clear() {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(REFRESH_KEY)
-    localStorage.removeItem(USER_KEY)
-  },
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+export function setToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else localStorage.removeItem(TOKEN_KEY)
 }
 
 api.interceptors.request.use((config) => {
-  const t = tokenStore.access
-  if (t) config.headers.Authorization = `Bearer ${t}`
+  const t = getToken()
+  if (t) {
+    if (typeof config.headers?.set === 'function') {
+      config.headers.set('Authorization', `Bearer ${t}`)
+    } else {
+      config.headers.Authorization = `Bearer ${t}`
+    }
+  }
   return config
 })
 
-let refreshing = null
 api.interceptors.response.use(
   (res) => res,
-  async (err) => {
-    const status = err.response?.status
-    const original = err.config || {}
-    if (status === 401 && !original._retry && tokenStore.refresh) {
-      original._retry = true
-      try {
-        refreshing = refreshing || axios.post(`${baseURL}/v1/auth/refresh`, { refresh_token: tokenStore.refresh })
-        const { data } = await refreshing
-        refreshing = null
-        const payload = data?.data || data
-        tokenStore.set({ access: payload.access_token, refresh: payload.refresh_token })
-        original.headers.Authorization = `Bearer ${payload.access_token}`
-        return api(original)
-      } catch (e) {
-        refreshing = null
-        tokenStore.clear()
-        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-          window.location.replace('/login')
-        }
+  (err) => {
+    if (err.response?.status === 401) {
+      const hadToken = getToken()
+      setToken('')
+      // App-level ControllerGate handles unauthenticated state; avoid hard redirects.
+      if (hadToken) {
+        window.location.assign('/')
       }
     }
     return Promise.reject(err)
-  }
+  },
 )
+
+export const v1 = (path) => `/v1${path.startsWith('/') ? path : `/${path}`}`
 
 /**
  * Normalise different backend response shapes (rows/items/plain array).

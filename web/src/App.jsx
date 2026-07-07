@@ -1,8 +1,9 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import RequireAuth from './components/RequireAuth.jsx'
 import Layout from './components/Layout.jsx'
+import { useAuth } from './lib/auth.jsx'
 
-import Login from './pages/Login.jsx'
+import ControllerGate from './pages/ControllerGate.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Leads from './pages/Leads.jsx'
 import LeadDetail from './pages/LeadDetail.jsx'
@@ -37,9 +38,23 @@ import ConsoleSync from './pages/ConsoleSync.jsx'
 import WorkerStatus from './pages/WorkerStatus.jsx'
 
 export default function App() {
+  const { user, loading, ssoPending } = useAuth()
+
+  if (loading || ssoPending) {
+    return (
+      <div className="grid h-screen place-items-center text-sm text-neutral-500">
+        {ssoPending ? 'Signing you in from Console…' : 'Loading Engage Portal…'}
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <ControllerGate />
+  }
+
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route index element={<Dashboard />} />
         <Route path="/pipeline" element={<Pipeline />} />

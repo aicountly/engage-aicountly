@@ -59,6 +59,9 @@ $routes->get('/health', static function () {
 $routes->group('v1', static function ($routes) {
     // Public auth endpoints — no JWT.
     $routes->post('auth/login', 'Api\\V1\\AuthController::login');
+    $routes->get('auth/sso-callback', 'Api\\V1\\AuthController::ssoCallback');
+    $routes->post('auth/controller-sso', 'Api\\V1\\AuthController::controllerSso');
+    $routes->post('auth/console-session', 'Api\\V1\\AuthController::consoleSession');
     $routes->post('auth/refresh', 'Api\\V1\\AuthController::refresh');
 
     // Portal endpoints Console calls back into Engage.

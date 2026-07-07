@@ -6,6 +6,7 @@ use App\Libraries\Jwt;
 use App\Services\ApprovalService;
 use App\Services\AuditService;
 use App\Services\ConsoleClient;
+use App\Services\ConsoleIdentityService;
 use App\Services\CreditService;
 use App\Services\LeadScoringService;
 use App\Services\LlmClient;
@@ -103,5 +104,13 @@ class Services extends BaseService
             return static::getSharedInstance('renewalReminder') ?? static::renewalReminder(false);
         }
         return new RenewalReminderService();
+    }
+
+    public static function consoleIdentity(bool $getShared = true): ConsoleIdentityService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('consoleIdentity') ?? static::consoleIdentity(false);
+        }
+        return new ConsoleIdentityService();
     }
 }
