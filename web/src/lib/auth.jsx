@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import api, { getToken, setToken, v1 } from './api.js'
 import { clearControllerSsoHash, readControllerSsoToken } from './controllerSso.js'
-import { redirectToConsoleLogin } from './consoleAuth.js'
+import { redirectToConsoleLogin, redirectToConsoleLoginAfterSignOut } from './consoleAuth.js'
 
 const AuthCtx = createContext(null)
 
@@ -125,7 +125,7 @@ export function AuthProvider({ children }) {
     }
     setToken('')
     setUser(null)
-    redirectToConsoleLogin()
+    await redirectToConsoleLoginAfterSignOut()
   }, [])
 
   const hasRole = useCallback(

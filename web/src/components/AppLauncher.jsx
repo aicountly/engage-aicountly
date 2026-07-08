@@ -152,12 +152,12 @@ export default function AppLauncher() {
     <div className="relative" ref={ref}>
       <button
         type="button"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-700"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm transition hover:border-neutral-300 hover:bg-neutral-50 hover:text-neutral-900"
         title="Top Controller Apps"
         aria-label="Top Controller Apps"
         onClick={handleToggle}
       >
-        <LayoutGrid size={20} />
+        <LayoutGrid size={20} strokeWidth={2.25} />
       </button>
 
       {open && (
