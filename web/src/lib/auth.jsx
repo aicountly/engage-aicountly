@@ -92,8 +92,8 @@ export function AuthProvider({ children }) {
       const status = e?.response?.status
       const message = e?.response?.data?.error || e.message || 'Could not sign in via Console'
       if (status === 401) {
-        setGateReason(GATE_CONSOLE_REQUIRED)
-        setGateMessage(message)
+        redirectToConsoleLogin()
+        return
       } else if (status === 403) {
         setGateReason(GATE_NO_ACCESS)
         setGateMessage(message)

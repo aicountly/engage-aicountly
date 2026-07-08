@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../lib/auth.jsx'
 import api from '../lib/api.js'
 import { BotModeBadge } from './Badges.jsx'
+import AppLauncher from './AppLauncher.jsx'
 
 export default function Topbar({ onOpenMenu }) {
   const { user, logout } = useAuth()
@@ -32,6 +33,7 @@ export default function Topbar({ onOpenMenu }) {
         <div className="text-sm text-neutral-500">Internal sales & bot control</div>
       </div>
       <div className="flex items-center gap-3">
+        <AppLauncher />
         {mode ? <BotModeBadge mode={mode} /> : null}
         {user ? (
           <>

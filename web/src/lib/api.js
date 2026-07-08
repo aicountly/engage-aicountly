@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { resolveApiBaseUrl } from './apiBaseUrl'
+import { redirectToConsoleLogin } from './consoleAuth.js'
 
 const baseURL = resolveApiBaseUrl(import.meta.env.VITE_API_URL)
 
@@ -42,9 +43,8 @@ api.interceptors.response.use(
     if (err.response?.status === 401) {
       const hadToken = getToken()
       setToken('')
-      // App-level ControllerGate handles unauthenticated state; avoid hard redirects.
       if (hadToken) {
-        window.location.assign('/')
+        redirectToConsoleLogin()
       }
     }
     return Promise.reject(err)

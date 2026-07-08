@@ -56,11 +56,56 @@ class AuthController extends BaseApiController
             return $this->fail('User not found.', 404);
         }
         return $this->ok([
-            'id'    => (int) $row['id'],
-            'email' => $row['email'],
-            'name'  => $row['name'],
-            'roles' => $users->roleCodes((int) $row['id']),
+            'id'              => (int) $row['id'],
+            'email'           => $row['email'],
+            'name'            => $row['name'],
+            'roles'           => $users->roleCodes((int) $row['id']),
+            'controller_apps' => $this->controllerAppsForRequest(),
         ]);
+    }
+
+    public function controllerAppsLauncher()
+    {
+        $u = $this->user();
+        if (! $u) {
+            return $this->fail('Not authenticated.', 401);
+        }
+
+        $apps = $this->controllerAppsForRequest();
+        if ($apps === []) {
+            return $this->fail(
+                'Console session required for Top Controller Apps. Sign in at console.aicountly.org first.',
+                401,
+            );
+        }
+
+        return $this->ok(['apps' => $apps]);
+    }
+
+    public function ssoLaunchUrl()
+    {
+        $u = $this->user();
+        if (! $u) {
+            return $this->fail('Not authenticated.', 401);
+        }
+
+        $appCode = strtolower(trim((string) ($this->request->getGet('app_code') ?? '')));
+        if ($appCode === '') {
+            return $this->fail('app_code query parameter is required.', 422);
+        }
+
+        $consoleToken = $this->consoleTokenFromRequest();
+        if ($consoleToken === '') {
+            return $this->fail('Console session required to launch controller apps.', 401);
+        }
+
+        $data = Services::consoleIdentity()->getSsoLaunchUrl($consoleToken, $appCode);
+        $redirectUrl = trim((string) ($data['redirect_url'] ?? ''));
+        if ($redirectUrl === '') {
+            return $this->fail('Console did not return a launch URL for this app.', 502);
+        }
+
+        return $this->ok(['redirect_url' => $redirectUrl]);
     }
 
     /**
@@ -77,7 +122,7 @@ class AuthController extends BaseApiController
                 );
             }
 
-            $token = trim((string) ($this->request->getGet('token') ?? ''));
+            $token = trim((string) ($this->request->getGet('token') ?? $this->request->getGet('sesskey') ?? ''));
             if ($token === '') {
                 return $this->ssoCallbackHtml('Missing SSO token. Open Engage again from Console Top Controller Apps.', 400);
             }
@@ -245,12 +290,56 @@ class AuthController extends BaseApiController
             'token'   => $engageToken,
             'expires' => (int) env('ENGAGE_JWT_TTL_MINUTES', 720) * 60,
             'user'    => [
-                'id'    => (int) $user['id'],
-                'email' => $user['email'],
-                'name'  => $user['name'],
-                'roles' => $roles,
+                'id'              => (int) $user['id'],
+                'email'           => $user['email'],
+                'name'            => $user['name'],
+                'roles'           => $roles,
+                'controller_apps' => $this->normalizeLauncherApps(
+                    is_array($identity['controller_apps'] ?? null) ? $identity['controller_apps'] : [],
+                ),
             ],
         ];
+    }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    private function controllerAppsForRequest(): array
+    {
+        $consoleToken = $this->consoleTokenFromRequest();
+        if ($consoleToken === '') {
+            return [];
+        }
+
+        $data = Services::consoleIdentity()->getLauncherApps($consoleToken);
+        if (! is_array($data)) {
+            return [];
+        }
+
+        return $this->normalizeLauncherApps(
+            is_array($data['apps'] ?? null) ? $data['apps'] : [],
+        );
+    }
+
+    private function consoleTokenFromRequest(): string
+    {
+        return trim((string) ($this->request->getCookie(ConsoleIdentityService::cookieName()) ?? ''));
+    }
+
+    /**
+     * @param list<array<string,mixed>> $apps
+     * @return list<array<string,mixed>>
+     */
+    private function normalizeLauncherApps(array $apps): array
+    {
+        $current = strtolower(trim((string) env('CONTROLLER_APP_CODE', 'engage')));
+
+        return array_values(array_map(static function (array $app) use ($current): array {
+            $code = strtolower(trim((string) ($app['code'] ?? '')));
+            $app['is_current'] = $code === $current;
+
+            return $app;
+        }, $apps));
     }
 
     private function completeSsoInBrowser(string $engageToken): ResponseInterface
