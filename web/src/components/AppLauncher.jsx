@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Megaphone,
   Shield,
+  Ticket,
   Users,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth.jsx'
@@ -20,6 +21,7 @@ const ICONS = {
   users: Users,
   megaphone: Megaphone,
   hammer: Hammer,
+  ticket: Ticket,
 }
 
 function AppIcon({ name, size = 18 }) {
