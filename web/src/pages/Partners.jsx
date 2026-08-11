@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import GenericList from '../components/GenericList.jsx'
 import { StatusBadge } from '../components/Badges.jsx'
@@ -8,8 +9,26 @@ import { formatDate } from '../lib/format.js'
  * partner.aicountly.com has no signup and never writes to this table.
  */
 export default function Partners() {
+  // Set once, when Engage generated the password for a partner being created.
+  const [issued, setIssued] = useState(null)
+
   return (
-    <GenericList
+    <>
+      {issued ? (
+        <div className="mb-4 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-sm px-3 py-3">
+          <div className="font-semibold">
+            Partner created — password for {issued.name}, shown once
+          </div>
+          <div className="mt-1 font-mono text-base">{issued.password}</div>
+          <div className="mt-1 text-xs">
+            Send it to {issued.email} over a secure channel. Engage stores only a hash and cannot show it again —
+            if it is lost, reset the password from the partner&rsquo;s page.
+          </div>
+          <button className="engage-btn-secondary mt-2" onClick={() => setIssued(null)}>Dismiss</button>
+        </div>
+      ) : null}
+
+      <GenericList
       title="Partners"
       subtitle="Partner Master for partner.aicountly.com — create partners here and grant portal access."
       resource="partners"
@@ -99,9 +118,32 @@ export default function Partners() {
         { key: 'country', label: 'Country' },
         { key: 'city', label: 'City' },
         { key: 'notes', label: 'Notes', type: 'textarea' },
+        {
+          key: 'generate',
+          label: 'Partner Portal password',
+          type: 'boolean',
+          default: true,
+          checkboxLabel: 'Generate a strong password now (shown once after saving)',
+        },
+        {
+          key: 'password',
+          label: 'Or set the password yourself',
+          type: 'password',
+          help: 'Only used when the box above is unticked. At least 10 characters, including a letter and a number. Leave both empty to grant portal access later from the partner’s page.',
+        },
       ]}
       canEdit={false}
       emptyMessage="No partners yet. Use + New to add the first partner."
-    />
+      onCreated={(partner) => {
+        if (partner?.generated_password) {
+          setIssued({
+            name: partner.name,
+            email: partner.email,
+            password: partner.generated_password,
+          })
+        }
+      }}
+      />
+    </>
   )
 }

@@ -205,11 +205,11 @@ PARTNER.AICOUNTLY.COM
 | Screen | What it does |
 |--------|--------------|
 | Partner listing | Partner ID, name, email, phone, status, portal access, created/updated; search across name/contact/email/phone/partner ID; filter by status and by whether credentials are set |
-| Add partner | Name and email required; email must be valid and unique among live partners |
+| Add partner | Name and email required; email must be valid and unique among live partners. Portal credentials can be issued here — generate a strong password (shown once after saving) or type one — or left for later |
 | View partner | Full record plus portal-access state, last login, failed attempts and lock status |
 | Edit partner | Updates the master record (credentials are handled separately) |
 | Activate / Deactivate | Flips `status`; inactive partners cannot sign in |
-| Set / reset password | Sets a password, or generates a strong one shown exactly once |
+| Set / reset password | Sets a password, or generates a strong one shown exactly once (for partners created without credentials, or to reset an existing one) |
 | Unlock | Clears a lockout caused by repeated failed portal logins |
 | Delete | Soft delete — history is kept and the partner can never sign in again |
 | Restore | Brings a deleted partner back when the email is still free |
@@ -220,7 +220,9 @@ PARTNER.AICOUNTLY.COM
 GET    /api/v1/partners                  ?q=&status=&partner_type=&country=
                                          &has_portal_access=&include_deleted=&only_deleted=
                                          &page=&limit=
-POST   /api/v1/partners
+POST   /api/v1/partners               optional: password, or generate: true
+                                         (a generated password is returned once as
+                                         generated_password and never stored in clear)
 GET    /api/v1/partners/{id}
 PUT    /api/v1/partners/{id}
 DELETE /api/v1/partners/{id}             soft delete

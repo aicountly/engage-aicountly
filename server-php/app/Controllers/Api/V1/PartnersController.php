@@ -89,11 +89,14 @@ class PartnersController extends BaseApiController
 
         $errors = $this->validatePayload($data, true);
         if ($errors !== []) {
-            return $this->fail('Please correct the highlighted fields.', 422, $errors);
+            return $this->fail($this->summarise($errors), 422, $errors);
         }
 
-        $password = (string) ($data['password'] ?? '');
-        $row      = $this->writableFields($data);
+        // Portal credentials may be issued here or later from the partner's page.
+        $generate = ! empty($data['generate']);
+        $password = $generate ? self::generatePassword() : (string) ($data['password'] ?? '');
+
+        $row = $this->writableFields($data);
 
         $row['partner_uid'] = PartnersModel::newPartnerUid();
         $row['status']      = $this->normaliseStatus($data['status'] ?? 'active');
@@ -112,10 +115,22 @@ class PartnersController extends BaseApiController
         $this->audit('partner_create', [
             'subject_kind' => 'partner',
             'subject_id'   => $id,
-            'metadata'     => ['email' => $row['email'], 'status' => $row['status']],
+            'metadata'     => [
+                'email'             => $row['email'],
+                'status'            => $row['status'],
+                'portal_access_set' => $password !== '',
+                'password_generated'=> $generate,
+            ],
         ]);
 
-        return $this->ok(PartnersModel::publicRow($this->m->find($id)), 201);
+        $created = PartnersModel::publicRow($this->m->find($id));
+
+        // Returned once, only when Engage generated it. Never stored in clear text.
+        if ($generate) {
+            $created['generated_password'] = $password;
+        }
+
+        return $this->ok($created, 201);
     }
 
     public function update($id = null)
@@ -129,7 +144,7 @@ class PartnersController extends BaseApiController
         $data   = $this->input();
         $errors = $this->validatePayload($data, false, $id);
         if ($errors !== []) {
-            return $this->fail('Please correct the highlighted fields.', 422, $errors);
+            return $this->fail($this->summarise($errors), 422, $errors);
         }
 
         $row = $this->writableFields($data);
@@ -351,13 +366,23 @@ class PartnersController extends BaseApiController
             $errors['website'] = 'Enter a valid URL (including https://).';
         }
 
-        if ($isCreate && ! empty($data['password'])) {
+        // A generated password replaces anything typed, so there is nothing to check.
+        if ($isCreate && empty($data['generate']) && ! empty($data['password'])) {
             if (($error = self::passwordError((string) $data['password'])) !== null) {
                 $errors['password'] = $error;
             }
         }
 
         return $errors;
+    }
+
+    /**
+     * Turn field errors into one sentence, so clients that only surface the
+     * top-level message still tell the user what actually went wrong.
+     */
+    private function summarise(array $errors): string
+    {
+        return implode(' ', array_values($errors));
     }
 
     /**

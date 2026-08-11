@@ -11,7 +11,9 @@ import { formatDate } from '../lib/format.js'
  * Simple CRUD-ish list for endpoints under /api/v1/<resource>.
  * Props:
  *   title, subtitle, resource, columns, filters (optional), formFields (optional),
- *   canCreate (default true), canEdit (default true), extraActions (fn(row) -> JSX)
+ *   canCreate (default true), canEdit (default true), extraActions (fn(row) -> JSX),
+ *   onCreated (optional) -> called with the create response, for pages that need to
+ *   show something returned only once (e.g. a generated password)
  */
 export default function GenericList({
   title,
@@ -26,6 +28,7 @@ export default function GenericList({
   emptyMessage,
   actions,
   transform,
+  onCreated,
 }) {
   const qc = useQueryClient()
   const [f, setF] = useState(defaultFilters)
@@ -45,7 +48,11 @@ export default function GenericList({
 
   const create = useMutation({
     mutationFn: (payload) => api.post(`/v1/${resource}`, payload).then((r) => r.data),
-    onSuccess: () => { setDrawer(null); qc.invalidateQueries({ queryKey: [resource] }) },
+    onSuccess: (data) => {
+      setDrawer(null)
+      qc.invalidateQueries({ queryKey: [resource] })
+      onCreated?.(data?.data ?? data)
+    },
     onError: (e) => setError(apiError(e)),
   })
   const update = useMutation({
