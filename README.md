@@ -146,6 +146,8 @@ Deploy flow (mirrors books):
 - No sandbox domain logic.
 - No calls to `my.aicountly.com`.
 - No partner-facing UI in Engage — partners use `partner.aicountly.com`.
+- No partner data storage in Engage — Partner Master screens proxy to the
+  Partner Portal's admin API; see "Partner Master" below.
 - No connection to Manage unless `.env` `MANAGE_API_*` is configured; the
   integration layer is a service placeholder only.
 
@@ -177,30 +179,35 @@ Plus the **Partner Master** (see below), which Engage owns on behalf of
 
 ## Partner Master
 
-Engage is the administrative owner of every partner record. The Partner Portal
-at `partner.aicountly.com` (repo: `aicountly/partner-aicountly`) authenticates
-partners against this data and never writes to it — it has no signup page, no
-registration page and no partner CRUD.
+Engage provides the Partner Master **admin screens** (Add/Edit/Delete/List) —
+it stores **no partner data of its own**. Every partner row lives on the
+Partner Portal (`partner.aicountly.com`, repo: `aicountly/partner-aicountly`),
+which is the single source of truth for both partner records and partner
+authentication. Engage's `PartnersController` is a thin proxy: it checks the
+superadmin's JWT exactly like every other Engage endpoint, forwards the
+request to the Partner Portal's admin API over a shared secret, records an
+Engage-side audit event, and relays the response back unchanged. The React
+screens don't know the difference — they still call `/api/v1/partners` on
+Engage.
 
 ```
-ENGAGE.AICOUNTLY.ORG
-        |
-        |  Add / Edit / Delete / Activate / Deactivate / Set password
-        v
-   PARTNER MASTER  (engage_partners)
-        |
-        v
-   Partner database  (PostgreSQL — this database)
-        |
-        v
-PARTNER.AICOUNTLY.COM
-        |
-        |  Authentication
-        v
-   Partner dashboard
+ENGAGE.AICOUNTLY.ORG                        PARTNER.AICOUNTLY.COM
+  Partners → Partner master (React UI)        owns the Partner Master
+        |                                            ^
+        | superadmin JWT (unchanged)                 |
+        v                                            |
+  PartnersController  ──── PartnerPortalClient ───────┘
+  (no local table)         X-Partner-Admin-Key             |
+        |                  (shared secret)                 v
+        v                                            Partner database
+  engage_audit_logs                                  (table: partners)
+  (still records who did what)                              |
+                                                              v
+                                                     PARTNER.AICOUNTLY.COM
+                                                       partner sign-in
 ```
 
-**UI** — sidebar **Partners → Partner master**:
+**UI** — sidebar **Partners → Partner master** (unchanged):
 
 | Screen | What it does |
 |--------|--------------|
@@ -214,7 +221,7 @@ PARTNER.AICOUNTLY.COM
 | Delete | Soft delete — history is kept and the partner can never sign in again |
 | Restore | Brings a deleted partner back when the email is still free |
 
-**API** (all under the `jwt` filter, so superadmin only):
+**API** (all under the `jwt` filter, so superadmin only — same as before):
 
 ```
 GET    /api/v1/partners                  ?q=&status=&partner_type=&country=
@@ -233,23 +240,25 @@ POST   /api/v1/partners/{id}/unlock
 POST   /api/v1/partners/{id}/restore
 ```
 
-`password_hash` is never returned by any endpoint. Every write emits an audit
-event (`partner_create`, `partner_update`, `partner_delete`, `partner_restore`,
-`partner_activate`, `partner_deactivate`, `partner_password_set`,
-`partner_unlock`).
+Every response, including validation errors (e.g. "Another partner already
+uses this email address."), is the Partner Portal's own response relayed
+verbatim — Engage does not duplicate that logic. `password_hash` is never
+returned by any endpoint on either side. Every successful write emits an
+Engage audit event (`partner_create`, `partner_update`, `partner_delete`,
+`partner_restore`, `partner_activate`, `partner_deactivate`,
+`partner_password_set`, `partner_unlock`), so "who in Engage did what" is
+still recorded here even though the data itself is not.
 
-**Table** — `engage_partners` (migration
-`2026-08-11-000070_CreateEngagePartners`): `partner_uid` (stable UUID),
-`name`, `contact_name`, `email`, `phone`, `partner_type`, `website`, `country`,
-`city`, `password_hash` + `password_set_at`, `status`, `account_id`, `owner_id`,
-login bookkeeping (`last_login_at`, `last_login_ip`, `failed_attempts`,
-`locked_until`), `notes`, `metadata`, timestamps and `deleted_at`. Email is
-unique among live partners via a partial index, so a deleted partner's address
-can be reused.
+**Configuration** — `PARTNER_PORTAL_API_URL` and `PARTNER_PORTAL_ADMIN_KEY` in
+`api/.env` (see `.env.example`). The key must match `PARTNER_ADMIN_KEY` in the
+Partner Portal's own `api/.env`. Without both set, the Partner Master screen
+returns a clear `503` rather than failing silently; `GET /health` reports this
+under `checks.partner_portal`.
 
-Passwords are stored only as `password_hash()` hashes. A partner may sign in to
-the portal only while they are not deleted, `status = 'active'`, a password has
-been set, and the account is not locked.
+**Schema** — Engage defines none. `engage_partners` existed briefly during
+initial development; migration `2026-08-11-000075_DropEngagePartners` removes
+it. The authoritative schema (table `partners`) lives in the Partner Portal
+repository — see `partner-aicountly/server-php/app/Database/Migrations/`.
 
 ## Sales Bot capabilities
 

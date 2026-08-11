@@ -10,6 +10,7 @@ use App\Services\ConsoleIdentityService;
 use App\Services\CreditService;
 use App\Services\LeadScoringService;
 use App\Services\LlmClient;
+use App\Services\PartnerPortalClient;
 use App\Services\ReachIntakeService;
 use App\Services\RenewalReminderService;
 use App\Services\SalesBotService;
@@ -56,6 +57,14 @@ class Services extends BaseService
             return static::getSharedInstance('llmClient') ?? static::llmClient(false);
         }
         return new LlmClient();
+    }
+
+    public static function partnerPortalClient(bool $getShared = true): PartnerPortalClient
+    {
+        if ($getShared) {
+            return static::getSharedInstance('partnerPortalClient') ?? static::partnerPortalClient(false);
+        }
+        return new PartnerPortalClient();
     }
 
     public static function leadScoring(bool $getShared = true): LeadScoringService

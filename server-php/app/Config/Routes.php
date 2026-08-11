@@ -25,6 +25,7 @@ $routes->get('/health', static function () {
     $workerOk  = (string) env('WORKER_BASE_URL', '') !== '' && (string) env('WORKER_API_TOKEN', '') !== '';
     $reachOk   = (string) env('REACH_INBOUND_TOKEN', '') !== '';
     $svcKeyOk  = (string) env('ENGAGE_SERVICE_KEY', '') !== '';
+    $partnerOk = (string) env('PARTNER_PORTAL_API_URL', '') !== '' && (string) env('PARTNER_PORTAL_ADMIN_KEY', '') !== '';
 
     $dbAlive = false;
     if ($dbOk) {
@@ -52,6 +53,7 @@ $routes->get('/health', static function () {
             'worker_outbound'     => $workerOk ? 'ok' : 'WORKER_* not configured',
             'reach_inbound_token' => $reachOk ? 'ok' : 'REACH_INBOUND_TOKEN not set',
             'console_inbound_key' => $svcKeyOk ? 'ok' : 'ENGAGE_SERVICE_KEY not set',
+            'partner_portal'      => $partnerOk ? 'ok' : 'PARTNER_PORTAL_API_URL / PARTNER_PORTAL_ADMIN_KEY not configured — Partner Master screen will fail',
         ],
     ]);
 });
