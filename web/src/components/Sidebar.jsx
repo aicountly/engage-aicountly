@@ -20,6 +20,12 @@ const groups = [
     ],
   },
   {
+    title: 'Partners',
+    items: [
+      { to: '/partners', label: 'Partner master' },
+    ],
+  },
+  {
     title: 'Licensing & subscriptions',
     items: [
       { to: '/products', label: 'Products' },

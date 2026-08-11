@@ -33,7 +33,8 @@ class AuditService
                 'subject_id'   => isset($opts['subject_id']) ? (string) $opts['subject_id'] : null,
                 'ip_address'   => $req->getIPAddress(),
                 'user_agent'   => substr((string) $req->getUserAgent(), 0, 510),
-                'metadata'     => isset($opts['metadata']) ? json_encode($opts['metadata']) : null,
+                // Pass the array through — AuditLogsModel's json-array cast encodes it.
+                'metadata'     => $opts['metadata'] ?? null,
                 'created_at'   => date('Y-m-d H:i:s'),
             ];
 

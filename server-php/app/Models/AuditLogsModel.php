@@ -17,5 +17,7 @@ class AuditLogsModel extends Model
         'ip_address', 'user_agent', 'metadata', 'created_at',
     ];
 
-    protected array $casts = ['metadata' => 'json-array'];
+    // Nullable — most audit events carry no metadata, and a non-nullable cast
+    // made those inserts throw (the write was swallowed by AuditService).
+    protected array $casts = ['metadata' => '?json-array'];
 }

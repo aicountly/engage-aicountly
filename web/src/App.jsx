@@ -11,6 +11,8 @@ import Pipeline from './pages/Pipeline.jsx'
 import Accounts from './pages/Accounts.jsx'
 import AccountDetail from './pages/AccountDetail.jsx'
 import Contacts from './pages/Contacts.jsx'
+import Partners from './pages/Partners.jsx'
+import PartnerDetail from './pages/PartnerDetail.jsx'
 import Products from './pages/Products.jsx'
 import Plans from './pages/Plans.jsx'
 import LeadSources from './pages/LeadSources.jsx'
@@ -65,6 +67,8 @@ export default function App() {
         <Route path="/accounts" element={<Accounts />} />
         <Route path="/accounts/:id" element={<AccountDetail />} />
         <Route path="/contacts" element={<Contacts />} />
+        <Route path="/partners" element={<Partners />} />
+        <Route path="/partners/:id" element={<PartnerDetail />} />
         <Route path="/lead-sources" element={<LeadSources />} />
         <Route path="/campaigns" element={<Campaigns />} />
 

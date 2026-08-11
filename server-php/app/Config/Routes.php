@@ -106,6 +106,14 @@ $routes->group('v1', static function ($routes) {
         $routes->resource('pipeline-stages', ['controller' => 'Api\\V1\\PipelineController']);
         $routes->get('pipeline/summary', 'Api\\V1\\PipelineController::summary');
 
+        // Partner Master — Engage owns every partner write; partner.aicountly.com only reads.
+        $routes->post('partners/(:num)/activate',   'Api\\V1\\PartnersController::activate/$1');
+        $routes->post('partners/(:num)/deactivate', 'Api\\V1\\PartnersController::deactivate/$1');
+        $routes->post('partners/(:num)/password',   'Api\\V1\\PartnersController::setPassword/$1');
+        $routes->post('partners/(:num)/unlock',     'Api\\V1\\PartnersController::unlock/$1');
+        $routes->post('partners/(:num)/restore',    'Api\\V1\\PartnersController::restore/$1');
+        $routes->resource('partners', ['controller' => 'Api\\V1\\PartnersController']);
+
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);
         $routes->resource('contacts', ['controller' => 'Api\\V1\\ContactsController']);

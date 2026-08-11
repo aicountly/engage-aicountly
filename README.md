@@ -145,6 +145,7 @@ Deploy flow (mirrors books):
 - No marketing, blog, or social modules.
 - No sandbox domain logic.
 - No calls to `my.aicountly.com`.
+- No partner-facing UI in Engage — partners use `partner.aicountly.com`.
 - No connection to Manage unless `.env` `MANAGE_API_*` is configured; the
   integration layer is a service placeholder only.
 
@@ -170,6 +171,83 @@ Engage covers the 18 modules from the plan:
 16. Sales Bot Reports (full audit fields per action)
 17. Console Approvals (mirrored to Console)
 18. Audit Logs
+
+Plus the **Partner Master** (see below), which Engage owns on behalf of
+`partner.aicountly.com`.
+
+## Partner Master
+
+Engage is the administrative owner of every partner record. The Partner Portal
+at `partner.aicountly.com` (repo: `aicountly/partner-aicountly`) authenticates
+partners against this data and never writes to it — it has no signup page, no
+registration page and no partner CRUD.
+
+```
+ENGAGE.AICOUNTLY.ORG
+        |
+        |  Add / Edit / Delete / Activate / Deactivate / Set password
+        v
+   PARTNER MASTER  (engage_partners)
+        |
+        v
+   Partner database  (PostgreSQL — this database)
+        |
+        v
+PARTNER.AICOUNTLY.COM
+        |
+        |  Authentication
+        v
+   Partner dashboard
+```
+
+**UI** — sidebar **Partners → Partner master**:
+
+| Screen | What it does |
+|--------|--------------|
+| Partner listing | Partner ID, name, email, phone, status, portal access, created/updated; search across name/contact/email/phone/partner ID; filter by status and by whether credentials are set |
+| Add partner | Name and email required; email must be valid and unique among live partners |
+| View partner | Full record plus portal-access state, last login, failed attempts and lock status |
+| Edit partner | Updates the master record (credentials are handled separately) |
+| Activate / Deactivate | Flips `status`; inactive partners cannot sign in |
+| Set / reset password | Sets a password, or generates a strong one shown exactly once |
+| Unlock | Clears a lockout caused by repeated failed portal logins |
+| Delete | Soft delete — history is kept and the partner can never sign in again |
+| Restore | Brings a deleted partner back when the email is still free |
+
+**API** (all under the `jwt` filter, so superadmin only):
+
+```
+GET    /api/v1/partners                  ?q=&status=&partner_type=&country=
+                                         &has_portal_access=&include_deleted=&only_deleted=
+                                         &page=&limit=
+POST   /api/v1/partners
+GET    /api/v1/partners/{id}
+PUT    /api/v1/partners/{id}
+DELETE /api/v1/partners/{id}             soft delete
+POST   /api/v1/partners/{id}/activate
+POST   /api/v1/partners/{id}/deactivate
+POST   /api/v1/partners/{id}/password    {"password":"..."} or {"generate":true}
+POST   /api/v1/partners/{id}/unlock
+POST   /api/v1/partners/{id}/restore
+```
+
+`password_hash` is never returned by any endpoint. Every write emits an audit
+event (`partner_create`, `partner_update`, `partner_delete`, `partner_restore`,
+`partner_activate`, `partner_deactivate`, `partner_password_set`,
+`partner_unlock`).
+
+**Table** — `engage_partners` (migration
+`2026-08-11-000070_CreateEngagePartners`): `partner_uid` (stable UUID),
+`name`, `contact_name`, `email`, `phone`, `partner_type`, `website`, `country`,
+`city`, `password_hash` + `password_set_at`, `status`, `account_id`, `owner_id`,
+login bookkeeping (`last_login_at`, `last_login_ip`, `failed_attempts`,
+`locked_until`), `notes`, `metadata`, timestamps and `deleted_at`. Email is
+unique among live partners via a partial index, so a deleted partner's address
+can be reused.
+
+Passwords are stored only as `password_hash()` hashes. A partner may sign in to
+the portal only while they are not deleted, `status = 'active'`, a password has
+been set, and the account is not locked.
 
 ## Sales Bot capabilities
 
