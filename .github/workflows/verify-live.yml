@@ -1,0 +1,59 @@
+name: Verify live app (manual)
+
+# Checks the live Engage portal WITHOUT deploying anything, with the same checks every deploy runs
+# when it finishes (scripts/ci/post-deploy-checks.sh). The runner may be shown the host's anti-bot
+# page instead of the app; the checks then ask again from the server over SSH, set up here exactly
+# as deploy-production.yml sets it up. The Engage portal has one environment. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which deployment to check
+        type: choice
+        options:
+          - production
+        default: production
+
+permissions:
+  contents: read
+
+env:
+  PROD_SFTP_HOST: ${{ secrets.PROD_SFTP_HOST }}
+  PROD_SFTP_PORT: ${{ secrets.PROD_SFTP_PORT }}
+  PROD_SFTP_USER: ${{ secrets.PROD_SFTP_USER }}
+  # Keep non-interactive SSH quiet; -T avoids the cPanel motd.
+  SSH_OPTS: -T -o BatchMode=yes -o LogLevel=ERROR -o RequestTTY=no
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          if [ -z "${PROD_SFTP_HOST:-}" ] || [ -z "${PROD_SFTP_PORT:-}" ]; then
+            echo "::error::Missing repository secrets: set PROD_SFTP_HOST and PROD_SFTP_PORT under Settings → Secrets → Actions."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if ! ssh-keyscan -T 15 -p "$PROD_SFTP_PORT" "$PROD_SFTP_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+            echo "::warning::ssh-keyscan could not reach $PROD_SFTP_HOST:$PROD_SFTP_PORT — falling back to StrictHostKeyChecking=accept-new"
+            printf 'Host %s\n  Port %s\n  StrictHostKeyChecking accept-new\n' "$PROD_SFTP_HOST" "$PROD_SFTP_PORT" >> ~/.ssh/config
+            chmod 600 ~/.ssh/config
+          fi
+
+      - name: Verify the live app
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          export VERIFY_SSH="ssh -p ${PROD_SFTP_PORT} ${SSH_OPTS} -o ConnectTimeout=20 ${PROD_SFTP_USER}@${PROD_SFTP_HOST}"
+          bash scripts/ci/post-deploy-checks.sh "$ENVIRONMENT"

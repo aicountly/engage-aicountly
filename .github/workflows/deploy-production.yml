@@ -184,3 +184,14 @@ jobs:
             echo "---- api/.env present (content not shown) ----"
             test -f '"${REMOTE_ROOT}"'/api/.env && echo "api/.env exists" || echo "MISSING api/.env"
           '
+
+      # The live portal must answer as the Engage API, with the SPA just built. The runner may be
+      # shown the host's anti-bot page instead of the app; the checks then ask again from the server
+      # over SSH (the key is in the SSH agent started above).
+      - name: Verify the live app
+        working-directory: .
+        run: |
+          EXPECTED_ENTRY="$(grep -o 'assets/index-[^"]*\.js' web/dist/index.html | head -n 1 || true)"
+          export EXPECTED_ENTRY
+          export VERIFY_SSH="ssh -p ${PROD_SFTP_PORT} ${SSH_OPTS} -o ConnectTimeout=20 ${PROD_SFTP_USER}@${PROD_SFTP_HOST}"
+          bash scripts/ci/post-deploy-checks.sh production
