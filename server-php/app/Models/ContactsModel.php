@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class ContactsModel extends Model
+class ContactsModel extends EngageModel
 {
     protected $table         = 'engage_contacts';
     protected $primaryKey    = 'id';
@@ -15,7 +13,7 @@ class ContactsModel extends Model
         'is_primary', 'notes', 'metadata',
     ];
 
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function findByEmail(string $email): ?array
     {

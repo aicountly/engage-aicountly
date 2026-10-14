@@ -149,6 +149,9 @@ Deploy flow (mirrors books):
    `audit.write`) through `engage_console_audit_outbox`, retried by cron every 5 minutes:
    `0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1`.
    (It used to go to `portal/bot-audit`, which refused Engage's body with 422.)
+   **JSON columns:** every model with a JSON cast extends `EngageModel` (`TolerantJsonCast`); pass
+   arrays to those fields, never `json_encode()` output. Rows an older release stored double-encoded
+   still read; `php spark engage:repair-json` (dry run) / `--apply` rewrites them once after deploy.
 7. Reach side (when built): use the value of `REACH_INBOUND_TOKEN` as the
    `X-Portal-Token` header when POSTing to
    `https://engage.aicountly.org/api/internal/reach/leads`.

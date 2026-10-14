@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class ProposalsModel extends Model
+class ProposalsModel extends EngageModel
 {
     protected $table         = 'engage_proposals';
     protected $primaryKey    = 'id';
@@ -17,7 +15,7 @@ class ProposalsModel extends Model
         'status', 'valid_until', 'sent_at', 'accepted_at', 'declined_at',
         'owner_id', 'notes', 'metadata',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function generateCode(): string
     {

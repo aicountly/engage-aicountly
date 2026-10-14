@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class AuditLogsModel extends Model
+class AuditLogsModel extends EngageModel
 {
     protected $table         = 'engage_audit_logs';
     protected $primaryKey    = 'id';

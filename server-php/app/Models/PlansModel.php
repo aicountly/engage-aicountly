@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class PlansModel extends Model
+class PlansModel extends EngageModel
 {
     protected $table         = 'engage_plans';
     protected $primaryKey    = 'id';
@@ -15,5 +13,5 @@ class PlansModel extends Model
         'user_included', 'company_included', 'features', 'is_active', 'description',
     ];
 
-    protected array $casts = ['features' => 'json-array'];
+    protected array $casts = ['features' => '?json-array'];
 }

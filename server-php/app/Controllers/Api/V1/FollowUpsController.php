@@ -40,9 +40,6 @@ class FollowUpsController extends BaseApiController
     {
         $data = $this->input();
         if (empty($data['due_at'])) return $this->fail('due_at is required.', 400);
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('follow_up_create', ['subject_kind' => 'follow_up', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -51,9 +48,6 @@ class FollowUpsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         if (! empty($data['status']) && $data['status'] === 'done' && empty($data['completed_at'])) {
             $data['completed_at'] = date('Y-m-d H:i:s');
         }

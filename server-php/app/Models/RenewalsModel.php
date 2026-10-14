@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class RenewalsModel extends Model
+class RenewalsModel extends EngageModel
 {
     protected $table         = 'engage_renewals';
     protected $primaryKey    = 'id';
@@ -16,7 +14,7 @@ class RenewalsModel extends Model
         'target_amount', 'currency', 'status', 'reminder_stage',
         'owner_id', 'notes', 'metadata',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function dueWithin(int $days): array
     {

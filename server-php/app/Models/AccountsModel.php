@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class AccountsModel extends Model
+class AccountsModel extends EngageModel
 {
     protected $table         = 'engage_accounts';
     protected $primaryKey    = 'id';
@@ -15,5 +13,5 @@ class AccountsModel extends Model
         'status', 'owner_id', 'notes', 'metadata',
     ];
 
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 }

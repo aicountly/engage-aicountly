@@ -37,9 +37,6 @@ class DiscountRequestsController extends BaseApiController
         $data = $this->input();
         $data['requested_by']   = $this->user()['id'] ?? null;
         $data['requester_kind'] = $data['requester_kind'] ?? 'user';
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
 
         // Route to approval workflow.

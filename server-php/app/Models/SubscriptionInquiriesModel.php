@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class SubscriptionInquiriesModel extends Model
+class SubscriptionInquiriesModel extends EngageModel
 {
     protected $table         = 'engage_subscription_inquiries';
     protected $primaryKey    = 'id';
@@ -16,5 +14,5 @@ class SubscriptionInquiriesModel extends Model
         'target_amount', 'currency', 'status', 'convert_placeholder',
         'notes', 'metadata',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 }

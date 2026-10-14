@@ -8,16 +8,21 @@ use JsonException;
 use stdClass;
 
 /**
- * A tolerant `json` cast handler (same as build-aicountly's), used by models whose writers
- * used to json_encode() a value into a field that already has a JSON cast, so the JSONB column
- * holds a JSON *string* wrapping the real document. CodeIgniter's JsonCast::get() then returns
- * that string where it promises array|stdClass and the request dies with a TypeError. get()
- * unwraps such string-wrapped JSON (a few levels at most); set() stores pre-encoded JSON as the
- * document instead of encoding it again (and logs it).
+ * The `json` cast handler of every Engage model with a JSON column (EngageModel::$castHandlers;
+ * same as build-aicountly's, which met the same bug first).
  *
- * Engage: ApprovalRequestsModel (payload, execution_result) — ApprovalService encoded both
- * before the cast did, which broke every read of an approval with a payload, including Console's
- * approval callback.
+ * Reads are tolerant. Writers used to json_encode() a value and hand the string to a field that
+ * already had a JSON cast, so the cast encoded it a second time and the column holds a JSON
+ * *string* whose text is the real document. CodeIgniter's JsonCast::get() then returns that
+ * string where it promises array|stdClass, and the request dies with a TypeError. get() here
+ * unwraps such string-wrapped JSON (a few levels at most), returns null for SQL NULL / JSON null
+ * (CodeIgniter's handler throws on a non-nullable cast), and passes JSON scalars through.
+ *
+ * Writes encode once. A `json-array` field handed a string that is itself a JSON object/array is
+ * stored as that document (and logged) rather than encoded again. null on a non-nullable cast is
+ * stored as JSON null, as CodeIgniter does (a nullable cast never reaches the handler with null).
+ *
+ * `php spark engage:repair-json` rewrites rows already stored double-encoded (JsonColumnRepairService).
  */
 final class TolerantJsonCast extends BaseCast
 {
@@ -55,7 +60,7 @@ final class TolerantJsonCast extends BaseCast
     public static function set(mixed $value, array $params = [], ?object $helper = null): mixed
     {
         if ($value === null) {
-            return null;
+            return 'null'; // non-nullable cast: CodeIgniter's JsonCast stores JSON null too
         }
 
         if (is_string($value) && in_array('array', $params, true)) {

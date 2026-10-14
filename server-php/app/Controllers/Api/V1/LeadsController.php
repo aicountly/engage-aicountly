@@ -94,9 +94,6 @@ class LeadsController extends BaseApiController
         if (empty($data['lead_code'])) {
             $data['lead_code'] = $this->m->generateLeadCode();
         }
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         (new LeadActivitiesModel())->record($id, 'created', 'Lead created', null);
         $this->audit('lead_create', [
@@ -111,9 +108,6 @@ class LeadsController extends BaseApiController
         $row = $this->m->find((int) $id);
         if (! $row) return $this->fail('Lead not found.', 404);
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         (new LeadActivitiesModel())->record((int) $id, 'updated', 'Lead updated', null, [
             'metadata' => ['keys' => array_keys($data)],

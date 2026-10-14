@@ -34,9 +34,6 @@ class SubscriptionInquiriesController extends BaseApiController
     public function create()
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('subscription_inquiry_create', ['subject_kind' => 'subscription_inquiry', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -45,9 +42,6 @@ class SubscriptionInquiriesController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('subscription_inquiry_update', ['subject_kind' => 'subscription_inquiry', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));
