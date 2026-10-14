@@ -3,6 +3,7 @@ import { useAuth } from '../lib/auth.jsx'
 import api from '../lib/api.js'
 import { BotModeBadge } from './Badges.jsx'
 import AppLauncher from './AppLauncher.jsx'
+import { ROLES_MANAGED_TEXT } from './RolesManagedNote.jsx'
 
 export default function Topbar({ onOpenMenu }) {
   const { user, logout } = useAuth()
@@ -39,7 +40,7 @@ export default function Topbar({ onOpenMenu }) {
           <>
             <div className="hidden sm:block text-right leading-tight">
               <div className="text-sm font-medium text-neutral-800">{user.name || user.email}</div>
-              <div className="text-[11px] text-neutral-500">{(user.roles || []).join(', ') || '—'}</div>
+              <div className="text-[11px] text-neutral-500" title={ROLES_MANAGED_TEXT}>{(user.roles || []).join(', ') || '—'}</div>
             </div>
             <div className="h-9 w-9 rounded-full bg-aicountly-600 text-white flex items-center justify-center text-xs font-semibold">
               {(user.name || user.email || '?').slice(0, 2).toUpperCase()}

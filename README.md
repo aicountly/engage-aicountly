@@ -6,13 +6,15 @@ renewals, proposal follow-ups, credit management, and sales bot automation**.
 - Domain: `engage.aicountly.org`
 - Frontend served from the domain root
 - API served from `engage.aicountly.org/api`
-- Superadmin-only login; auth is independent (JWT, does **not** use `my.aicountly.com`)
+- Staff sign in through Console SSO only; Engage issues its own JWT (does **not** use `my.aicountly.com`).
+  Staff **roles come from Console → Roles & Access** (see [Staff roles](#staff-roles-from-console)).
 
 Engage integrates with:
 
 | Integration | Purpose | Env vars |
 |-------------|---------|----------|
 | `console.aicountly.org` | Central approval center, audit fan-out, bot report summary | `CONSOLE_API_BASE_URL`, `CONSOLE_INBOUND_KEY`, `ENGAGE_SERVICE_KEY` |
+| `console.aicountly.org` | SSO sign-in + staff roles (Roles & Access) | `CONSOLE_API_URL`, `CONTROLLER_APP_CODE=engage`, `CONSOLE_API_TOKEN` |
 | `worker.apis.aicountly.com` | Playwright screenshots / UI review only | `WORKER_BASE_URL`, `WORKER_API_TOKEN` |
 | `reach.aicountly.org` | Campaign leads pushed into Engage | `REACH_INBOUND_TOKEN` |
 
@@ -139,6 +141,70 @@ Deploy flow (mirrors books):
 7. Reach side (when built): use the value of `REACH_INBOUND_TOKEN` as the
    `X-Portal-Token` header when POSTing to
    `https://engage.aicountly.org/api/internal/reach/leads`.
+
+## Staff roles from Console
+
+Console (`console.aicountly.org` → **Roles & Access**) decides who may use
+Engage and with which role. Engage keeps a local mirror in
+`engage_roles` / `engage_user_roles` only so the API can enforce roles
+without calling Console on every request. Nobody is given a role locally
+any more — the old "every new user becomes `super_admin`" provisioning is gone.
+
+| Role (Console app_code `engage`) | Slug | Can do |
+|---|---|---|
+| Engage Administrator | `super_admin` | Everything |
+| Engage Member | `member` | Everything except the `role:super_admin` routes: `PUT /v1/settings` and `PUT /v1/bot/settings` |
+
+**At sign-in** (`POST /v1/auth/controller-sso`, `GET /v1/auth/sso-callback`,
+`POST /v1/auth/console-session`) Console's SSO exchange / introspect payload is used:
+
+- `app_roles` present → the local roles are **replaced** with `app_roles`
+  (unknown slugs ignored; `app_superadmin: true` always yields `super_admin`).
+  Empty `app_roles` and not `app_superadmin` → **403** "Access not assigned. Ask a
+  Console superadmin to assign you a role." and no local user is provisioned.
+  `console_user_id`, `roles_synced_at` and `authz_version` are stored on `engage_users`.
+- `app_roles` missing (Console not yet upgraded) → sign-in still works; existing
+  local roles are kept, a user with none gets `member` — `super_admin` only for a
+  Console `global_superadmin`. A warning is logged.
+
+**At token refresh** (`POST /v1/auth/refresh {token}`; the SPA calls it on every
+load when it already holds a token), when `CONSOLE_API_URL` and `CONSOLE_API_TOKEN`
+are both set Engage asks Console
+`GET {CONSOLE_API_URL}/portal/controller-apps/user-access?app_code=engage&console_user_id=…`
+(or `&email=…` before the first sync) with `Authorization: Bearer {CONSOLE_API_TOKEN}`:
+
+| Console answer | Result |
+|---|---|
+| `exists`/`active`/`app_access` false, or no roles | **403**; every local session ends (`engage_users.tokens_revoked_at`), so the still-unexpired JWT is rejected too |
+| access with roles | roles re-synced; the new token carries them |
+| unreachable / error | allowed **only** if `roles_synced_at` is under 12 hours old, else **503** (the session is not revoked) |
+| `CONSOLE_API_URL` / `CONSOLE_API_TOKEN` not set | warning logged; the token is re-issued with the locally mirrored roles (old behaviour) |
+
+`CONSOLE_API_TOKEN` is a Console service token with capability `staff.roles`
+bound to app_code `engage`. **Production must set `CONSOLE_API_URL` and
+`CONSOLE_API_TOKEN`**; `GET /health` reports `checks.console_role_sync`.
+
+`JwtFilter` reads the user row on every request: inactive users and tokens issued
+before `tokens_revoked_at` get 401, and `roles` come from `engage_user_roles` (not the
+token snapshot), so a role change applies on the next request. There is no role
+editing in Engage: the Topbar, Settings and Bot settings screens say "Roles are
+assigned in Console → Roles & Access". Members do not see **Settings** in the
+sidebar, and Settings / Bot settings are read-only for them.
+
+Schema: migration `2026-10-14-000080_AddConsoleRoleSync` adds
+`engage_users.console_user_id`, `roles_synced_at`, `authz_version`,
+`tokens_revoked_at` and upserts the `super_admin` / `member` role rows.
+
+### Tests
+
+```
+cd server-php
+vendor/bin/phpunit --testsuite Unit
+# Feature tests need an isolated Postgres DB (they self-skip otherwise):
+createdb engage_test
+database.tests.database=engage_test database.tests.username=postgres \
+  database.tests.password=postgres vendor/bin/phpunit
+```
 
 ## Non-goals
 

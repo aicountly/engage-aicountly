@@ -2,8 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api, { apiError } from '../lib/api.js'
 import PageHeader from '../components/PageHeader.jsx'
+import RolesManagedNote from '../components/RolesManagedNote.jsx'
+import { useAuth } from '../lib/auth.jsx'
 
 export default function Settings() {
+  const { isAdmin } = useAuth()
   const qc = useQueryClient()
   const [msg, setMsg] = useState(null)
   const [drafts, setDrafts] = useState({})
@@ -41,8 +44,9 @@ export default function Settings() {
     <>
       <PageHeader
         title="Settings"
-        subtitle="System-wide flags. Only superadmins can modify."
+        subtitle={isAdmin ? 'System-wide flags. Only Engage administrators can modify.' : 'System-wide flags (read-only — only Engage administrators can modify).'}
       />
+      <RolesManagedNote className="mb-4" />
       {msg ? <div className={`mb-3 rounded-md text-sm px-3 py-2 border ${msg.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>{msg.text}</div> : null}
 
       {isLoading ? <div>Loading…</div> : (
@@ -62,9 +66,10 @@ export default function Settings() {
                         rows={typeof s.value === 'object' ? 4 : 1}
                         className="engage-input font-mono text-xs"
                         value={drafts[s.key] ?? ''}
+                        readOnly={!isAdmin}
                         onChange={(e) => setDrafts({ ...drafts, [s.key]: e.target.value })}
                       />
-                      <div className="mt-1 flex justify-end">
+                      {isAdmin ? <div className="mt-1 flex justify-end">
                         <button
                           className="engage-btn-primary text-xs"
                           onClick={() => {
@@ -74,7 +79,7 @@ export default function Settings() {
                           }}
                           disabled={save.isPending}
                         >Save</button>
-                      </div>
+                      </div> : null}
                     </div>
                   </div>
                 ))}

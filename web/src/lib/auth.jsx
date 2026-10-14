@@ -9,6 +9,8 @@ export const GATE_CONSOLE_REQUIRED = 'console_required'
 export const GATE_NO_ACCESS = 'no_access'
 export const GATE_ERROR = 'error'
 
+export const ROLE_SUPER_ADMIN = 'super_admin'
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -41,6 +43,31 @@ export function AuthProvider({ children }) {
       setToken('')
       setUser(null)
       return false
+    }
+  }, [])
+
+  /**
+   * Re-check roles with Console via POST /v1/auth/refresh and swap in the
+   * re-issued token. Returns 'denied' when Console no longer grants access
+   * (the gate is shown); any other failure leaves the stored token alone
+   * (the API keeps enforcing roles on every request).
+   */
+  const refreshToken = useCallback(async () => {
+    const token = getToken()
+    if (!token) return 'none'
+    try {
+      const { data } = await api.post(v1('/auth/refresh'), { token })
+      if (data?.ok && data?.data?.token) setToken(data.data.token)
+      return 'ok'
+    } catch (e) {
+      if (e?.response?.status === 403) {
+        setToken('')
+        setUser(null)
+        setGateReason(GATE_NO_ACCESS)
+        setGateMessage(e?.response?.data?.error || 'Access not assigned. Ask a Console superadmin to assign you a role.')
+        return 'denied'
+      }
+      return 'skipped'
     }
   }, [])
 
@@ -78,6 +105,10 @@ export function AuthProvider({ children }) {
     }
 
     if (getToken()) {
+      if ((await refreshToken()) === 'denied') {
+        setLoading(false)
+        return
+      }
       const ok = await refresh()
       if (ok) {
         setLoading(false)
@@ -105,7 +136,7 @@ export function AuthProvider({ children }) {
       setSsoPending(false)
       setLoading(false)
     }
-  }, [loginWithConsoleSession, loginWithControllerSso, refresh])
+  }, [loginWithConsoleSession, loginWithControllerSso, refresh, refreshToken])
 
   useEffect(() => {
     bootstrap()
@@ -137,6 +168,8 @@ export function AuthProvider({ children }) {
     [user],
   )
 
+  const isAdmin = !!user && (user.roles || []).includes(ROLE_SUPER_ADMIN)
+
   return (
     <AuthCtx.Provider
       value={{
@@ -151,6 +184,7 @@ export function AuthProvider({ children }) {
         refresh,
         retryAuth,
         hasRole,
+        isAdmin,
       }}
     >
       {children}

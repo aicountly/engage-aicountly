@@ -31,6 +31,9 @@ fi
 
 echo "---- Console SSO env (values masked) ----"
 grep -E '^(CONSOLE_API_URL|CONSOLE_API_BASE_URL|CONTROLLER_APP_CODE)=' .env | sed 's/=.*/=***/' || echo "WARNING: add CONSOLE_API_URL and CONTROLLER_APP_CODE=engage to api/.env"
+if ! grep -qE '^CONSOLE_API_TOKEN=.+' .env; then
+  echo "WARNING: CONSOLE_API_TOKEN is not set — token refresh cannot re-check staff roles with Console (required in production)."
+fi
 
 echo "---- Running database migrations ----"
 CI_ENVIRONMENT=production php spark migrate 2>&1

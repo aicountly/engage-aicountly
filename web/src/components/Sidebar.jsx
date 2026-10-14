@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import clsx from 'clsx'
+import { useAuth } from '../lib/auth.jsx'
 
 const groups = [
   {
@@ -77,12 +78,18 @@ const groups = [
   {
     title: 'Admin',
     items: [
-      { to: '/settings', label: 'Settings' },
+      { to: '/settings', label: 'Settings', adminOnly: true },
     ],
   },
 ]
 
 export default function Sidebar({ open, onClose }) {
+  const { isAdmin } = useAuth()
+  // Administrator-only entries (role super_admin, assigned in Console) are
+  // hidden for Engage members; the API enforces the same rule.
+  const visibleGroups = groups
+    .map((g) => ({ ...g, items: g.items.filter((it) => !it.adminOnly || isAdmin) }))
+    .filter((g) => g.items.length > 0)
   return (
     <>
       {/* Mobile backdrop */}
@@ -104,7 +111,7 @@ export default function Sidebar({ open, onClose }) {
           </div>
         </div>
         <nav className="px-3 py-4 space-y-5 overflow-y-auto h-[calc(100vh-64px)]">
-          {groups.map((g) => (
+          {visibleGroups.map((g) => (
             <div key={g.title}>
               <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
                 {g.title}

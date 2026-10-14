@@ -22,6 +22,7 @@ $routes->get('/health', static function () {
     $dbName    = (string) env('ENGAGE_DB_NAME', '');
     $dbOk      = $dbUser !== '' && $dbName !== '';
     $consoleOk = (string) env('CONSOLE_API_BASE_URL', '') !== '' && (string) env('CONSOLE_API_TOKEN', '') !== '';
+    $roleSyncOk = (string) env('CONSOLE_API_URL', '') !== '' && (string) env('CONSOLE_API_TOKEN', '') !== '';
     $workerOk  = (string) env('WORKER_BASE_URL', '') !== '' && (string) env('WORKER_API_TOKEN', '') !== '';
     $reachOk   = (string) env('REACH_INBOUND_TOKEN', '') !== '';
     $svcKeyOk  = (string) env('ENGAGE_SERVICE_KEY', '') !== '';
@@ -50,6 +51,7 @@ $routes->get('/health', static function () {
             'db_env'              => $dbOk ? 'ok' : 'missing ENGAGE_DB_USER / ENGAGE_DB_NAME',
             'db_connection'       => $dbAlive ? 'ok' : 'unreachable',
             'console_outbound'    => $consoleOk ? 'ok' : 'CONSOLE_API_* not configured',
+            'console_role_sync'   => $roleSyncOk ? 'ok' : 'CONSOLE_API_URL / CONSOLE_API_TOKEN not set — token refresh cannot re-check roles with Console (required in production)',
             'worker_outbound'     => $workerOk ? 'ok' : 'WORKER_* not configured',
             'reach_inbound_token' => $reachOk ? 'ok' : 'REACH_INBOUND_TOKEN not set',
             'console_inbound_key' => $svcKeyOk ? 'ok' : 'ENGAGE_SERVICE_KEY not set',
@@ -81,7 +83,10 @@ $routes->group('v1', static function ($routes) {
         $routes->post('reach/leads', 'Internal\\ReachController::ingest');
     });
 
-    // Authenticated portal endpoints (superadmin JWT).
+    // Authenticated portal endpoints (staff JWT). Roles are assigned in
+    // Console → Roles & Access and mirrored at sign-in / refresh:
+    //   super_admin (Engage Administrator) — everything
+    //   member      (Engage Member)        — everything except role:super_admin routes
     $routes->group('', ['filter' => 'jwt'], static function ($routes) {
         $routes->get('me', 'Api\\V1\\AuthController::me');
         $routes->post('auth/logout', 'Api\\V1\\AuthController::logout');
@@ -156,7 +161,8 @@ $routes->group('v1', static function ($routes) {
 
         // Sales Bot subsystem.
         $routes->get('bot/settings',  'Api\\V1\\BotSettingsController::index');
-        $routes->put('bot/settings',  'Api\\V1\\BotSettingsController::update');
+        // Bot mode / auto-action config is administrator-only (Engage `member` cannot change it).
+        $routes->put('bot/settings',  'Api\\V1\\BotSettingsController::update', ['filter' => 'role:super_admin']);
         $routes->get('bot/actions',   'Api\\V1\\BotActionsController::index');
         $routes->get('bot/queue',     'Api\\V1\\BotQueueController::index');
         $routes->post('bot/queue',    'Api\\V1\\BotQueueController::create');
