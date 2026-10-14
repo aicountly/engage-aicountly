@@ -195,3 +195,24 @@ jobs:
           export EXPECTED_ENTRY
           export VERIFY_SSH="ssh -p ${PROD_SFTP_PORT} ${SSH_OPTS} -o ConnectTimeout=20 ${PROD_SFTP_USER}@${PROD_SFTP_HOST}"
           bash scripts/ci/post-deploy-checks.sh production
+
+      # Console staff roles, live (scripts/ci/live-feature-checks.py; flow-react-app
+      # docs/GO_LIVE_VERIFICATION.md): health reports console role sync configured, the no-role
+      # account is refused, the staff account signs in with its Console roles and a refresh
+      # re-checks them; on request, the revocation drill. Signs the verification accounts in only.
+      - name: Live feature checks
+        env:
+          # Shared verification identities (org-level secrets; docs/GO_LIVE_VERIFICATION.md in flow-react-app).
+          VERIFY_CONSOLE_API: ${{ vars.VERIFY_CONSOLE_API }}
+          VERIFY_STAFF_EXPECTED_ROLES: ${{ vars.VERIFY_STAFF_EXPECTED_ROLES }}
+          VERIFY_IMAP_HOST: ${{ secrets.VERIFY_IMAP_HOST }}
+          VERIFY_IMAP_PORT: ${{ secrets.VERIFY_IMAP_PORT }}
+          VERIFY_IMAP_USER: ${{ secrets.VERIFY_IMAP_USER }}
+          VERIFY_IMAP_PASSWORD: ${{ secrets.VERIFY_IMAP_PASSWORD }}
+          VERIFY_STAFF_EMAIL: ${{ secrets.VERIFY_STAFF_EMAIL }}
+          VERIFY_STAFF_PASSWORD: ${{ secrets.VERIFY_STAFF_PASSWORD }}
+          VERIFY_NOROLE_EMAIL: ${{ secrets.VERIFY_NOROLE_EMAIL }}
+          VERIFY_NOROLE_PASSWORD: ${{ secrets.VERIFY_NOROLE_PASSWORD }}
+        run: |
+          export VERIFY_SSH="ssh -p ${PROD_SFTP_PORT} ${SSH_OPTS} -o ConnectTimeout=20 ${PROD_SFTP_USER}@${PROD_SFTP_HOST}"
+          python3 scripts/ci/live-feature-checks.py production
