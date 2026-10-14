@@ -167,8 +167,8 @@ any more — the old "every new user becomes `super_admin`" provisioning is gone
   local roles are kept, a user with none gets `member` — `super_admin` only for a
   Console `global_superadmin`. A warning is logged.
 
-**At token refresh** (`POST /v1/auth/refresh {token}`; the SPA calls it on every
-load when it already holds a token), when `CONSOLE_API_URL` and `CONSOLE_API_TOKEN`
+**At token refresh** (`POST /v1/auth/refresh {token}`; the SPA calls it on load
+when its stored token is more than 10 minutes old), when `CONSOLE_API_URL` and `CONSOLE_API_TOKEN`
 are both set Engage asks Console
 `GET {CONSOLE_API_URL}/portal/controller-apps/user-access?app_code=engage&console_user_id=…`
 (or `&email=…` before the first sync) with `Authorization: Bearer {CONSOLE_API_TOKEN}`:

@@ -11,6 +11,19 @@ export const GATE_ERROR = 'error'
 
 export const ROLE_SUPER_ADMIN = 'super_admin'
 
+// Re-check the Console roles on load once the token is this old (seconds).
+const ROLE_RECHECK_AFTER_SECONDS = 10 * 60
+
+function tokenAgeSeconds(token) {
+  try {
+    const part = String(token).split('.')[1] || ''
+    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')))
+    return typeof json.iat === 'number' ? Math.floor(Date.now() / 1000) - json.iat : Infinity
+  } catch {
+    return Infinity
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -55,6 +68,7 @@ export function AuthProvider({ children }) {
   const refreshToken = useCallback(async () => {
     const token = getToken()
     if (!token) return 'none'
+    if (tokenAgeSeconds(token) < ROLE_RECHECK_AFTER_SECONDS) return 'fresh'
     try {
       const { data } = await api.post(v1('/auth/refresh'), { token })
       if (data?.ok && data?.data?.token) setToken(data.data.token)
