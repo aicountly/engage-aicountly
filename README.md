@@ -138,6 +138,17 @@ Deploy flow (mirrors books):
    `ENGAGE_BOT_SERVICE_KEY=<same value as ENGAGE_SERVICE_KEY on Engage>`.
    In Console DB, insert an `engage` row in `bot_portals` with
    `service_key_hash = sha256(<key>)`.
+   Engage calls Console's Bot Orchestrator for approvals only
+   (`POST /portal/bot-approval-request`, `POST /portal/bot-execution-result`); Console decides and
+   calls back `POST /api/v1/portal/bot/approval-callback`, and reads health, reports and mode from
+   Engage's `portal/bot/*`. (The old pushes to `portal/bot-mode-status`, `portal/bot-health` and
+   `portal/bot-reports` were removed — Console never had those routes.)
+   **Central audit:** every `AuditService` event in its fan-out list (`bot.`, `approval.`,
+   `lead.converted`, `discount.applied`, `credit.large`, `auto_mode.`, or `fanout_console`) goes to
+   `POST {CONSOLE_API_URL}/portal/audit` with Engage's own key (`CONSOLE_API_TOKEN`, capability
+   `audit.write`) through `engage_console_audit_outbox`, retried by cron every 5 minutes:
+   `0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1`.
+   (It used to go to `portal/bot-audit`, which refused Engage's body with 422.)
 7. Reach side (when built): use the value of `REACH_INBOUND_TOKEN` as the
    `X-Portal-Token` header when POSTing to
    `https://engage.aicountly.org/api/internal/reach/leads`.

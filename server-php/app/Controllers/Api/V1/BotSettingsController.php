@@ -4,7 +4,6 @@ namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
 use App\Models\SettingsModel;
-use Config\Services;
 
 class BotSettingsController extends BaseApiController
 {
@@ -28,12 +27,8 @@ class BotSettingsController extends BaseApiController
         $m = new SettingsModel();
         if ($mode !== null) {
             $m->setSetting('bot_mode', $mode, $this->user()['id'] ?? null);
+            // Reaches Console as the auto_mode.change central-audit event.
             $this->audit('auto_mode.change', ['metadata' => ['mode' => $mode], 'fanout_console' => true]);
-            try {
-                Services::consoleClient()->sendModeStatus($mode);
-            } catch (\Throwable $e) {
-                log_message('error', 'Console mode fan-out failed: ' . $e->getMessage());
-            }
         }
 
         if (array_key_exists('allowed_auto_actions', $body)) {

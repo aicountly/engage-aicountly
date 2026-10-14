@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Cast\TolerantJsonCast;
 use CodeIgniter\Model;
 
 class ApprovalRequestsModel extends Model
@@ -16,5 +17,8 @@ class ApprovalRequestsModel extends Model
         'console_approval_id', 'console_status', 'production_confirmation',
         'executed_at', 'execution_result',
     ];
-    protected array $casts = ['payload' => 'json-array', 'execution_result' => 'json-array'];
+    protected array $casts = ['payload' => '?json-array', 'execution_result' => '?json-array'];
+
+    /** Rows written before 2026-10-14 hold payload / execution_result double-encoded. */
+    protected array $castHandlers = ['json' => TolerantJsonCast::class];
 }
