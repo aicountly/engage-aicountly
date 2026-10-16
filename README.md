@@ -147,7 +147,7 @@ Deploy flow (mirrors books):
    `lead.converted`, `discount.applied`, `credit.large`, `auto_mode.`, or `fanout_console`) goes to
    `POST {CONSOLE_API_URL}/portal/audit` with Engage's own key (`CONSOLE_API_TOKEN`, capability
    `audit.write`) through `engage_console_audit_outbox`, retried by cron every 5 minutes:
-   `0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1`.
+   `0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1`. The command reports each delivery run to Console's Cron Job Monitor as `engage.console_audit_deliver` (`app/Libraries/CronHeartbeat.php`; `CONSOLE_CRON_MONITOR_KEY` in `.env`, console-react-app `docs/CRON_MONITORS.md`); without the key nothing is reported, and a failed report never fails the command.
    (It used to go to `portal/bot-audit`, which refused Engage's body with 422.)
    **JSON columns:** every model with a JSON cast extends `EngageModel` (`TolerantJsonCast`); pass
    arrays to those fields, never `json_encode()` output. Rows an older release stored double-encoded
