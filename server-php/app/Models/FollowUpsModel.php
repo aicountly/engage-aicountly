@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class FollowUpsModel extends Model
+class FollowUpsModel extends EngageModel
 {
     protected $table         = 'engage_follow_ups';
     protected $primaryKey    = 'id';
@@ -15,7 +13,7 @@ class FollowUpsModel extends Model
         'due_at', 'kind', 'channel', 'title', 'body',
         'owner_id', 'status', 'completed_at', 'outcome', 'created_by_kind', 'metadata',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function upcoming(int $days = 7): array
     {

@@ -39,9 +39,6 @@ class PlansController extends BaseApiController
         if (empty($data['code']) || empty($data['name'])) {
             return $this->fail('code and name are required.', 400);
         }
-        if (isset($data['features']) && is_array($data['features'])) {
-            $data['features'] = json_encode($data['features']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('plan_create', ['subject_kind' => 'plan', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -50,9 +47,6 @@ class PlansController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['features']) && is_array($data['features'])) {
-            $data['features'] = json_encode($data['features']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('plan_update', ['subject_kind' => 'plan', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

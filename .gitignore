@@ -11,3 +11,4 @@ server-php/writable/uploads/*
 server-php/vendor/
 web/node_modules/
 web/dist/
+server-php/writable/.phpunit.cache/

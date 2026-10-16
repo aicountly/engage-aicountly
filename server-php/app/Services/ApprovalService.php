@@ -52,7 +52,8 @@ class ApprovalService
             'subject_id'      => isset($opts['subject_id']) ? (string) $opts['subject_id'] : null,
             'risk_level'      => $riskLevel,
             'status'          => $isAutoEligible ? 'auto_approved' : 'pending',
-            'payload'         => isset($opts['payload']) ? json_encode($opts['payload']) : null,
+            // An array: the model's JSON cast encodes it (encoding here too stored a JSON string).
+            'payload'         => $opts['payload'] ?? null,
             'requested_by'    => $opts['requested_by'] ?? ($req->engageUser['id'] ?? null),
             'requester_kind'  => $requesterKind,
         ];
@@ -138,15 +139,16 @@ class ApprovalService
         $this->model->update($id, [
             'status'            => 'executed',
             'executed_at'       => date('Y-m-d H:i:s'),
-            'execution_result'  => json_encode($result),
+            'execution_result'  => $result,
         ]);
 
         try {
-            Services::consoleClient()->reportExecution([
-                'approval_id'    => (int) $id,
-                'correlation_id' => $this->model->find($id)['correlation_id'] ?? null,
-                'result'         => $result,
-            ]);
+            // Console's own approval id (only approvals Console queued have one).
+            $consoleId = (int) ($this->model->find($id)['console_approval_id'] ?? 0);
+            if ($consoleId > 0) {
+                Services::consoleClient()->reportExecution($consoleId, ($result['success'] ?? true) !== false, $result,
+                    isset($result['error']) ? (string) $result['error'] : null);
+            }
         } catch (\Throwable $e) {
             log_message('error', 'Console execution report failed: ' . $e->getMessage());
         }

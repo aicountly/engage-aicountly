@@ -44,9 +44,6 @@ class ProposalsController extends BaseApiController
         if (empty($data['proposal_code'])) {
             $data['proposal_code'] = $this->m->generateCode();
         }
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('proposal_create', ['subject_kind' => 'proposal', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -55,9 +52,6 @@ class ProposalsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('proposal_update', ['subject_kind' => 'proposal', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

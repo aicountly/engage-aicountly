@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class LeadActivitiesModel extends Model
+class LeadActivitiesModel extends EngageModel
 {
     protected $table         = 'engage_lead_activities';
     protected $primaryKey    = 'id';
@@ -15,7 +13,7 @@ class LeadActivitiesModel extends Model
         'author_id', 'author_kind', 'metadata', 'created_at',
     ];
 
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function record(int $leadId, string $type, ?string $title, ?string $body, array $opts = []): int
     {
@@ -27,7 +25,7 @@ class LeadActivitiesModel extends Model
             'body'          => $body,
             'author_id'     => $opts['author_id']   ?? ($req->engageUser['id'] ?? null),
             'author_kind'   => $opts['author_kind'] ?? 'user',
-            'metadata'      => isset($opts['metadata']) ? json_encode($opts['metadata']) : null,
+            'metadata'      => $opts['metadata'] ?? null,
             'created_at'    => date('Y-m-d H:i:s'),
         ];
         return (int) $this->insert($data, true);

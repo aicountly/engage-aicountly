@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+    bootstrap="vendor/codeigniter4/framework/system/Test/bootstrap.php"
+    backupGlobals="false"
+    beStrictAboutOutputDuringTests="true"
+    colors="true"
+    columns="max"
+    failOnRisky="true"
+    failOnWarning="true"
+    cacheDirectory="writable/.phpunit.cache"
+>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory suffix="Test.php">./tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory suffix="Test.php">./tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+
+    <source>
+        <include>
+            <directory suffix=".php">./app</directory>
+        </include>
+        <exclude>
+            <directory suffix=".php">./app/Views</directory>
+            <file>./app/Config/Routes.php</file>
+        </exclude>
+    </source>
+
+    <php>
+        <server name="app.baseURL" value="http://localhost:8080/"/>
+        <server name="CODEIGNITER_SCREAM_DEPRECATIONS" value="0"/>
+        <const name="HOMEPATH" value="./"/>
+        <const name="CONFIGPATH" value="./app/Config/"/>
+        <const name="PUBLICPATH" value="./"/>
+
+        <!-- Isolated test DB. Feature tests self-skip unless database.tests.database
+             (or TEST_DB_NAME) is set, so a test run can never reach the real DB. -->
+        <env name="database.tests.hostname" value="127.0.0.1"/>
+        <env name="database.tests.port"     value="5432"/>
+        <env name="database.tests.database" value=""/>
+        <env name="database.tests.username" value=""/>
+        <env name="database.tests.password" value=""/>
+        <env name="database.tests.DBDriver" value="Postgre"/>
+
+        <env name="ENGAGE_JWT_SECRET" value="test-jwt-secret-32-characters-min-length-abcdef"/>
+        <env name="ENGAGE_JWT_TTL_MINUTES" value="60"/>
+        <env name="CONTROLLER_APP_CODE" value="engage"/>
+        <!-- Never emit real HTTP from tests: Console calls are stubbed per test. -->
+        <env name="CONSOLE_API_URL" value=""/>
+        <env name="CONSOLE_API_BASE_URL" value=""/>
+        <env name="CONSOLE_API_TOKEN" value=""/>
+    </php>
+</phpunit>

@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class LicensingInterestsModel extends Model
+class LicensingInterestsModel extends EngageModel
 {
     protected $table         = 'engage_licensing_interests';
     protected $primaryKey    = 'id';
@@ -15,5 +13,5 @@ class LicensingInterestsModel extends Model
         'expected_users', 'expected_companies', 'requested_start', 'billing_cycle',
         'status', 'notes', 'metadata',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 }

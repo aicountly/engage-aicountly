@@ -79,6 +79,49 @@ class ConsoleIdentityService
         );
     }
 
+    /**
+     * True when the server-to-server user-access pull can be used:
+     * CONSOLE_API_URL and CONSOLE_API_TOKEN (capability `staff.roles`,
+     * bound to this app in Console) are both set.
+     */
+    public function userAccessConfigured(): bool
+    {
+        return trim((string) env('CONSOLE_API_URL', '')) !== ''
+            && trim((string) env('CONSOLE_API_TOKEN', '')) !== '';
+    }
+
+    /**
+     * GET {CONSOLE_API_URL}/portal/controller-apps/user-access — the current
+     * Console view of one staff member's access to this app.
+     *
+     * @return array{status: 'ok'|'unconfigured'|'unreachable', data?: array<string,mixed>}
+     *         `unreachable` covers transport errors, non-2xx answers and
+     *         malformed bodies — anything that is not an authoritative answer.
+     */
+    public function fetchUserAccess(?int $consoleUserId, string $email): array
+    {
+        if (! $this->userAccessConfigured()) {
+            return ['status' => 'unconfigured'];
+        }
+
+        $query = ['app_code' => strtolower(trim((string) env('CONTROLLER_APP_CODE', 'engage')))];
+        if ($consoleUserId !== null && $consoleUserId > 0) {
+            $query['console_user_id'] = $consoleUserId;
+        } else {
+            $query['email'] = strtolower(trim($email));
+        }
+
+        $base = rtrim(trim((string) env('CONSOLE_API_URL', '')), '/');
+        $data = $this->requestJsonGet(
+            '/portal/controller-apps/user-access',
+            $query,
+            trim((string) env('CONSOLE_API_TOKEN', '')),
+            $base,
+        );
+
+        return $data === null ? ['status' => 'unreachable'] : ['status' => 'ok', 'data' => $data];
+    }
+
     private function resolveConsoleApiBase(): string
     {
         foreach ([env('CONSOLE_API_URL'), env('CONSOLE_API_BASE_URL')] as $value) {
@@ -134,9 +177,9 @@ class ConsoleIdentityService
      * @param array<string,mixed> $query
      * @return array<string,mixed>|null
      */
-    private function requestJsonGet(string $path, array $query, string $bearerToken): ?array
+    private function requestJsonGet(string $path, array $query, string $bearerToken, ?string $apiBase = null): ?array
     {
-        $apiBase = $this->resolveConsoleApiBase();
+        $apiBase ??= $this->resolveConsoleApiBase();
         $url     = $apiBase . $path;
         if ($query !== []) {
             $url .= '?' . http_build_query($query);

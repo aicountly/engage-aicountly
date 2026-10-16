@@ -8,8 +8,8 @@ use Config\Services;
 /**
  * Append-only audit log writer. Every write action in Engage calls this.
  *
- * Also fans out to Console for cross-portal audit visibility (best-effort;
- * failures are logged but do not break the local audit write).
+ * Also fans out to Console's central audit (POST {CONSOLE_API_URL}/portal/audit) through the
+ * outbox (ConsoleAuditOutbox — retried until Console has it; never breaks the local write).
  */
 class AuditService
 {
@@ -22,6 +22,8 @@ class AuditService
 
     public function log(string $event, array $opts = []): void
     {
+        $row = [];
+        $auditId = null;
         try {
             $req = service('request');
             $row = [
@@ -38,14 +40,15 @@ class AuditService
                 'created_at'   => date('Y-m-d H:i:s'),
             ];
 
-            $this->model->insert($row);
+            $auditId = $this->model->insert($row);
         } catch (\Throwable $e) {
             log_message('error', 'Audit log failed for event ' . $event . ': ' . $e->getMessage());
         }
 
         try {
             if (! empty($opts['fanout_console']) || $this->shouldFanout($event)) {
-                Services::consoleClient()->sendAudit($event, $opts);
+                // external_id = this engage_audit_logs row: Console stores it once however often it is resent.
+                (new ConsoleAuditOutbox())->record($event, $row ?: ['metadata' => $opts['metadata'] ?? null], $auditId ? 'engage:audit_logs:' . $auditId : null);
             }
         } catch (\Throwable $e) {
             log_message('error', 'Audit console fan-out failed: ' . $e->getMessage());

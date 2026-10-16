@@ -69,7 +69,7 @@ class ReachIntakeService
             'stage'                 => 'new',
             'priority'              => $payload['priority'] ?? 'normal',
             'sales_status'          => 'open',
-            'metadata'              => json_encode(['reach_payload' => $payload]),
+            'metadata'              => ['reach_payload' => $payload],
         ];
 
         if ($existing) {

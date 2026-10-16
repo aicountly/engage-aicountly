@@ -17,6 +17,8 @@ class UsersModel extends Model
     protected $allowedFields = [
         'email', 'name', 'password_hash', 'status',
         'last_login_at', 'last_login_ip', 'failed_attempts',
+        // Console role sync (migration 2026-10-14-000080).
+        'console_user_id', 'roles_synced_at', 'authz_version', 'tokens_revoked_at',
     ];
 
     public function findByEmail(string $email): ?array

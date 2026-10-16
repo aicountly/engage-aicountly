@@ -38,12 +38,6 @@ class CommunicationDraftsController extends BaseApiController
         if (empty($data['channel'])) return $this->fail('channel is required.', 400);
         $data['created_by']   = $this->user()['id'] ?? null;
         $data['creator_kind'] = $data['creator_kind'] ?? 'user';
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
-        if (isset($data['attachments']) && is_array($data['attachments'])) {
-            $data['attachments'] = json_encode($data['attachments']);
-        }
         $id = $this->m->insert($data, true);
 
         // Sending external messages always needs approval.
@@ -70,12 +64,6 @@ class CommunicationDraftsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
-        if (isset($data['attachments']) && is_array($data['attachments'])) {
-            $data['attachments'] = json_encode($data['attachments']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('communication_draft_update', ['subject_kind' => 'communication_draft', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

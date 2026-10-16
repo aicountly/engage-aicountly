@@ -54,7 +54,7 @@ class SalesBotService
             'action'         => $action,
             'entity_kind'    => $payload['entity_kind'] ?? ($this->guessEntityKind($payload)),
             'entity_id'      => isset($payload['entity_id']) ? (string) $payload['entity_id'] : (isset($payload['lead_id']) ? (string) $payload['lead_id'] : null),
-            'payload'        => json_encode($payload),
+            'payload'        => $payload,
             'mode'           => $mode,
             'status'         => 'running',
             'attempts'       => 1,
@@ -89,17 +89,17 @@ class SalesBotService
             'entity_id'                => isset($payload['entity_id']) ? (string) $payload['entity_id'] : (isset($payload['lead_id']) ? (string) $payload['lead_id'] : null),
             'mode'                     => $mode,
             'understanding'            => (string) ($ctx['understanding'] ?? ''),
-            'data_accessed'            => json_encode($ctx['data_accessed']   ?? []),
+            'data_accessed'            => $ctx['data_accessed']   ?? [],
             'recommendation'           => $ctx['recommendation']   ?? null,
             'action_proposed'          => $ctx['action_proposed']  ?? null,
             'action_taken'             => $ctx['action_taken']     ?? null,
             'approval_status'          => $ctx['approval_status']  ?? 'not_required',
             'approval_id'              => $approvalId,
             'message_draft'            => $ctx['message_draft']    ?? null,
-            'proposal_draft'           => isset($ctx['proposal_draft']) ? json_encode($ctx['proposal_draft']) : null,
-            'evidence'                 => isset($ctx['evidence']) ? json_encode($ctx['evidence']) : null,
+            'proposal_draft'           => $ctx['proposal_draft'] ?? null,
+            'evidence'                 => $ctx['evidence'] ?? null,
             'next_recommended_action'  => $ctx['next_recommended_action'] ?? null,
-            'errors'                   => isset($ctx['errors']) ? json_encode($ctx['errors']) : null,
+            'errors'                   => $ctx['errors'] ?? null,
             'created_at'               => date('Y-m-d H:i:s'),
         ], true);
 
@@ -256,7 +256,7 @@ class SalesBotService
             'status'       => 'draft',
             'creator_kind' => 'bot',
             'created_by'   => service('request')->engageUser['id'] ?? null,
-            'metadata'     => json_encode(['draft_source' => $draft['source']]),
+            'metadata'     => ['draft_source' => $draft['source']],
         ], true);
 
         $approvalId = null;
@@ -521,7 +521,7 @@ class SalesBotService
                     'body'             => 'Auto-created by SalesBot for upcoming renewal.',
                     'status'           => 'pending',
                     'created_by_kind'  => 'bot',
-                    'metadata'         => json_encode(['window_days' => $days]),
+                    'metadata'         => ['window_days' => $days],
                 ], true);
                 $renewals->update((int) $r['id'], ['reminder_stage' => (string) $days . 'd']);
                 $created[] = $fuId;
@@ -624,7 +624,7 @@ class SalesBotService
             'entity_id'              => $payload['entity_id']   ?? null,
             'mode'                   => $mode,
             'understanding'          => 'Bot could not interpret request.',
-            'errors'                 => json_encode([['message' => $error]]),
+            'errors'                 => [['message' => $error]],
             'approval_status'        => 'error',
             'created_at'             => date('Y-m-d H:i:s'),
         ], true);

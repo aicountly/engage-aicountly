@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api, { apiError } from '../lib/api.js'
 import PageHeader from '../components/PageHeader.jsx'
 import { BotModeBadge } from '../components/Badges.jsx'
+import { useAuth } from '../lib/auth.jsx'
 
 const AUTO_ACTIONS = [
   'score_lead', 'qualify_lead', 'identify_hot', 'identify_stale', 'update_stage',
@@ -12,6 +13,7 @@ const AUTO_ACTIONS = [
 ]
 
 export default function BotSettings() {
+  const { isAdmin } = useAuth()
   const qc = useQueryClient()
   const [state, setState] = useState({ bot_mode: 'confirm', allowed_auto_actions: [], notes: '' })
   const [msg, setMsg] = useState(null)
@@ -50,6 +52,11 @@ export default function BotSettings() {
         subtitle="Choose whether the bot must ask a superadmin (Confirm) or can act (Auto) on selected low-risk actions."
         actions={<BotModeBadge mode={state.bot_mode} />}
       />
+      {!isAdmin ? (
+        <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
+          Read-only: only Engage administrators can change bot settings. Roles are assigned in Console → Roles &amp; Access.
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="engage-card lg:col-span-2 space-y-4">
@@ -57,12 +64,14 @@ export default function BotSettings() {
             <div className="engage-label">Bot mode</div>
             <div className="grid grid-cols-2 gap-2 mt-1">
               <button
+                disabled={!isAdmin}
                 onClick={() => setState({ ...state, bot_mode: 'confirm' })}
                 className={`engage-btn justify-center ${state.bot_mode === 'confirm' ? 'bg-aicountly-600 text-white' : 'engage-btn-secondary'}`}
               >
                 Confirm mode
               </button>
               <button
+                disabled={!isAdmin}
                 onClick={() => setState({ ...state, bot_mode: 'auto' })}
                 className={`engage-btn justify-center ${state.bot_mode === 'auto' ? 'bg-aicountly-600 text-white' : 'engage-btn-secondary'}`}
               >
@@ -80,7 +89,7 @@ export default function BotSettings() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-1">
               {AUTO_ACTIONS.map((a) => (
                 <label key={a} className="flex items-center gap-2 text-sm border rounded-md px-2 py-1.5 border-neutral-200">
-                  <input type="checkbox" checked={state.allowed_auto_actions.includes(a)} onChange={() => toggle(a)} />
+                  <input type="checkbox" disabled={!isAdmin} checked={state.allowed_auto_actions.includes(a)} onChange={() => toggle(a)} />
                   <span className="text-neutral-800">{a}</span>
                 </label>
               ))}
@@ -89,7 +98,7 @@ export default function BotSettings() {
 
           <div>
             <div className="engage-label">Operator notes</div>
-            <textarea className="engage-input" rows={2} value={state.notes} onChange={(e) => setState({ ...state, notes: e.target.value })} />
+            <textarea className="engage-input" rows={2} readOnly={!isAdmin} value={state.notes} onChange={(e) => setState({ ...state, notes: e.target.value })} />
           </div>
 
           {msg ? (
@@ -98,11 +107,13 @@ export default function BotSettings() {
             </div>
           ) : null}
 
-          <div className="flex justify-end">
-            <button className="engage-btn-primary" onClick={() => { setMsg(null); save.mutate(state) }} disabled={save.isPending}>
-              {save.isPending ? 'Saving…' : 'Save settings'}
-            </button>
-          </div>
+          {isAdmin ? (
+            <div className="flex justify-end">
+              <button className="engage-btn-primary" onClick={() => { setMsg(null); save.mutate(state) }} disabled={save.isPending}>
+                {save.isPending ? 'Saving…' : 'Save settings'}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="engage-card space-y-2">

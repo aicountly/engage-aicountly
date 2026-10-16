@@ -3,6 +3,7 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Libraries\ConsoleRoleSync;
 use App\Models\UsersModel;
 use App\Services\ConsoleIdentityService;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -22,20 +23,59 @@ class AuthController extends BaseApiController
         );
     }
 
+    /**
+     * POST /v1/auth/refresh {token} — re-issue a token after re-checking the
+     * caller's roles with Console (see StaffAccessService::refresh).
+     */
     public function refresh()
     {
         $body  = $this->input();
         $token = (string) ($body['token'] ?? '');
-        $payload = Services::jwt()->decode($token);
+        try {
+            $payload = Services::jwt()->decode($token);
+        } catch (RuntimeException $e) {
+            return $this->fail($e->getMessage(), 503);
+        }
         if (! $payload) {
             return $this->fail('Invalid token.', 401);
         }
-        $new = Services::jwt()->issue(
-            (int) $payload['sub'],
-            (string) ($payload['email'] ?? ''),
-            (array) ($payload['roles'] ?? [])
-        );
-        return $this->ok(['token' => $new]);
+
+        $userId = (int) ($payload['sub'] ?? 0);
+        $users  = new UsersModel();
+        $user   = $userId > 0 ? $users->find($userId) : null;
+        if (! $user) {
+            return $this->fail('Invalid token subject.', 401);
+        }
+        if (! empty($user['tokens_revoked_at'])
+            && (int) ($payload['iat'] ?? 0) <= (int) strtotime((string) $user['tokens_revoked_at'])) {
+            return $this->fail('Session is no longer active. Sign in again from Console.', 401);
+        }
+
+        $result = Services::staffAccess()->refresh($user);
+        if (! $result['ok']) {
+            if ((int) $result['status'] === 403) {
+                $this->audit('console_access_revoked', [
+                    'actor_id'    => $userId,
+                    'actor_email' => (string) $user['email'],
+                    'metadata'    => ['reason' => $result['error']],
+                ]);
+            }
+
+            return $this->fail((string) $result['error'], (int) $result['status']);
+        }
+
+        $roles = $result['roles'];
+        if ($roles === []) {
+            return $this->fail(ConsoleRoleSync::DENY_MESSAGE, 403);
+        }
+
+        $new = Services::jwt()->issue($userId, (string) $user['email'], $roles);
+
+        return $this->ok([
+            'token'   => $new,
+            'expires' => (int) env('ENGAGE_JWT_TTL_MINUTES', 720) * 60,
+            'roles'   => $roles,
+        ]);
     }
 
     public function logout()
@@ -60,6 +100,8 @@ class AuthController extends BaseApiController
             'email'           => $row['email'],
             'name'            => $row['name'],
             'roles'           => $users->roleCodes((int) $row['id']),
+            'roles_synced_at' => $row['roles_synced_at'] ?? null,
+            'roles_managed_by'=> 'console',
             'controller_apps' => $this->controllerAppsForRequest(),
         ]);
     }
@@ -137,10 +179,13 @@ class AuthController extends BaseApiController
 
             $session = $this->buildSessionFromConsoleIdentity($identity, 'controller_sso_callback');
             if ($session instanceof ResponseInterface) {
-                return $this->ssoCallbackHtml(
-                    'You do not have access to the Engage controller app, or your Engage account could not be provisioned.',
-                    403,
-                );
+                $message = 'You do not have access to the Engage controller app, or your Engage account could not be provisioned.';
+                $decoded = json_decode((string) $session->getBody(), true);
+                if (is_array($decoded) && is_string($decoded['error'] ?? null) && $decoded['error'] !== '') {
+                    $message = $decoded['error'];
+                }
+
+                return $this->ssoCallbackHtml($message, $session->getStatusCode() >= 400 ? $session->getStatusCode() : 403);
             }
 
             return $this->completeSsoInBrowser((string) $session['token']);
@@ -237,6 +282,18 @@ class AuthController extends BaseApiController
             return $this->fail('Console identity did not return a user email.', 502);
         }
 
+        // Roles come from Console. Decide before provisioning anything so a
+        // staff member without an Engage role never gets a local row.
+        $decision = ConsoleRoleSync::fromIdentity($identity);
+        if ($decision['status'] === 'deny') {
+            $this->audit('console_access_denied', [
+                'actor_email' => $email,
+                'metadata'    => ['console_user_id' => (int) ($consoleUser['id'] ?? 0), 'via' => $auditEvent],
+            ]);
+
+            return $this->fail((string) $decision['message'], 403);
+        }
+
         $users = new UsersModel();
         $user  = $users->findByEmail($email);
 
@@ -252,16 +309,18 @@ class AuthController extends BaseApiController
                 return $this->fail('Could not provision Engage user from Console identity.', 500);
             }
 
-            $this->assignRoleByCode($users, (int) $userId, 'super_admin');
             $user = $users->find((int) $userId);
         } elseif (($user['status'] ?? 'active') !== 'active') {
             return $this->fail('Engage user account is inactive.', 403);
         }
 
-        $roles = $users->roleCodes((int) $user['id']);
+        $synced = Services::staffAccess()->applyLoginDecision($user, $decision);
+        if (! $synced['ok']) {
+            return $this->fail((string) $synced['error'], (int) $synced['status']);
+        }
+        $roles = $synced['roles'];
         if ($roles === []) {
-            $this->assignRoleByCode($users, (int) $user['id'], 'super_admin');
-            $roles = $users->roleCodes((int) $user['id']);
+            return $this->fail(ConsoleRoleSync::DENY_MESSAGE, 403);
         }
 
         try {
@@ -281,8 +340,11 @@ class AuthController extends BaseApiController
             'actor_email' => $user['email'],
             'actor_role'  => $roles[0] ?? null,
             'metadata'    => [
-                'console_user_id'   => (int) ($consoleUser['id'] ?? 0),
+                'console_user_id'   => (int) ($decision['console_user_id'] ?? ($consoleUser['id'] ?? 0)),
                 'global_superadmin' => $global,
+                'roles'             => $roles,
+                'roles_source'      => $decision['status'] === 'grant' ? 'console' : 'local_legacy',
+                'authz_version'     => $decision['authz_version'] ?? null,
             ],
         ]);
 
@@ -419,29 +481,5 @@ HTML;
         }
 
         return null;
-    }
-
-    private function assignRoleByCode(UsersModel $users, int $userId, string $roleCode): void
-    {
-        $db = $users->db;
-        $role = $db->table('engage_roles')->where('code', $roleCode)->get()->getRow();
-        if (! $role) {
-            return;
-        }
-
-        $exists = $db->table('engage_user_roles')
-            ->where('user_id', $userId)
-            ->where('role_id', $role->id)
-            ->countAllResults() > 0;
-
-        if ($exists) {
-            return;
-        }
-
-        $db->table('engage_user_roles')->insert([
-            'user_id'    => $userId,
-            'role_id'    => $role->id,
-            'created_at' => date('Y-m-d H:i:s'),
-        ]);
     }
 }

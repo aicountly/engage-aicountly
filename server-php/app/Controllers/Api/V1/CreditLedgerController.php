@@ -78,9 +78,6 @@ class CreditLedgerController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('credit_entry_update', ['subject_kind' => 'credit_ledger', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

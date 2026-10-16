@@ -67,9 +67,6 @@ class CampaignsController extends BaseApiController
     {
         $data = $this->input();
         if (empty($data['name'])) return $this->fail('name is required.', 400);
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('campaign_create', ['subject_kind' => 'campaign', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -78,9 +75,6 @@ class CampaignsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('campaign_update', ['subject_kind' => 'campaign', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

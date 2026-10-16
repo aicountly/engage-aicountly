@@ -34,9 +34,6 @@ class RenewalsController extends BaseApiController
     public function create()
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('renewal_create', ['subject_kind' => 'renewal', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -45,9 +42,6 @@ class RenewalsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('renewal_update', ['subject_kind' => 'renewal', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

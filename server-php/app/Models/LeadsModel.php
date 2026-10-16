@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class LeadsModel extends Model
+class LeadsModel extends EngageModel
 {
     protected $table         = 'engage_leads';
     protected $primaryKey    = 'id';
@@ -21,7 +19,7 @@ class LeadsModel extends Model
         'notes', 'bot_summary', 'metadata',
     ];
 
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function generateLeadCode(): string
     {

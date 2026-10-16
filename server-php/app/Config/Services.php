@@ -14,6 +14,7 @@ use App\Services\PartnerPortalClient;
 use App\Services\ReachIntakeService;
 use App\Services\RenewalReminderService;
 use App\Services\SalesBotService;
+use App\Services\StaffAccessService;
 use App\Services\WorkerClient;
 use CodeIgniter\Config\BaseService;
 
@@ -121,5 +122,13 @@ class Services extends BaseService
             return static::getSharedInstance('consoleIdentity') ?? static::consoleIdentity(false);
         }
         return new ConsoleIdentityService();
+    }
+
+    public static function staffAccess(bool $getShared = true): StaffAccessService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('staffAccess') ?? static::staffAccess(false);
+        }
+        return new StaffAccessService();
     }
 }

@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class CreditLedgerModel extends Model
+class CreditLedgerModel extends EngageModel
 {
     protected $table         = 'engage_credit_ledger';
     protected $primaryKey    = 'id';
@@ -17,7 +15,7 @@ class CreditLedgerModel extends Model
         'remarks', 'created_by', 'creator_kind', 'approved_by', 'approved_at',
         'metadata', 'created_at',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 
     public function partyBalance(string $partyType, string $partyRef, ?string $creditType = null): array
     {

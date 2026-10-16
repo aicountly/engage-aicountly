@@ -48,9 +48,6 @@ class ContactsController extends BaseApiController
         if (empty($data['name'])) {
             return $this->fail('name is required.', 400);
         }
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $id = $this->m->insert($data, true);
         $this->audit('contact_create', ['subject_kind' => 'contact', 'subject_id' => $id]);
         return $this->ok($this->m->find($id), 201);
@@ -59,9 +56,6 @@ class ContactsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
-        if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata']);
-        }
         $this->m->update((int) $id, $data);
         $this->audit('contact_update', ['subject_kind' => 'contact', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

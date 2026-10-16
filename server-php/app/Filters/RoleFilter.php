@@ -10,8 +10,10 @@ use CodeIgniter\HTTP\ResponseInterface;
  * Usage in Routes.php:
  *   $routes->put('settings', '...', ['filter' => 'role:super_admin']);
  *
- * The filter expects request->engageUser populated by JwtFilter.
- * Engage is a superadmin-only portal, so the default role is `super_admin`.
+ * The filter expects request->engageUser populated by JwtFilter (roles are
+ * read live from engage_user_roles, which mirrors Console → Roles & Access).
+ * Engage roles: `super_admin` (Engage Administrator) and `member` (Engage
+ * Member — everything except routes guarded with role:super_admin).
  */
 class RoleFilter implements FilterInterface
 {

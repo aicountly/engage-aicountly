@@ -45,10 +45,6 @@ class CreditService
             'created_at'       => date('Y-m-d H:i:s'),
         ], $entry);
 
-        if (isset($row['metadata']) && is_array($row['metadata'])) {
-            $row['metadata'] = json_encode($row['metadata']);
-        }
-
         $id = (int) $this->ledger->insert($row, true);
 
         if ($largeAmount) {

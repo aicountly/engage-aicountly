@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class ApprovalRequestsModel extends Model
+class ApprovalRequestsModel extends EngageModel
 {
     protected $table         = 'engage_approval_requests';
     protected $primaryKey    = 'id';
@@ -16,5 +14,5 @@ class ApprovalRequestsModel extends Model
         'console_approval_id', 'console_status', 'production_confirmation',
         'executed_at', 'execution_result',
     ];
-    protected array $casts = ['payload' => 'json-array', 'execution_result' => 'json-array'];
+    protected array $casts = ['payload' => '?json-array', 'execution_result' => '?json-array'];
 }

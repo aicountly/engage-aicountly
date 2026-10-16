@@ -2,9 +2,7 @@
 
 namespace App\Models;
 
-use CodeIgniter\Model;
-
-class DiscountRequestsModel extends Model
+class DiscountRequestsModel extends EngageModel
 {
     protected $table         = 'engage_discount_requests';
     protected $primaryKey    = 'id';
@@ -15,5 +13,5 @@ class DiscountRequestsModel extends Model
         'discount_percent', 'discount_amount', 'currency', 'justification',
         'status', 'approval_id', 'decided_by', 'decided_at', 'decision_notes', 'metadata',
     ];
-    protected array $casts = ['metadata' => 'json-array'];
+    protected array $casts = ['metadata' => '?json-array'];
 }
