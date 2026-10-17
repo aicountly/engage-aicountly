@@ -8,6 +8,7 @@ import { PriorityBadge, StageBadge, SourceBadge } from '../components/Badges.jsx
 import { BotReportTimeline, FollowUpTimeline, LeadActivityTimeline } from '../components/Timelines.jsx'
 import ProposalPanel from '../components/ProposalPanel.jsx'
 import CreditLedgerPanel from '../components/CreditLedgerPanel.jsx'
+import LeadPaymentsPanel from '../components/LeadPaymentsPanel.jsx'
 import { formatDate, titleCase } from '../lib/format.js'
 
 const BOT_ACTIONS = [
@@ -151,6 +152,7 @@ export default function LeadDetail() {
           </div>
 
           <CreditLedgerPanel entries={creditsQ.data?.rows || creditsQ.data || []} balance={creditsQ.data?.balance} />
+          {lead?.id ? <LeadPaymentsPanel lead={lead} /> : null}
         </div>
 
         <div className="space-y-4">

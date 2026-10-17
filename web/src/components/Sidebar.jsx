@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import clsx from 'clsx'
 import { useAuth } from '../lib/auth.jsx'
+import { KYC_REVIEW, SELLER_VIEW } from '../lib/sellerRoles.js'
 
 const groups = [
   {
@@ -23,7 +24,18 @@ const groups = [
   {
     title: 'Partners',
     items: [
-      { to: '/partners', label: 'Partner master' },
+      { to: '/partners', label: 'Partner master', adminOnly: true },
+    ],
+  },
+  {
+    title: 'Sellers',
+    items: [
+      { to: '/seller-applications', label: 'Applications', roles: SELLER_VIEW },
+      { to: '/sellers', label: 'Sellers', roles: SELLER_VIEW },
+      { to: '/seller-kyc', label: 'KYC review', roles: KYC_REVIEW },
+      { to: '/seller-agreements', label: 'Agreement', roles: SELLER_VIEW },
+      { to: '/commission-plans', label: 'Commission plans', roles: SELLER_VIEW },
+      { to: '/commission-entries', label: 'Commission entries', roles: SELLER_VIEW },
     ],
   },
   {
@@ -71,6 +83,7 @@ const groups = [
     title: 'Integrations',
     items: [
       { to: '/console-sync', label: 'Console sync' },
+      { to: '/reach-outcomes', label: 'Reach outcomes' },
       { to: '/worker-status', label: 'Worker status' },
       { to: '/health', label: 'API health' },
     ],
@@ -84,11 +97,11 @@ const groups = [
 ]
 
 export default function Sidebar({ open, onClose }) {
-  const { isAdmin } = useAuth()
+  const { isAdmin, hasRole } = useAuth()
   // Administrator-only entries (role super_admin, assigned in Console) are
   // hidden for Engage members; the API enforces the same rule.
   const visibleGroups = groups
-    .map((g) => ({ ...g, items: g.items.filter((it) => !it.adminOnly || isAdmin) }))
+    .map((g) => ({ ...g, items: g.items.filter((it) => (!it.adminOnly || isAdmin) && (!it.roles || hasRole(it.roles))) }))
     .filter((g) => g.items.length > 0)
   return (
     <>

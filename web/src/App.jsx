@@ -38,6 +38,14 @@ import Settings from './pages/Settings.jsx'
 import Health from './pages/Health.jsx'
 import ConsoleSync from './pages/ConsoleSync.jsx'
 import WorkerStatus from './pages/WorkerStatus.jsx'
+import SellerApplications from './pages/sellers/SellerApplications.jsx'
+import Sellers from './pages/sellers/Sellers.jsx'
+import SellerDetail from './pages/sellers/SellerDetail.jsx'
+import SellerKycQueue from './pages/sellers/SellerKycQueue.jsx'
+import SellerAgreements from './pages/sellers/SellerAgreements.jsx'
+import CommissionPlans from './pages/sellers/CommissionPlans.jsx'
+import CommissionEntries from './pages/sellers/CommissionEntries.jsx'
+import ReachOutcomes from './pages/sellers/ReachOutcomes.jsx'
 
 export default function App() {
   const { user, loading, ssoPending } = useAuth()
@@ -69,6 +77,14 @@ export default function App() {
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/partners" element={<Partners />} />
         <Route path="/partners/:id" element={<PartnerDetail />} />
+        <Route path="/seller-applications" element={<SellerApplications />} />
+        <Route path="/sellers" element={<Sellers />} />
+        <Route path="/sellers/:id" element={<SellerDetail />} />
+        <Route path="/seller-kyc" element={<SellerKycQueue />} />
+        <Route path="/seller-agreements" element={<SellerAgreements />} />
+        <Route path="/commission-plans" element={<CommissionPlans />} />
+        <Route path="/commission-entries" element={<CommissionEntries />} />
+        <Route path="/reach-outcomes" element={<ReachOutcomes />} />
         <Route path="/lead-sources" element={<LeadSources />} />
         <Route path="/campaigns" element={<Campaigns />} />
 
