@@ -123,22 +123,25 @@ abstract class SellerTestCase extends DatabaseTestCase
         return $req->withBodyFormat('json')->{$method}('v1/seller-portal/' . $path, $body);
     }
 
-    protected function apply(string $email = 'ravi@example.com', array $extra = []): TestResponse
+    protected function apply(string $email = 'ravi@example.com', array $extra = [], array $headers = []): TestResponse
     {
         return $this->portal('post', 'applications', array_merge([
-            'name' => 'Ravi Kumar', 'email' => $email, 'mobile' => '+91 98765 43210', 'organization' => 'Ravi Associates',
-            'city' => 'Pune', 'state' => 'Maharashtra', 'profile' => 'reseller', 'message' => 'I sell to CA firms.',
-        ], $extra));
+            'name' => 'Ravi Kumar', 'business_name' => 'Ravi Associates', 'entity_type' => 'individual', 'email' => $email,
+            'mobile' => '+919876543210', 'city' => 'Pune', 'state' => 'Maharashtra',
+            'sales_approach' => 'I sell accounting software to CA firms in Pune.',
+            'consent' => ['contact' => true, 'privacy_policy_url' => 'https://www.aicountly.com/privacy_policy.php', 'consented_at' => '2026-10-17T06:30:00+00:00'],
+            'source' => ['utm_source' => 'newsletter', 'ref' => ''],
+        ], $extra), null, $headers);
     }
 
-    protected function publishAgreement(string $label = '2026.1'): int
+    protected function publishAgreement(string $label = '2026.1'): string
     {
         $admin = $this->staff(['super_admin'], 'agreement-admin@aicountly.org');
         $r = $this->asStaff($admin, 'post', 'v1/seller-agreements', ['version_label' => $label, 'title' => 'Seller agreement', 'body' => str_repeat('Terms and conditions. ', 5)]);
         $id = (int) $this->json($r)['data']['id'];
         $this->asStaff($admin, 'post', "v1/seller-agreements/{$id}/publish");
 
-        return $id;
+        return $label;
     }
 
     /** Apply + approve. @return array{seller_id:int, seller_code:string, token:?string, approve:array} */
@@ -154,14 +157,20 @@ abstract class SellerTestCase extends DatabaseTestCase
         return ['seller_id' => (int) $body['data']['seller']['id'], 'seller_code' => $body['data']['seller']['seller_code'], 'token' => $token, 'approve' => $body];
     }
 
-    /** Approved + activated (agreement accepted) seller with a live session. */
+    protected function login(string $email = 'ravi@example.com', string $password = 'Str0ngPassword'): ?string
+    {
+        return $this->json($this->portal('post', 'auth/login', ['email' => $email, 'password' => $password]))['data']['session_token'] ?? null;
+    }
+
+    /** Approved + activated + agreement accepted, with a live session. */
     protected function activeSellerSession(string $email = 'ravi@example.com'): array
     {
-        $agreementId = (int) ($this->db()->table('engage_seller_agreement_versions')->where('status', 'current')->get()->getRow()->id ?? 0) ?: $this->publishAgreement();
+        $label = (string) ($this->db()->table('engage_seller_agreement_versions')->where('status', 'current')->get()->getRow()->version_label ?? '') ?: $this->publishAgreement();
         $s = $this->approvedSeller($email);
-        $r = $this->portal('post', 'auth/activate', ['token' => $s['token'], 'password' => 'Str0ngPassword', 'agreement_version_id' => $agreementId]);
-        $s['session'] = $this->json($r)['data']['session_token'] ?? null;
-        $s['agreement_id'] = $agreementId;
+        $this->portal('post', 'auth/activation', ['token' => $s['token'], 'password' => 'Str0ngPassword']);
+        $s['session'] = $this->login($email);
+        $this->portal('post', 'agreement/acceptances', ['version' => $label, 'accepted' => true], $s['session']);
+        $s['agreement'] = $label;
 
         return $s;
     }

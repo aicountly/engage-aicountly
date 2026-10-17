@@ -635,35 +635,87 @@ class CommissionService
 
     // ------------------------------------------------------------------ seller portal
 
-    /** @return array<string,mixed> */
-    public function sellerSummary(int $sellerId, int $limit = 50, int $offset = 0, ?string $status = null): array
+    /** Human description of a plan rule ("10% of first payment"). */
+    public static function ruleLabel(array $rules): string
+    {
+        $pct = static fn (string $p): string => rtrim(rtrim($p, '0'), '.');
+
+        return match ($rules['type'] ?? '') {
+            'percent_of_first_payment' => $pct((string) $rules['percent']) . '% of first payment',
+            'percent_recurring_months' => $pct((string) $rules['percent']) . '% of each payment for the first ' . (int) $rules['months'] . ' months',
+            'flat_per_conversion'      => 'INR ' . $rules['amount'] . ' per conversion',
+            'slab'                     => 'Slab on ' . (($rules['applies_to'] ?? 'first_payment') === 'first_payment' ? 'first payment' : 'payments for ' . (int) ($rules['months'] ?? 0) . ' months')
+                . ': ' . implode('; ', array_map(static fn (array $sl): string => $sl['from'] . '–' . ($sl['to'] ?? '∞') . ' → '
+                    . (isset($sl['percent']) ? $pct((string) $sl['percent']) . '%' : 'INR ' . $sl['amount']), $rules['slabs'] ?? [])),
+            default                    => 'Commission',
+        };
+    }
+
+    /** {published, name, version} of the published plan(s) for the seller portal. @return array<string,mixed> */
+    public function planSummary(): array
     {
         $plans = $this->activePlans();
+        if ($plans === []) {
+            return ['published' => false, 'name' => null, 'version' => null];
+        }
+        $p = $plans[0];
+
+        return ['published' => true, 'name' => count($plans) === 1 ? $p['name'] : implode(', ', array_column($plans, 'name')),
+            'version' => count($plans) === 1 ? $p['version'] : null, 'rule_label' => count($plans) === 1 ? self::ruleLabel($p['rules']) : null];
+    }
+
+    /** @return array<string,string> totals by status */
+    public function sellerTotals(int $sellerId): array
+    {
         $totals = [];
-        foreach (['accrued', 'approved', 'in_payout', 'paid', 'reversed'] as $s) {
-            $totals[$s] = '0.00';
+        foreach (['accrued', 'approved', 'in_payout', 'paid', 'reversed'] as $st) {
+            $totals[$st] = '0.00';
         }
         foreach ($this->db()->query('SELECT status, SUM(amount) AS amount FROM engage_commission_entries WHERE seller_id = ? GROUP BY status', [$sellerId])->getResultArray() as $r) {
             $totals[$r['status']] = Money::format(Money::toPaise((string) $r['amount']));
         }
-        $list = $this->listEntries(array_filter(['seller_id' => $sellerId, 'status' => $status]), $limit, $offset);
-        $items = array_map(static function (array $e): array {
-            unset($e['seller_id'], $e['payment_id'], $e['plan_id'], $e['lead_id']);
 
-            return $e;
-        }, $list['items']);
+        return $totals;
+    }
+
+    /** GET seller-portal commissions. @return array<string,mixed> */
+    public function sellerSummary(int $sellerId, int $limit = 20, int $offset = 0, ?string $status = null): array
+    {
+        $b = $this->entriesQuery()->select('pr.name AS product_name, pl.rules AS plan_rules')
+            ->join('engage_products pr', 'pr.code = e.product_code', 'left')
+            ->join('engage_commission_plans pl', 'pl.id = e.plan_id')
+            ->where('e.seller_id', $sellerId);
+        if ($status !== null && $status !== '') {
+            $b->where('e.status', $status);
+        }
+        $total = $b->countAllResults(false);
+        $rows = $b->orderBy('e.id', 'DESC')->limit($limit, $offset)->get()->getResultArray();
+        $items = array_map(static function (array $e): array {
+            $rules = json_decode((string) $e['plan_rules'], true) ?: [];
+
+            return [
+                'id'            => 'CE-' . $e['id'],
+                'lead_code'     => $e['lead_code'],
+                'product'       => $e['product_name'] ?? $e['product_code'],
+                'basis_amount'  => Money::format(Money::toPaise((string) $e['basis_amount'])),
+                'rule_label'    => self::ruleLabel($rules),
+                'plan_version'  => (int) $e['plan_version'],
+                'amount'        => Money::format(Money::toPaise((string) $e['amount'])),
+                'status'        => $e['status'],
+                'accrued_at'    => Clock::iso($e['accrued_at']),
+                'approve_after' => SellerLeadService::istDate((string) $e['hold_until']),
+                'payout_ref'    => $e['payout_item_ref'],
+                'reason'        => $e['reversal_reason'],
+            ];
+        }, $rows);
 
         return [
-            'plan_published' => $plans !== [],
-            'message'        => $plans === [] ? 'No commission plan published yet.' : null,
-            'plans'          => array_map(static fn (array $p): array => [
-                'name' => $p['name'], 'plan_code' => $p['plan_code'], 'version' => $p['version'], 'rules' => $p['rules'],
-                'product_scope' => $p['product_scope'], 'hold_days' => $p['hold_days'], 'published_at' => $p['published_at'],
-            ], $plans),
-            'currency'       => 'INR',
-            'totals'         => $totals,
-            'items'          => $items,
-            'total'          => $list['total'],
+            'plan'   => $this->planSummary(),
+            'message'=> $this->activePlans() === [] ? 'No commission plan published yet.' : null,
+            'currency' => 'INR',
+            'totals' => $this->sellerTotals($sellerId),
+            'items'  => $items,
+            'total'  => $total,
         ];
     }
 

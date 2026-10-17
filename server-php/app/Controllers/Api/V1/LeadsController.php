@@ -16,7 +16,7 @@ class LeadsController extends BaseApiController
      */
     private const PROTECTED_FIELDS = [
         'seller_id', 'seller_attribution', 'seller_attributed_at', 'seller_protection_expires_at',
-        'reach_lead_id', 'mobile_normalized', 'attribution',
+        'reach_lead_id', 'mobile_normalized', 'attribution', 'converted_at',
     ];
 
     private LeadsModel $m;

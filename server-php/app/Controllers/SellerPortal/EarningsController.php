@@ -5,30 +5,40 @@ namespace App\Controllers\SellerPortal;
 use Config\Services;
 
 /**
- * Seller earnings (session):
- *   GET commissions  ?status= &page= &limit= → {plan_published, message ("No commission plan published yet." when none),
- *                     plans, currency "INR", totals {accrued, approved, in_payout, paid, reversed}, items, total}
- *   GET payouts      → {enabled: false, status: "payouts not enabled yet", items: []}
- *                     Weekly payouts are on hold (docs/SELLER_PROGRAM.md); nothing here pretends otherwise.
+ * Seller earnings (portal key + X-Seller-Session):
+ *   GET commissions ?status= &page= &limit= → {plan: {published, name, version}, message, currency, totals, items, page, limit, total}
+ *   GET payouts                            → {enabled: false, status: "payouts not enabled yet", items: [], page, limit, total: 0}
+ *   GET payouts/{ref}, payouts/{ref}/statement → 404 not_found (no payout exists yet)
+ * Weekly payouts are on hold (docs/SELLER_PROGRAM.md § Weekly payouts — pending); nothing here pretends otherwise.
  */
 class EarningsController extends BaseSellerPortalController
 {
     public function commissions()
     {
-        [$page, $limit, $offset] = $this->paging();
+        [$page, $limit, $offset] = $this->pageParams();
         $status = (string) ($this->request->getGet('status') ?? '');
-        $r = Services::commissions()->sellerSummary((int) $this->seller()['id'], min($limit, 100), $offset, $status !== '' ? $status : null);
+        $r = Services::commissions()->sellerSummary((int) $this->seller()['id'], $limit, $offset, $status !== '' ? $status : null);
 
-        return $this->ok($r + ['page' => $page, 'limit' => min($limit, 100)]);
+        return $this->ok($r + ['page' => $page, 'limit' => $limit]);
     }
 
     public function payouts()
     {
+        [$page, $limit] = $this->pageParams();
+
         return $this->ok([
             'enabled' => false,
             'status'  => 'payouts not enabled yet',
             'message' => 'Weekly payouts are not enabled yet. Approved commission stays on your account until they are.',
             'items'   => [],
+            'page'    => $page,
+            'limit'   => $limit,
+            'total'   => 0,
         ]);
+    }
+
+    public function payout($ref = null)
+    {
+        return $this->failCode(404, 'not_found', 'Payouts are not enabled yet.');
     }
 }

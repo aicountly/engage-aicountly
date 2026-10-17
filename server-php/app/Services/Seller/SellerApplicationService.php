@@ -23,7 +23,6 @@ use Config\Services;
 class SellerApplicationService
 {
     public const RECEIVED_MESSAGE = 'Thank you. Your request to become an AICOUNTLY seller has been received; our team will contact you.';
-    public const PROFILES = ['reseller', 'associate', 'business_facilitator', 'consultant', 'other'];
 
     public function __construct(private ?SellerAccountService $accounts = null, private ?SellerMailer $mailer = null)
     {
@@ -31,9 +30,19 @@ class SellerApplicationService
         $this->mailer   ??= Services::sellerMailer();
     }
 
+    /** Body fields (seller-aicountly docs/ENGAGE_SELLER_API.md "POST /applications"); `organization` / `message` accepted as aliases. */
+    private static function normaliseInput(array $in): array
+    {
+        $in['business_name'] ??= $in['organization'] ?? null;
+        $in['sales_approach'] ??= $in['message'] ?? null;
+
+        return $in;
+    }
+
     /** @return array<string,string> field → message */
     public static function validate(array $in): array
     {
+        $in = self::normaliseInput($in);
         $e = [];
         $name = trim((string) ($in['name'] ?? ''));
         if (mb_strlen($name) < 2 || mb_strlen($name) > 191) {
@@ -51,24 +60,27 @@ class SellerApplicationService
         if ($et !== '' && ! in_array($et, IndianTaxIds::ENTITY_TYPES, true)) {
             $e['entity_type'] = 'Choose individual, proprietorship, partnership, LLP or company.';
         }
-        $profile = (string) ($in['profile'] ?? '');
-        if ($profile !== '' && ! in_array($profile, self::PROFILES, true)) {
-            $e['profile'] = 'Choose one of: ' . implode(', ', self::PROFILES) . '.';
-        }
-        foreach (['organization' => 191, 'city' => 96, 'state' => 96] as $f => $max) {
+        foreach (['business_name' => 191, 'city' => 96, 'state' => 96, 'experience' => 1000] as $f => $max) {
             if (mb_strlen((string) ($in[$f] ?? '')) > $max) {
                 $e[$f] = "Keep this under {$max} characters.";
             }
         }
-        if (mb_strlen((string) ($in['message'] ?? '')) > 2000) {
-            $e['message'] = 'Keep the message under 2000 characters.';
+        $approach = trim((string) ($in['sales_approach'] ?? ''));
+        if ($approach !== '' && (mb_strlen($approach) < 10 || mb_strlen($approach) > 1000)) {
+            $e['sales_approach'] = 'Describe how you will sell (10 to 1000 characters).';
+        }
+        if (array_key_exists('consent', $in) && (! is_array($in['consent']) || ($in['consent']['contact'] ?? null) !== true)) {
+            $e['consent.contact'] = 'We need your consent to contact you.';
         }
 
         return $e;
     }
 
     /**
-     * @return array{ok:bool, errors?:array<string,string>, created?:bool, application_id?:int}
+     * 201 {application_code, status: requested} for a new request; 200 with the open application for a
+     * repeat; 200 {application_code: null, status: received} when the email already belongs to a seller.
+     *
+     * @return array{ok:bool, errors?:array<string,string>, status?:int, data?:array<string,mixed>}
      */
     public function submit(array $in, string $ip, string $ua): array
     {
@@ -76,69 +88,84 @@ class SellerApplicationService
         if ($errors !== []) {
             return ['ok' => false, 'errors' => $errors];
         }
+        $in = self::normaliseInput($in);
         $db = $this->accounts->db();
         $email = strtolower(trim((string) $in['email']));
-        $open = $db->query("SELECT id FROM engage_seller_applications WHERE LOWER(email) = ? AND status IN ('requested','under_review') LIMIT 1", [$email])->getRowArray();
-        if ($open || $this->accounts->findByEmail($email)) {
-            log_message('info', 'Seller application not stored: an open application or seller already exists for this email.');
-
-            return ['ok' => true, 'created' => false];
+        $open = $db->query("SELECT application_code, status FROM engage_seller_applications WHERE LOWER(email) = ? AND status IN ('requested','under_review') LIMIT 1", [$email])->getRowArray();
+        if ($open) {
+            return ['ok' => true, 'status' => 200, 'data' => ['application_code' => $open['application_code'], 'status' => $open['status']]];
+        }
+        if ($this->accounts->findByEmail($email)) {
+            return ['ok' => true, 'status' => 200, 'data' => ['application_code' => null, 'status' => 'received']];
         }
 
         $name = trim((string) $in['name']);
+        $source = is_array($in['source'] ?? null) ? array_filter(array_map(static fn ($v) => is_scalar($v) ? mb_substr(trim((string) $v), 0, 255) : null, $in['source']), static fn ($v) => $v !== null && $v !== '') : [];
+        $consent = is_array($in['consent'] ?? null) ? [
+            'contact' => ($in['consent']['contact'] ?? null) === true,
+            'privacy_policy_url' => mb_substr((string) ($in['consent']['privacy_policy_url'] ?? ''), 0, 255) ?: null,
+            'consented_at' => mb_substr((string) ($in['consent']['consented_at'] ?? ''), 0, 40) ?: null,
+            'ip' => $ip,
+        ] : null;
         $leads = new LeadsModel();
-        $source = (new LeadSourcesModel())->where('code', 'seller_request')->first();
+        $leadSource = (new LeadSourcesModel())->where('code', 'seller_request')->first();
+        $touch = array_filter(['at' => gmdate('Y-m-d\TH:i:s\Z'), 'utm' => array_intersect_key($source, array_flip(['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'])) ?: null,
+            'landing_path' => $source['landing_path'] ?? null, 'ref' => $source['ref'] ?? null], static fn ($v) => $v !== null);
         $leadId = (int) $leads->insert([
             'lead_code'      => $leads->generateLeadCode(),
             'name'           => $name,
-            'organization'   => self::str($in['organization'] ?? null),
-            'email'          => trim((string) $in['email']),
+            'organization'   => self::str($in['business_name'] ?? null),
+            'email'          => $email,
             'mobile'         => trim((string) $in['mobile']),
             'source_portal'  => 'seller.aicountly.com',
             'source_campaign'=> 'seller_programme',
             'source_type'    => 'seller_request',
-            'lead_source_id' => $source['id'] ?? null,
-            'notes'          => self::str($in['message'] ?? null),
+            'lead_source_id' => $leadSource['id'] ?? null,
+            'notes'          => self::str($in['sales_approach'] ?? null),
             'stage'          => 'new',
             'priority'       => 'normal',
             'sales_status'   => 'open',
-            'metadata'       => ['seller_application' => ['profile' => $in['profile'] ?? null, 'entity_type' => $in['entity_type'] ?? null,
-                                 'city' => $in['city'] ?? null, 'state' => $in['state'] ?? null]],
+            'attribution'    => ['first_touch' => $touch, 'last_touch' => $touch, 'touches' => 1],
+            'metadata'       => ['seller_application' => ['entity_type' => $in['entity_type'] ?? null, 'city' => $in['city'] ?? null,
+                                 'state' => $in['state'] ?? null, 'experience' => $in['experience'] ?? null]],
         ], true);
 
         $n = (int) $db->query("SELECT nextval('engage_seller_application_code_seq') AS n")->getRow()->n;
+        $code = 'SAP-' . str_pad((string) $n, 6, '0', STR_PAD_LEFT);
         try {
             $db->table('engage_seller_applications')->insert([
-                'application_code' => 'SAP-' . str_pad((string) $n, 6, '0', STR_PAD_LEFT),
+                'application_code' => $code,
                 'name'         => $name,
-                'email'        => trim((string) $in['email']),
+                'email'        => $email,
                 'mobile'       => trim((string) $in['mobile']),
-                'organization' => self::str($in['organization'] ?? null),
+                'organization' => self::str($in['business_name'] ?? null),
                 'entity_type'  => self::str($in['entity_type'] ?? null),
                 'city'         => self::str($in['city'] ?? null),
                 'state'        => self::str($in['state'] ?? null),
                 'profile'      => self::str($in['profile'] ?? null),
-                'message'      => self::str($in['message'] ?? null),
+                'message'      => self::str($in['sales_approach'] ?? null),
                 'lead_id'      => $leadId,
                 'ip_address'   => substr($ip, 0, 64),
                 'user_agent'   => substr($ua, 0, 255),
+                'metadata'     => json_encode(['experience' => self::str($in['experience'] ?? null), 'consent' => $consent, 'source' => $source ?: null]),
             ]);
         } catch (\Throwable $e) {
-            // Unique open-application index: a concurrent duplicate. Same public answer.
+            // Unique open-application index: a concurrent duplicate.
             log_message('warning', 'Seller application insert refused: ' . $e->getMessage());
+            $open = $db->query("SELECT application_code, status FROM engage_seller_applications WHERE LOWER(email) = ? AND status IN ('requested','under_review') LIMIT 1", [$email])->getRowArray();
 
-            return ['ok' => true, 'created' => false];
+            return ['ok' => true, 'status' => 200, 'data' => ['application_code' => $open['application_code'] ?? null, 'status' => $open['status'] ?? 'received']];
         }
         $appId = (int) $db->insertID();
-        (new LeadActivitiesModel())->record($leadId, 'seller_application', 'Seller programme request received', null, [
+        (new LeadActivitiesModel())->record($leadId, 'seller_application', 'Seller programme request received (' . $code . ')', null, [
             'author_kind' => 'system', 'metadata' => ['application_id' => $appId],
         ]);
         Services::auditService()->log('seller.application_received', [
-            'actor_email' => trim((string) $in['email']), 'actor_role' => 'applicant',
-            'subject_kind' => 'seller_application', 'subject_id' => $appId, 'metadata' => ['lead_id' => $leadId],
+            'actor_email' => $email, 'actor_role' => 'applicant',
+            'subject_kind' => 'seller_application', 'subject_id' => $appId, 'metadata' => ['lead_id' => $leadId, 'application_code' => $code],
         ]);
 
-        return ['ok' => true, 'created' => true, 'application_id' => $appId];
+        return ['ok' => true, 'status' => 201, 'data' => ['application_code' => $code, 'status' => 'requested']];
     }
 
     /** @return array<string,mixed>|null */
@@ -215,6 +242,7 @@ class SellerApplicationService
             'email'          => $app['email'],
             'mobile'         => $app['mobile'],
             'organization'   => $app['organization'],
+            'entity_type'    => $app['entity_type'],
             'city'           => $app['city'],
             'state'          => $app['state'],
             'status'         => 'onboarding',

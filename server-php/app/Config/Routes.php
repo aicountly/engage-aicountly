@@ -88,40 +88,43 @@ $routes->group('v1', static function ($routes) {
     // seller.aicountly.com BFF → Engage (docs/SELLER_PROGRAM.md). Every route: X-Seller-Portal-Key
     // (SELLER_PORTAL_KEY); signed-in routes also X-Seller-Session. Idempotency-Key replays writes.
     $routes->group('seller-portal', ['filter' => 'seller-portal-key'], static function ($routes) {
+        // Shapes: seller-aicountly docs/ENGAGE_SELLER_API.md (27 endpoints) + a few Engage extras.
         $P = 'SellerPortal\\';
         $idem    = ['filter' => 'idempotency'];
         $session = ['filter' => 'seller-session'];
         $sessionIdem = ['filter' => ['seller-session', 'idempotency']];
 
-        $routes->post('applications',          $P . 'ApplicationsController::create', $idem);
-        $routes->post('auth/login',            $P . 'AuthController::login');
-        $routes->post('auth/login/otp',        $P . 'AuthController::otp');
-        $routes->get('auth/activation',        $P . 'AuthController::activation');
-        $routes->post('auth/activate',         $P . 'AuthController::activate');
-        $routes->post('auth/forgot-password',  $P . 'AuthController::forgot');
-        $routes->get('auth/reset-password',    $P . 'AuthController::resetCheck');
-        $routes->post('auth/reset-password',   $P . 'AuthController::reset');
-        $routes->get('agreement',              $P . 'AccountController::agreement');
+        $routes->get('health',                        $P . 'HealthController::show');
+        $routes->post('applications',                 $P . 'ApplicationsController::create', $idem);
+        $routes->post('auth/login',                   $P . 'AuthController::login');
+        $routes->post('auth/login/otp',               $P . 'AuthController::otp');
+        $routes->post('auth/logout',                  $P . 'AuthController::logout');
+        $routes->post('auth/activation/inspect',      $P . 'AuthController::activationInspect');
+        $routes->post('auth/activation',              $P . 'AuthController::activate');
+        $routes->post('auth/password-reset/request',  $P . 'AuthController::resetRequest');
+        $routes->post('auth/password-reset/inspect',  $P . 'AuthController::resetInspect');
+        $routes->post('auth/password-reset',          $P . 'AuthController::reset');
 
-        $routes->post('auth/logout',           $P . 'AuthController::logout', $session);
-        $routes->post('auth/change-password',  $P . 'AuthController::changePassword', $session);
-        $routes->get('me',                     $P . 'AccountController::me', $session);
-        $routes->get('profile',                $P . 'AccountController::profile', $session);
-        $routes->put('profile',                $P . 'AccountController::updateProfile', $sessionIdem);
-        $routes->post('agreement/accept',      $P . 'AccountController::acceptAgreement', $sessionIdem);
-        $routes->get('dashboard',              $P . 'AccountController::dashboard', $session);
-        $routes->get('referral',               $P . 'AccountController::referral', $session);
-        $routes->get('kyc',                    $P . 'KycController::show', $session);
-        $routes->put('kyc',                    $P . 'KycController::submit', $sessionIdem);
-        $routes->post('kyc',                   $P . 'KycController::submit', $sessionIdem);
-        $routes->get('kyc/documents',          $P . 'KycController::documents', $session);
-        $routes->post('kyc/documents',         $P . 'KycController::upload', $sessionIdem);
-        $routes->get('kyc/documents/(:num)',   $P . 'KycController::download/$1', $session);
-        $routes->get('leads',                  $P . 'LeadsController::index', $session);
-        $routes->post('leads',                 $P . 'LeadsController::create', $sessionIdem);
-        $routes->get('leads/(:segment)',       $P . 'LeadsController::show/$1', $session);
-        $routes->get('commissions',            $P . 'EarningsController::commissions', $session);
-        $routes->get('payouts',                $P . 'EarningsController::payouts', $session);
+        $routes->get('me',                            $P . 'AccountController::me', $session);
+        $routes->patch('me',                          $P . 'AccountController::updateMe', $sessionIdem);
+        $routes->post('me/password',                  $P . 'AccountController::password', $session);
+        $routes->get('dashboard',                     $P . 'AccountController::dashboard', $session);
+        $routes->get('agreement',                     $P . 'AccountController::agreement', $session);
+        $routes->post('agreement/acceptances',        $P . 'AccountController::acceptAgreement', $sessionIdem);
+        $routes->get('referral',                      $P . 'AccountController::referral', $session);
+        $routes->get('kyc',                           $P . 'KycController::show', $session);
+        $routes->put('kyc',                           $P . 'KycController::saveDraft', $sessionIdem);
+        $routes->post('kyc/submission',               $P . 'KycController::submit', $sessionIdem);
+        $routes->post('kyc/documents',                $P . 'KycController::upload', $sessionIdem);
+        $routes->delete('kyc/documents/(:segment)',   $P . 'KycController::deleteDocument/$1', $sessionIdem);
+        $routes->get('kyc/documents/(:segment)',      $P . 'KycController::download/$1', $session);
+        $routes->post('leads',                        $P . 'LeadsController::create', $sessionIdem);
+        $routes->get('leads',                         $P . 'LeadsController::index', $session);
+        $routes->get('leads/(:segment)',              $P . 'LeadsController::show/$1', $session);
+        $routes->get('commissions',                   $P . 'EarningsController::commissions', $session);
+        $routes->get('payouts',                       $P . 'EarningsController::payouts', $session);
+        $routes->get('payouts/(:segment)',            $P . 'EarningsController::payout/$1', $session);
+        $routes->get('payouts/(:segment)/statement',  $P . 'EarningsController::payout/$1', $session);
     });
 
     // Internal Reach ingest — validated by X-Portal-Token header.

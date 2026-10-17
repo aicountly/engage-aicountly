@@ -26,6 +26,8 @@ class LeadLifecycleService
             }
             $value = null;
             if ($to === 'converted') {
+                (new LeadsModel())->update($leadId, ['converted_at' => \App\Libraries\Seller\Clock::now()]);
+                $lead['converted_at'] = \App\Libraries\Seller\Clock::now();
                 $sum = Services::sellerAccounts()->db()->query(
                     "SELECT SUM(amount) AS s FROM engage_lead_payments WHERE lead_id = ? AND status = 'confirmed'", [$leadId]
                 )->getRow()->s ?? null;

@@ -20,7 +20,7 @@ class LeadsModel extends EngageModel
         // Seller programme / Reach attribution (migration 2026-10-17-000091). Never accepted from a
         // staff PUT body (LeadsController::PROTECTED_FIELDS) — only the attribution services set them.
         'seller_id', 'seller_attribution', 'seller_attributed_at', 'seller_protection_expires_at',
-        'reach_lead_id', 'mobile_normalized', 'attribution',
+        'reach_lead_id', 'mobile_normalized', 'attribution', 'converted_at',
     ];
 
     protected array $casts = ['metadata' => '?json-array', 'attribution' => '?json-array'];

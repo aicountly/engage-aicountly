@@ -30,8 +30,11 @@ class SellerAccountService
     public const PASSWORD_MIN             = 10;
     public const PASSWORD_MAX             = 128;
 
-    /** Statuses that may sign in (after the password is set). */
-    public const LOGIN_STATUSES = ['onboarding', 'kyc_pending', 'active'];
+    /** Statuses that may sign in (after the password is set). Suspended sellers get a read-only portal. */
+    public const LOGIN_STATUSES = ['onboarding', 'kyc_pending', 'active', 'suspended'];
+
+    /** Statuses whose sellers may receive password-reset links. */
+    public const RESET_STATUSES = ['onboarding', 'kyc_pending', 'active', 'suspended'];
 
     private ?BaseConnection $db;
 
@@ -87,7 +90,8 @@ class SellerAccountService
     }
 
     /**
-     * What the seller portal shows about the signed-in seller. Never a hash, token or KYC number.
+     * The seller object of the seller-portal API (seller-aicountly docs/ENGAGE_SELLER_API.md § 2).
+     * Never a hash, token or KYC number.
      *
      * @param array<string,mixed> $s engage_sellers row
      * @return array<string,mixed>
@@ -95,56 +99,93 @@ class SellerAccountService
     public function publicView(array $s): array
     {
         $current = $this->currentAgreement();
-        $acceptedVersion = null;
+        $accepted = null;
         if (! empty($s['agreement_version_id'])) {
-            $acceptedVersion = $this->db()->table('engage_seller_agreement_versions')->select('id, version_label')
+            $accepted = $this->db()->table('engage_seller_agreement_versions')->select('id, version_label')
                 ->where('id', (int) $s['agreement_version_id'])->get()->getRowArray();
         }
-        $acceptedCurrent = $current !== null && (int) ($s['agreement_version_id'] ?? 0) === (int) $current['id'];
+        $code = (string) $s['seller_code'];
 
         return [
-            'seller_code'  => $s['seller_code'],
-            'name'         => $s['name'],
-            'email'        => $s['email'],
-            'mobile'       => $s['mobile'],
-            'organization' => $s['organization'],
-            'city'         => $s['city'],
-            'state'        => $s['state'],
-            'status'       => $s['status'],
-            'kyc_status'   => $s['kyc_status'],
-            'activated_at' => Clock::iso($s['activated_at'] ?? null),
-            'created_at'   => Clock::iso($s['created_at'] ?? null),
-            'last_login_at'=> Clock::iso($s['last_login_at'] ?? null),
-            'agreement'    => [
-                'accepted_version_id' => $acceptedVersion ? (int) $acceptedVersion['id'] : null,
-                'accepted_version'    => $acceptedVersion['version_label'] ?? null,
-                'accepted_at'         => Clock::iso($s['agreement_accepted_at'] ?? null),
-                'current_version_id'  => $current ? (int) $current['id'] : null,
+            'seller_code'   => $code,
+            'name'          => $s['name'],
+            'business_name' => $s['organization'],
+            'email'         => $s['email'],
+            'mobile'        => $s['mobile'],
+            'city'          => $s['city'],
+            'state'         => $s['state'],
+            'entity_type'   => $s['entity_type'] ?? null,
+            'status'        => $s['status'],
+            'status_reason' => in_array($s['status'], ['suspended', 'terminated'], true) ? ($s['status_reason'] ?? null) : null,
+            'kyc_status'    => $s['kyc_status'],
+            'agreement'     => [
                 'current_version'     => $current['version_label'] ?? null,
-                'accepted_current'    => $acceptedCurrent,
+                'accepted_version'    => $accepted['version_label'] ?? null,
+                'accepted_at'         => Clock::iso($s['agreement_accepted_at'] ?? null),
+                'acceptance_required' => self::acceptanceRequired($s, $current),
             ],
-            'next_step'          => self::nextStep($s, $current !== null, $acceptedCurrent),
-            'referral_code'      => $s['seller_code'],
-            'can_register_leads' => in_array($s['status'], ['kyc_pending', 'active'], true),
-            'payouts_enabled'    => false,
+            'referral'      => ['code' => $code, 'links' => self::referralLinks($code)],
+            'manager'       => null,
+            'next_step'     => self::nextStep($s, $current),
+            'created_at'    => Clock::iso($s['created_at'] ?? null),
         ];
     }
 
-    public static function nextStep(array $s, bool $agreementPublished, bool $acceptedCurrent): ?string
+    /** A current agreement exists and this seller has not accepted it. */
+    public static function acceptanceRequired(array $s, ?array $current): bool
     {
-        if ($s['status'] === 'onboarding') {
-            return $agreementPublished ? 'accept_agreement' : 'agreement_unavailable';
+        return $current !== null && (int) ($s['agreement_version_id'] ?? 0) !== (int) $current['id'];
+    }
+
+    /** @return array{website:string, my:string} */
+    public static function referralLinks(string $code): array
+    {
+        $web = rtrim((string) env('SELLER_REFERRAL_WEBSITE_URL', 'https://www.aicountly.com/'), '/') . '/';
+        $app = rtrim((string) env('SELLER_REFERRAL_APP_URL', 'https://my.aicountly.com/'), '/') . '/';
+
+        return ['website' => $web . '?ref=' . rawurlencode($code), 'my' => $app . '?ref=' . rawurlencode($code)];
+    }
+
+    public static function nextStep(array $s, ?array $current): ?string
+    {
+        if (in_array($s['status'], ['suspended', 'terminated'], true)) {
+            return null;
         }
-        if ($agreementPublished && ! $acceptedCurrent && in_array($s['status'], ['kyc_pending', 'active'], true)) {
+        if (self::acceptanceRequired($s, $current)) {
             return 'accept_agreement';
+        }
+        if ($s['status'] === 'onboarding') {
+            return 'agreement_unavailable';
         }
 
         return match ($s['kyc_status']) {
-            'not_submitted' => 'submit_kyc',
+            'not_started'   => 'submit_kyc',
             'kyc_submitted' => 'kyc_under_review',
             'kyc_rejected'  => 'resubmit_kyc',
             default         => null,
         };
+    }
+
+    /**
+     * Why a seller may not write right now (seller-portal write routes), or null.
+     * Suspended / terminated sellers have a read-only portal; until the current agreement is accepted
+     * (or while still onboarding) only the agreement, profile and password may change.
+     *
+     * @return array{status:int, code:string, error:string}|null
+     */
+    public function writeBlock(array $s, bool $agreementExempt = false): ?array
+    {
+        if ($s['status'] === 'suspended') {
+            return ['status' => 403, 'code' => 'seller_suspended', 'error' => 'Your seller account is suspended, so changes are not possible. Contact AICOUNTLY.'];
+        }
+        if ($s['status'] === 'terminated') {
+            return ['status' => 403, 'code' => 'seller_terminated', 'error' => 'Your seller account has been closed.'];
+        }
+        if (! $agreementExempt && ($s['status'] === 'onboarding' || self::acceptanceRequired($s, $this->currentAgreement()))) {
+            return ['status' => 403, 'code' => 'agreement_required', 'error' => 'Accept the current seller agreement first.'];
+        }
+
+        return null;
     }
 
     // ------------------------------------------------------------------ passwords
@@ -235,53 +276,30 @@ class SellerAccountService
      */
     public function resolveSession(string $token): array
     {
-        $expired = ['ok' => false, 'status' => 401, 'code' => 'session_expired', 'error' => 'Your session has ended. Please sign in again.'];
+        $invalid = ['ok' => false, 'status' => 401, 'code' => 'session_invalid', 'error' => 'Your session has ended. Please sign in again.'];
         if (! preg_match('/\A[0-9a-f]{64}\z/', $token)) {
-            return $expired;
+            return $invalid;
         }
         $session = $this->db()->table('engage_seller_sessions')->where('token_hash', hash('sha256', $token))->get()->getRowArray();
-        if (! $session) {
-            return $expired;
-        }
-        if (! empty($session['revoked_at'])) {
-            $reason = (string) ($session['revoked_reason'] ?? '');
-            $current = in_array($reason, ['suspended', 'terminated'], true) ? $this->find((int) $session['seller_id']) : null;
-            if ($current === null || $current['status'] !== $reason) {
-                return $expired; // e.g. revoked at suspension, seller since reactivated: sign in again
-            }
-            if ($reason === 'suspended') {
-                return ['ok' => false, 'status' => 403, 'code' => 'seller_suspended', 'error' => 'Your seller account is suspended. Contact AICOUNTLY for details.'];
-            }
-            if ($reason === 'terminated') {
-                return ['ok' => false, 'status' => 403, 'code' => 'seller_terminated', 'error' => 'Your seller account has been closed.'];
-            }
-
-            return $expired;
+        if (! $session || ! empty($session['revoked_at'])) {
+            return $invalid;
         }
         $now = time();
         if ((int) strtotime((string) $session['expires_at']) <= $now) {
             $this->revokeSession((int) $session['id'], 'expired');
 
-            return $expired;
+            return $invalid;
         }
         if ((int) strtotime((string) $session['last_seen_at']) + self::SESSION_IDLE_SECONDS <= $now) {
             $this->revokeSession((int) $session['id'], 'idle');
 
-            return $expired;
+            return $invalid;
         }
         $seller = $this->find((int) $session['seller_id']);
-        if (! $seller) {
-            return $expired;
-        }
-        if ($seller['status'] === 'suspended') {
-            $this->revokeSession((int) $session['id'], 'suspended');
-
-            return ['ok' => false, 'status' => 403, 'code' => 'seller_suspended', 'error' => 'Your seller account is suspended. Contact AICOUNTLY for details.'];
-        }
-        if ($seller['status'] === 'terminated') {
+        if (! $seller || $seller['status'] === 'terminated') {
             $this->revokeSession((int) $session['id'], 'terminated');
 
-            return ['ok' => false, 'status' => 403, 'code' => 'seller_terminated', 'error' => 'Your seller account has been closed.'];
+            return $invalid;
         }
         if ((int) strtotime((string) $session['last_seen_at']) < $now - 60) {
             $this->db()->table('engage_seller_sessions')->where('id', (int) $session['id'])->update(['last_seen_at' => Clock::now()]);
@@ -399,12 +417,27 @@ class SellerAccountService
         return self::portalBase() . '/reset-password?token=' . $token;
     }
 
-    public static function maskEmail(string $email): string
+    /** "r***@example.com" */
+    public static function maskEmail(?string $email): ?string
     {
+        if ($email === null || $email === '') {
+            return null;
+        }
         [$local, $domain] = array_pad(explode('@', $email, 2), 2, '');
-        $keep = mb_substr($local, 0, 1);
 
-        return $keep . str_repeat('•', max(2, mb_strlen($local) - 1)) . '@' . $domain;
+        return mb_substr($local, 0, 1) . '***@' . $domain;
+    }
+
+    /** "+91XXXXXX3210" */
+    public static function maskMobile(?string $mobile): ?string
+    {
+        $d = preg_replace('/\D+/', '', (string) $mobile) ?? '';
+        if (strlen($d) < 4) {
+            return null;
+        }
+        $last10 = substr($d, -10);
+
+        return '+91' . str_repeat('X', max(0, strlen($last10) - 4)) . substr($last10, -4);
     }
 
     // ------------------------------------------------------------------ status

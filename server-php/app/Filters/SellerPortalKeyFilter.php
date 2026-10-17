@@ -11,7 +11,8 @@ use CodeIgniter\HTTP\ResponseInterface;
  *
  *   X-Seller-Portal-Key: <SELLER_PORTAL_KEY>   (same value in both .env files, ≥ 32 characters)
  *
- * 503 when unset / too short, 401 portal_key_missing / portal_key_invalid otherwise; constant-time compare.
+ * 503 portal_key_missing when Engage's own key is unset / too short; 401 portal_key_invalid when the header is
+ * absent or wrong; constant-time compare.
  * Because only the BFF holds the key, its forwarded visitor IP / User-Agent (X-Seller-Client-IP /
  * X-Seller-Client-UA) are trusted for rate limits and audit; they are ignored on every other route.
  */
@@ -22,13 +23,13 @@ class SellerPortalKeyFilter implements FilterInterface
         $expected = trim((string) env('SELLER_PORTAL_KEY', ''));
         if (strlen($expected) < 32) {
             return service('response')->setStatusCode(503)->setJSON([
-                'ok' => false, 'code' => 'portal_key_unconfigured',
+                'ok' => false, 'code' => 'portal_key_missing',
                 'error' => 'Server misconfigured: SELLER_PORTAL_KEY missing or shorter than 32 characters in api/.env',
             ]);
         }
         $provided = (string) $request->getHeaderLine('X-Seller-Portal-Key');
         if ($provided === '') {
-            return service('response')->setStatusCode(401)->setJSON(['ok' => false, 'code' => 'portal_key_missing', 'error' => 'Missing X-Seller-Portal-Key.']);
+            return service('response')->setStatusCode(401)->setJSON(['ok' => false, 'code' => 'portal_key_invalid', 'error' => 'Missing X-Seller-Portal-Key.']);
         }
         if (! hash_equals($expected, $provided)) {
             return service('response')->setStatusCode(401)->setJSON(['ok' => false, 'code' => 'portal_key_invalid', 'error' => 'Invalid X-Seller-Portal-Key.']);

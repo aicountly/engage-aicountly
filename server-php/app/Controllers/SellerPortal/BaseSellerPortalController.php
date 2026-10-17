@@ -58,7 +58,7 @@ abstract class BaseSellerPortalController extends BaseApiController
     protected static function codeFor(int $status): string
     {
         return match ($status) {
-            401 => 'session_expired', 403 => 'forbidden', 404 => 'not_found', 409 => 'conflict',
+            401 => 'session_invalid', 403 => 'forbidden', 404 => 'not_found', 409 => 'conflict',
             410 => 'token_invalid', 422 => 'validation_failed', 429 => 'rate_limited', default => 'unavailable',
         };
     }
@@ -75,13 +75,20 @@ abstract class BaseSellerPortalController extends BaseApiController
             ->setHeader('Retry-After', (string) max(1, $t->getTokenTime()));
     }
 
-    protected function requireSettled(): ?ResponseInterface
+    /** 403 seller_suspended / seller_terminated / agreement_required for a write, or null. */
+    protected function writeBlock(bool $agreementExempt = false): ?ResponseInterface
     {
-        $s = $this->seller();
-        if (($s['status'] ?? '') === 'onboarding') {
-            return $this->failCode(403, 'agreement_required', 'Accept the seller agreement first.');
-        }
+        $b = Services::sellerAccounts()->writeBlock($this->seller(), $agreementExempt);
 
-        return null;
+        return $b === null ? null : $this->result($b);
+    }
+
+    /** ?page= (default 1) & ?limit= (default 20, max 100). @return array{0:int,1:int,2:int} */
+    protected function pageParams(): array
+    {
+        $page  = max(1, (int) ($this->request->getGet('page') ?? 1));
+        $limit = min(100, max(1, (int) ($this->request->getGet('limit') ?? 20)));
+
+        return [$page, $limit, ($page - 1) * $limit];
     }
 }

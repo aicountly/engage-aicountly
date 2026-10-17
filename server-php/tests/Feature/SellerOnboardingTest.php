@@ -6,25 +6,28 @@ use App\Models\SettingsModel;
 use Tests\Support\SellerTestCase;
 
 /**
- * Seller application → approval → activation → login / lockout / OTP / reset / suspension,
- * through the seller-portal API exactly as the BFF calls it.
+ * Seller application → approval → activation → agreement → login / lockout / OTP / reset / suspension,
+ * through the seller-portal API exactly as the BFF calls it (seller-aicountly docs/ENGAGE_SELLER_API.md).
  */
 final class SellerOnboardingTest extends SellerTestCase
 {
     public function testPortalKeyIsRequired(): void
     {
-        $r = $this->withHeaders(['X-Seller-Portal-Key' => 'wrong-key-wrong-key-wrong-key-wrong-key'])->withBodyFormat('json')->post('v1/seller-portal/auth/login', ['email' => 'a@b.co', 'password' => 'x']);
+        $r = $this->portal('get', 'health', [], null, ['X-Seller-Portal-Key' => 'wrong-key-wrong-key-wrong-key-wrong-key']);
         $this->assertSame(401, $this->code($r));
         $this->assertSame('portal_key_invalid', $this->json($r)['code']);
 
         $this->headers = [];
-        $r = $this->withBodyFormat('json')->post('v1/seller-portal/auth/login', ['email' => 'a@b.co', 'password' => 'x']);
+        $r = $this->get('v1/seller-portal/health');
         $this->assertSame(401, $this->code($r));
-        $this->assertSame('portal_key_missing', $this->json($r)['code']);
+        $this->assertSame('portal_key_invalid', $this->json($r)['code']);
+
+        $this->assertSame('engage-seller-portal', $this->json($this->portal('get', 'health'))['data']['service']);
 
         $this->setEnv('SELLER_PORTAL_KEY', 'short');
-        $r = $this->portal('post', 'auth/login', ['email' => 'a@b.co', 'password' => 'x']);
+        $r = $this->portal('get', 'health');
         $this->assertSame(503, $this->code($r));
+        $this->assertSame('portal_key_missing', $this->json($r)['code']);
     }
 
     public function testApplicationCreatesApplicationAndSellerRequestLead(): void
@@ -32,53 +35,52 @@ final class SellerOnboardingTest extends SellerTestCase
         $r = $this->apply();
         $this->assertSame(201, $this->code($r));
         $first = $this->json($r)['data'];
-        $this->assertTrue($first['received']);
+        $this->assertSame(['application_code' => 'SAP-000001', 'status' => 'requested'], $first);
 
         $app = $this->db()->table('engage_seller_applications')->get()->getRowArray();
-        $this->assertSame('requested', $app['status']);
         $this->assertSame('203.0.113.7', $app['ip_address'], 'the BFF-forwarded client IP is recorded');
+        $this->assertTrue(json_decode($app['metadata'], true)['consent']['contact']);
         $lead = $this->db()->table('engage_leads')->where('id', $app['lead_id'])->get()->getRowArray();
         $this->assertSame('seller_request', $lead['source_type']);
         $this->assertSame('9876543210', $lead['mobile_normalized']);
 
-        // Same email again (different case): same public answer, nothing new stored.
+        // Same email again (different case): the open application, nothing new stored.
         $r2 = $this->apply('RAVI@example.com');
-        $this->assertSame(201, $this->code($r2));
+        $this->assertSame(200, $this->code($r2));
         $this->assertSame($first, $this->json($r2)['data']);
         $this->assertSame(1, $this->db()->table('engage_seller_applications')->countAllResults());
     }
 
-    public function testHoneypotAndValidationAndRateLimit(): void
+    public function testHoneypotValidationAndPerIpRateLimit(): void
     {
         $r = $this->apply('bot@example.com', ['website' => 'http://spam.example']);
-        $this->assertSame(201, $this->code($r));
+        $this->assertSame(200, $this->code($r));
         $this->assertSame(0, $this->db()->table('engage_seller_applications')->countAllResults());
 
         $r = $this->apply('not-an-email');
         $this->assertSame(422, $this->code($r));
         $this->assertArrayHasKey('email', $this->json($r)['details']);
+        $r = $this->apply('x@example.com', ['consent' => ['contact' => false]]);
+        $this->assertArrayHasKey('consent.contact', $this->json($r)['details']);
 
-        // 5 per visitor IP per hour (2 used above).
         $this->apply('c@example.com');
         $this->apply('d@example.com');
-        $this->apply('g@example.com');
         $r = $this->apply('e@example.com');
-        $this->assertSame(429, $this->code($r));
+        $this->assertSame(429, $this->code($r), '5 per visitor IP per hour');
         $this->assertSame('rate_limited', $this->json($r)['code']);
-        // Another visitor IP is not affected.
-        $r = $this->portal('post', 'applications', ['name' => 'Other', 'email' => 'f@example.com', 'mobile' => '9876500000'], null, ['X-Seller-Client-IP' => '198.51.100.9']);
-        $this->assertSame(201, $this->code($r));
+        $r = $this->apply('f@example.com', [], ['X-Seller-Client-IP' => '198.51.100.9']);
+        $this->assertSame(201, $this->code($r), 'another visitor IP is not affected');
     }
 
     public function testApprovalNeedsSellerRoleAndShowsLinkOnceWhenNoMailer(): void
     {
         $this->apply();
         $appId = (int) $this->db()->table('engage_seller_applications')->get()->getRow()->id;
-
         foreach (['member', 'kyc_reviewer', 'sales_manager'] as $role) {
             $r = $this->asStaff($this->staff([$role], "{$role}@aicountly.org"), 'post', "v1/seller-applications/{$appId}/approve");
             $this->assertSame(403, $this->code($r), "{$role} must not approve");
         }
+        $this->assertSame(200, $this->code($this->asStaff($this->staff(['kyc_reviewer'], 'k@aicountly.org'), 'get', 'v1/seller-applications')));
 
         $s = $this->approvedSeller();
         $this->assertSame('SLR-000001', $s['seller_code']);
@@ -90,11 +92,15 @@ final class SellerOnboardingTest extends SellerTestCase
 
         $seller = $this->db()->table('engage_sellers')->where('id', $s['seller_id'])->get()->getRowArray();
         $this->assertSame('onboarding', $seller['status']);
+        $this->assertSame('individual', $seller['entity_type']);
         $this->assertNotNull($seller['lead_id']);
         $tok = $this->db()->table('engage_seller_tokens')->where('seller_id', $s['seller_id'])->get()->getRowArray();
         $this->assertSame(hash('sha256', $s['token']), $tok['token_hash'], 'only the hash is stored');
         $this->assertSame('shown_to_staff', $tok['delivery']);
-        $this->assertSame('approved', $this->db()->table('engage_seller_applications')->where('id', $appId)->get()->getRow()->status);
+        // Join request from a known seller email: same "submitted" kind of answer, no new row.
+        $r = $this->apply();
+        $this->assertSame(200, $this->code($r));
+        $this->assertSame(1, $this->db()->table('engage_seller_applications')->countAllResults());
     }
 
     public function testApprovalEmailsTheLinkWhenAMailerIsConfigured(): void
@@ -106,11 +112,9 @@ final class SellerOnboardingTest extends SellerTestCase
         $this->assertNull($act['link'], 'an emailed link is not also shown to staff');
         $this->assertSame('seller_activation', $this->mailer->sent[0]['trigger']);
 
-        // Mailer configured but Console refuses: honest answer + link for staff.
         $this->mailer->succeed = false;
-        $mgr = $this->staff(['seller_manager'], 'seller-mgr@aicountly.org');
-        $r = $this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/resend-activation");
-        $this->assertFalse($this->json($r)['data']['activation']['email_sent']);
+        $r = $this->asStaff($this->staff(['seller_manager'], 'seller-mgr@aicountly.org'), 'post', "v1/sellers/{$s['seller_id']}/resend-activation");
+        $this->assertFalse($this->json($r)['data']['activation']['email_sent'], 'Console refused: say so');
         $this->assertNotNull($this->json($r)['data']['activation']['link']);
     }
 
@@ -121,67 +125,68 @@ final class SellerOnboardingTest extends SellerTestCase
         $mgr = $this->staff(['seller_manager']);
         $this->assertSame(422, $this->code($this->asStaff($mgr, 'post', "v1/seller-applications/{$appId}/reject", ['reason' => ''])));
         $r = $this->asStaff($mgr, 'post', "v1/seller-applications/{$appId}/reject", ['reason' => 'Not in our target market']);
-        $this->assertSame(200, $this->code($r));
         $this->assertSame('rejected', $this->json($r)['data']['status']);
         $this->assertSame(409, $this->code($this->asStaff($mgr, 'post', "v1/seller-applications/{$appId}/approve")));
     }
 
-    public function testActivationSetsPasswordAcceptsAgreementAndIsSingleUse(): void
+    public function testActivationIsSingleUseAndAgreementCompletesIt(): void
     {
-        $agreementId = $this->publishAgreement();
+        $label = $this->publishAgreement();
         $s = $this->approvedSeller();
 
-        $check = $this->portal('get', 'auth/activation', ['token' => $s['token']]);
-        $this->assertSame(200, $this->code($check));
-        $this->assertSame($agreementId, $this->json($check)['data']['agreement']['id']);
-        $this->assertStringContainsString('•', $this->json($check)['data']['email']);
+        $inspect = $this->portal('post', 'auth/activation/inspect', ['token' => $s['token']]);
+        $this->assertSame(200, $this->code($inspect));
+        $this->assertSame('r***@example.com', $this->json($inspect)['data']['email_masked']);
+        $this->assertSame(410, $this->code($this->portal('post', 'auth/activation/inspect', ['token' => str_repeat('a', 64)])));
 
-        $weak = $this->portal('post', 'auth/activate', ['token' => $s['token'], 'password' => 'short']);
+        $weak = $this->portal('post', 'auth/activation', ['token' => $s['token'], 'password' => 'short']);
         $this->assertSame(422, $this->code($weak));
         $this->assertSame('weak_password', $this->json($weak)['code']);
 
-        $stale = $this->portal('post', 'auth/activate', ['token' => $s['token'], 'password' => 'Str0ngPassword', 'agreement_version_id' => $agreementId + 99]);
-        $this->assertSame(409, $this->code($stale));
-        $this->assertSame('agreement_version_mismatch', $this->json($stale)['code']);
-
-        $ok = $this->portal('post', 'auth/activate', ['token' => $s['token'], 'password' => 'Str0ngPassword', 'agreement_version_id' => $agreementId]);
-        $this->assertSame(200, $this->code($ok));
-        $body = $this->json($ok)['data'];
-        $this->assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', $body['session_token']);
-        $this->assertSame('kyc_pending', $body['seller']['status']);
-        $this->assertSame('submit_kyc', $body['seller']['next_step']);
-
-        $row = $this->db()->table('engage_sellers')->where('id', $s['seller_id'])->get()->getRowArray();
-        $this->assertTrue(password_verify('Str0ngPassword', $row['password_hash']));
-        $acc = $this->db()->table('engage_seller_agreement_acceptances')->get()->getRowArray();
-        $this->assertSame('203.0.113.7', $acc['ip_address']);
-
-        $again = $this->portal('post', 'auth/activate', ['token' => $s['token'], 'password' => 'Str0ngPassword2']);
+        $ok = $this->portal('post', 'auth/activation', ['token' => $s['token'], 'password' => 'Str0ngPassword']);
+        $this->assertSame(['activated' => true, 'email_masked' => 'r***@example.com'], $this->json($ok)['data']);
+        $again = $this->portal('post', 'auth/activation', ['token' => $s['token'], 'password' => 'Str0ngPassword2']);
         $this->assertSame(410, $this->code($again));
         $this->assertSame('token_invalid', $this->json($again)['code']);
 
-        $me = $this->portal('get', 'me', [], $body['session_token']);
-        $this->assertSame('SLR-000001', $this->json($me)['data']['seller_code']);
-        $this->assertArrayNotHasKey('password_hash', $this->json($me)['data']);
-    }
+        $session = $this->login();
+        $this->assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', (string) $session);
+        $me = $this->json($this->portal('get', 'me', [], $session))['data']['seller'];
+        $this->assertSame('onboarding', $me['status']);
+        $this->assertTrue($me['agreement']['acceptance_required']);
+        $this->assertSame('https://www.aicountly.com/?ref=SLR-000001', $me['referral']['links']['website']);
+        $this->assertArrayNotHasKey('password_hash', $me);
 
-    public function testActivationWithoutAgreementLeavesSellerOnboarding(): void
-    {
-        $s = $this->approvedSeller();
-        $r = $this->portal('post', 'auth/activate', ['token' => $s['token'], 'password' => 'Str0ngPassword']);
-        $this->assertSame(200, $this->code($r));
-        $seller = $this->json($r)['data']['seller'];
-        $session = $this->json($r)['data']['session_token'];
-        $this->assertSame('onboarding', $seller['status']);
-        $this->assertSame('agreement_unavailable', $seller['next_step']);
-        // Onboarding sellers cannot register leads yet.
-        $lead = $this->portal('post', 'leads', ['name' => 'Customer', 'email' => 'c@cust.example'], $session);
+        // Writes are blocked until the agreement is accepted.
+        $lead = $this->portal('post', 'leads', ['name' => 'Customer', 'email' => 'c@cust.example', 'consent_confirmed' => true], $session);
         $this->assertSame(403, $this->code($lead));
         $this->assertSame('agreement_required', $this->json($lead)['code']);
 
-        $agreementId = $this->publishAgreement();
-        $acc = $this->portal('post', 'agreement/accept', ['agreement_version_id' => $agreementId], $session);
+        $ag = $this->json($this->portal('get', 'agreement', [], $session))['data'];
+        $this->assertSame($label, $ag['agreement']['version']);
+        $this->assertFalse($ag['accepted']);
+        $this->assertArrayHasKey('body_text', $ag['agreement']);
+
+        $stale = $this->portal('post', 'agreement/acceptances', ['version' => 'old', 'accepted' => true], $session);
+        $this->assertSame(409, $this->code($stale));
+        $this->assertSame('agreement_version_mismatch', $this->json($stale)['code']);
+        $acc = $this->portal('post', 'agreement/acceptances', ['version' => $label, 'accepted' => true], $session);
+        $this->assertSame(201, $this->code($acc));
         $this->assertSame('kyc_pending', $this->json($acc)['data']['seller']['status']);
+        $this->assertSame('203.0.113.7', $this->db()->table('engage_seller_agreement_acceptances')->get()->getRow()->ip_address);
+        $this->assertSame(200, $this->code($this->portal('post', 'agreement/acceptances', ['version' => $label, 'accepted' => true], $session)), 'idempotent');
+    }
+
+    public function testNewAgreementVersionRequiresReacceptanceBeforeWrites(): void
+    {
+        $s = $this->activeSellerSession();
+        $this->publishAgreement('2027.1');
+        $me = $this->json($this->portal('get', 'me', [], $s['session']))['data']['seller'];
+        $this->assertTrue($me['agreement']['acceptance_required']);
+        $this->assertSame('kyc_pending', $me['status'], 'status is not changed by a new version');
+        $r = $this->portal('post', 'leads', ['name' => 'Cust', 'email' => 'cust@example.org', 'consent_confirmed' => true], $s['session']);
+        $this->assertSame('agreement_required', $this->json($r)['code']);
+        $this->assertSame(200, $this->code($this->portal('patch', 'me', ['city' => 'Mumbai'], $s['session'])), 'profile stays editable');
     }
 
     public function testLoginGenericErrorsLockoutAndUnlock(): void
@@ -190,9 +195,10 @@ final class SellerOnboardingTest extends SellerTestCase
 
         $unknown = $this->portal('post', 'auth/login', ['email' => 'nobody@example.com', 'password' => 'whatever1']);
         $this->assertSame(401, $this->code($unknown));
+        $this->assertSame('invalid_credentials', $this->json($unknown)['code']);
         $unknownError = $this->json($unknown)['error'];
         $wrong = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'wrongpass1']);
-        $this->assertSame($unknownError, $this->json($wrong)['error'], 'same message for unknown email and wrong password');
+        $this->assertSame($unknownError, $this->json($wrong)['error']);
 
         for ($i = 0; $i < 4; $i++) {
             $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'wrongpass1']);
@@ -200,18 +206,13 @@ final class SellerOnboardingTest extends SellerTestCase
         $locked = $this->portal('post', 'auth/login', ['email' => 'RAVI@example.com', 'password' => 'Str0ngPassword']);
         $this->assertSame(423, $this->code($locked));
         $this->assertSame('account_locked', $this->json($locked)['code']);
-        $lockedWrong = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'wrongpass1']);
-        $this->assertSame(401, $this->code($lockedWrong), 'the lock is only disclosed to someone who knows the password');
+        $this->assertSame(401, $this->code($this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'wrongpass1'])));
 
-        $mgr = $this->staff(['seller_manager']);
-        $this->assertSame(200, $this->code($this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/unlock")));
-        cache()->clean();
-        $ok = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']);
-        $this->assertSame(200, $this->code($ok));
-        $this->assertFalse($this->json($ok)['data']['otp_required']);
+        $this->assertSame(200, $this->code($this->asStaff($this->staff(['seller_manager']), 'post', "v1/sellers/{$s['seller_id']}/unlock")));
+        $this->assertNotNull($this->login());
     }
 
-    public function testSuspendRevokesSessionsAndReactivateRestores(): void
+    public function testSuspensionIsReadOnlyAndTerminationEndsAccess(): void
     {
         $s = $this->activeSellerSession();
         $mgr = $this->staff(['seller_manager']);
@@ -219,56 +220,70 @@ final class SellerOnboardingTest extends SellerTestCase
         $this->assertSame(422, $this->code($this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/suspend", ['reason' => ''])));
         $r = $this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/suspend", ['reason' => 'Complaint under review']);
         $this->assertSame('suspended', $this->json($r)['data']['status']);
+        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $s['session'])), 'sessions are revoked at suspension');
 
-        $me = $this->portal('get', 'me', [], $s['session']);
-        $this->assertSame(403, $this->code($me));
-        $this->assertSame('seller_suspended', $this->json($me)['code']);
-        $login = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']);
-        $this->assertSame('seller_suspended', $this->json($login)['code']);
+        $session = $this->login();
+        $me = $this->json($this->portal('get', 'me', [], $session))['data']['seller'];
+        $this->assertSame('suspended', $me['status']);
+        $this->assertSame('Complaint under review', $me['status_reason']);
+        $w = $this->portal('post', 'leads', ['name' => 'Cust', 'email' => 'cust@example.org', 'consent_confirmed' => true], $session);
+        $this->assertSame(403, $this->code($w));
+        $this->assertSame('seller_suspended', $this->json($w)['code']);
 
         $r = $this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/reactivate", ['reason' => 'Cleared']);
-        $this->assertSame('kyc_pending', $this->json($r)['data']['status'], 'returns to the status its KYC / agreement allow');
-        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $s['session'])), 'old sessions stay revoked');
-        $this->assertSame(200, $this->code($this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword'])));
+        $this->assertSame('kyc_pending', $this->json($r)['data']['status'], 'back to what KYC / agreement allow');
 
         $t = $this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/terminate", ['reason' => 'Contract ended']);
         $this->assertSame('terminated', $this->json($t)['data']['status']);
+        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $session)));
+        $l = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']);
+        $this->assertSame('seller_terminated', $this->json($l)['code']);
         $this->assertSame(409, $this->code($this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/reactivate", ['reason' => 'x y z'])));
     }
 
-    public function testForgotPasswordNeverClaimsAnEmailAndResetRevokesSessions(): void
+    public function testPasswordResetIsHonestAboutEmail(): void
     {
         $s = $this->activeSellerSession();
 
-        // No mailer: same answer, and no live reset token is left behind.
-        $r = $this->portal('post', 'auth/forgot-password', ['email' => 'ravi@example.com']);
-        $this->assertSame(200, $this->code($r));
-        $known = $this->json($r)['data'];
-        $unknown = $this->portal('post', 'auth/forgot-password', ['email' => 'nobody@example.com']);
-        $this->assertSame($known, $this->json($unknown)['data']);
-        $live = $this->db()->query("SELECT COUNT(*) AS n FROM engage_seller_tokens WHERE purpose = 'password_reset' AND revoked_at IS NULL AND used_at IS NULL")->getRow()->n;
-        $this->assertSame(0, (int) $live);
+        // No mailer: 503 for everyone (nothing could be sent), no token created.
+        $r = $this->portal('post', 'auth/password-reset/request', ['email' => 'ravi@example.com']);
+        $this->assertSame(503, $this->code($r));
+        $this->assertSame(503, $this->code($this->portal('post', 'auth/password-reset/request', ['email' => 'nobody@example.com'])));
+        $this->assertSame(0, $this->db()->table('engage_seller_tokens')->where('purpose', 'password_reset')->countAllResults());
 
-        // With a mailer: link emailed, reset works once and ends every session.
         $this->mailer->fakeChannel = 'smtp';
-        $this->portal('post', 'auth/forgot-password', ['email' => 'ravi@example.com']);
+        $known = $this->portal('post', 'auth/password-reset/request', ['email' => 'ravi@example.com']);
+        $this->assertSame(202, $this->code($known));
+        $knownBody = $this->json($known)['data'];
+        $this->assertSame($knownBody, $this->json($this->portal('post', 'auth/password-reset/request', ['email' => 'nobody@example.com']))['data']);
         $url = $this->mailer->sent[0]['vars']['reset_url'];
+        $this->assertStringStartsWith('https://seller.aicountly.com/reset-password?token=', $url);
         $token = substr($url, strpos($url, 'token=') + 6);
-        $this->assertSame(200, $this->code($this->portal('get', 'auth/reset-password', ['token' => $token])));
-        $this->assertSame(422, $this->code($this->portal('post', 'auth/reset-password', ['token' => $token, 'password' => 'nodigitshere'])));
-        $ok = $this->portal('post', 'auth/reset-password', ['token' => $token, 'password' => 'N3wPassword!']);
-        $this->assertSame(200, $this->code($ok));
-        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $s['session'])));
-        $this->assertSame(410, $this->code($this->portal('post', 'auth/reset-password', ['token' => $token, 'password' => 'N3wPassword!2'])));
-        $this->assertSame(200, $this->code($this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'N3wPassword!'])));
+        $this->assertSame(200, $this->code($this->portal('post', 'auth/password-reset/inspect', ['token' => $token])));
+        $this->assertSame(422, $this->code($this->portal('post', 'auth/password-reset', ['token' => $token, 'password' => 'nodigitshere'])));
+        $ok = $this->portal('post', 'auth/password-reset', ['token' => $token, 'password' => 'N3wPassword!']);
+        $this->assertSame(['reset' => true], $this->json($ok)['data']);
+        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $s['session'])), 'every session revoked');
+        $this->assertSame(410, $this->code($this->portal('post', 'auth/password-reset', ['token' => $token, 'password' => 'N3wPassword!2'])));
+        $this->assertNotNull($this->login('ravi@example.com', 'N3wPassword!'));
+
+        // Mailer down for an existing seller: an honest 503, never "sent".
+        $this->mailer->succeed = false;
+        $this->assertSame(503, $this->code($this->portal('post', 'auth/password-reset/request', ['email' => 'ravi@example.com'])));
+    }
+
+    public function testPasswordResetForOnboardingSellerResendsActivation(): void
+    {
+        $this->approvedSeller();
+        $this->mailer->fakeChannel = 'console';
+        $this->assertSame(202, $this->code($this->portal('post', 'auth/password-reset/request', ['email' => 'ravi@example.com'])));
+        $this->assertSame('seller_activation', $this->mailer->sent[0]['trigger']);
     }
 
     public function testStaffResetPasswordShowsLinkWhenNoMailer(): void
     {
         $s = $this->activeSellerSession();
-        $mgr = $this->staff(['seller_manager']);
-        $r = $this->asStaff($mgr, 'post', "v1/sellers/{$s['seller_id']}/reset-password");
-        $this->assertSame(200, $this->code($r));
+        $r = $this->asStaff($this->staff(['seller_manager']), 'post', "v1/sellers/{$s['seller_id']}/reset-password");
         $reset = $this->json($r)['data']['reset'];
         $this->assertFalse($reset['email_sent']);
         $this->assertStringStartsWith('https://seller.aicountly.com/reset-password?token=', $reset['link']);
@@ -279,62 +294,90 @@ final class SellerOnboardingTest extends SellerTestCase
     {
         $this->activeSellerSession();
         (new SettingsModel())->setSetting('seller_login_otp_enabled', true);
-
-        // Setting on but no mailer: the OTP step is skipped (it cannot be delivered).
-        $r = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']);
-        $this->assertFalse($this->json($r)['data']['otp_required']);
+        $this->assertNotNull($this->login(), 'setting on but no mailer: no OTP step');
 
         $this->mailer->fakeChannel = 'console';
-        $r = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']);
-        $d = $this->json($r)['data'];
+        $d = $this->json($this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']))['data'];
         $this->assertTrue($d['otp_required']);
         $this->assertArrayNotHasKey('session_token', $d);
+        $this->assertSame('r***@example.com', $d['email_masked']);
         $code = $this->mailer->sent[0]['vars']['code'];
 
         $bad = $this->portal('post', 'auth/login/otp', ['challenge_token' => $d['challenge_token'], 'code' => $code === '000000' ? '111111' : '000000']);
         $this->assertSame(401, $this->code($bad));
+        $this->assertSame('invalid_otp', $this->json($bad)['code']);
         $ok = $this->portal('post', 'auth/login/otp', ['challenge_token' => $d['challenge_token'], 'code' => $code]);
-        $this->assertSame(200, $this->code($ok));
         $this->assertNotEmpty($this->json($ok)['data']['session_token']);
-        $this->assertSame(410, $this->code($this->portal('post', 'auth/login/otp', ['challenge_token' => $d['challenge_token'], 'code' => $code])));
+        $used = $this->portal('post', 'auth/login/otp', ['challenge_token' => $d['challenge_token'], 'code' => $code]);
+        $this->assertSame(410, $this->code($used));
+        $this->assertSame('challenge_expired', $this->json($used)['code']);
 
-        // Mailer refuses: sign-in fails closed rather than skipping the code.
         $this->mailer->succeed = false;
         $r = $this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']);
-        $this->assertSame(503, $this->code($r));
-        $this->assertSame('otp_unavailable', $this->json($r)['code']);
+        $this->assertSame(503, $this->code($r), 'fails closed rather than skipping the code');
     }
 
-    public function testSessionIdleTimeoutAndLogout(): void
+    public function testSessionIdleTimeoutAndIdempotentLogout(): void
     {
         $s = $this->activeSellerSession();
         $this->db()->query("UPDATE engage_seller_sessions SET last_seen_at = NOW() - INTERVAL '9 hours'");
-        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $s['session'])));
+        $r = $this->portal('get', 'me', [], $s['session']);
+        $this->assertSame(401, $this->code($r));
+        $this->assertSame('session_invalid', $this->json($r)['code']);
 
-        $login = $this->json($this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']));
-        $session = $login['data']['session_token'];
-        $this->assertSame(200, $this->code($this->portal('post', 'auth/logout', [], $session)));
+        $session = $this->login();
+        $this->assertSame(['revoked' => true], $this->json($this->portal('post', 'auth/logout', [], $session))['data']);
+        $this->assertSame(200, $this->code($this->portal('post', 'auth/logout', [], $session)), 'idempotent');
         $this->assertSame(401, $this->code($this->portal('get', 'me', [], $session)));
     }
 
-    public function testChangePasswordRevokesOtherSessions(): void
+    public function testChangePasswordRotatesEverySession(): void
     {
         $s = $this->activeSellerSession();
-        $other = $this->json($this->portal('post', 'auth/login', ['email' => 'ravi@example.com', 'password' => 'Str0ngPassword']))['data']['session_token'];
-        $bad = $this->portal('post', 'auth/change-password', ['current_password' => 'nope', 'new_password' => 'An0therPassword'], $s['session']);
+        $bad = $this->portal('post', 'me/password', ['current_password' => 'nope', 'new_password' => 'An0therPassword'], $s['session']);
         $this->assertSame('invalid_current_password', $this->json($bad)['code']);
-        $ok = $this->portal('post', 'auth/change-password', ['current_password' => 'Str0ngPassword', 'new_password' => 'An0therPassword'], $s['session']);
-        $this->assertSame(1, $this->json($ok)['data']['other_sessions_revoked']);
-        $this->assertSame(200, $this->code($this->portal('get', 'me', [], $s['session'])));
-        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $other)));
+        $ok = $this->json($this->portal('post', 'me/password', ['current_password' => 'Str0ngPassword', 'new_password' => 'An0therPassword'], $s['session']))['data'];
+        $this->assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', $ok['session_token']);
+        $this->assertSame(401, $this->code($this->portal('get', 'me', [], $s['session'])));
+        $this->assertSame(200, $this->code($this->portal('get', 'me', [], $ok['session_token'])));
+    }
+
+    public function testProfilePatch(): void
+    {
+        $s = $this->activeSellerSession();
+        $other = $this->activeSellerSession('meena@example.com');
+        $this->db()->table('engage_sellers')->where('id', $other['seller_id'])->update(['mobile' => '+919999988888']);
+        $r = $this->portal('patch', 'me', ['mobile' => '09999988888'], $s['session']);
+        $this->assertSame(422, $this->code($r));
+        $this->assertArrayHasKey('mobile', $this->json($r)['details']);
+        $r = $this->portal('patch', 'me', ['business_name' => null, 'name' => 'Ravi K', 'city' => 'Nashik'], $s['session']);
+        $seller = $this->json($r)['data']['seller'];
+        $this->assertNull($seller['business_name']);
+        $this->assertSame('Ravi K', $seller['name']);
+        $this->assertSame('Nashik', $seller['city']);
+    }
+
+    public function testIdempotencyKeyReplaysWrites(): void
+    {
+        $s = $this->activeSellerSession();
+        $body = ['name' => 'Meena Shah', 'company' => 'Shah Traders', 'email' => 'meena@shah.example', 'consent_confirmed' => true];
+        $h = ['Idempotency-Key' => 'abc123def456ghi789'];
+        $a = $this->portal('post', 'leads', $body, $s['session'], $h);
+        $this->assertSame(201, $this->code($a));
+        $first = $this->json($a)['data'];
+        $b = $this->portal('post', 'leads', $body, $s['session'], $h);
+        $this->assertSame(201, $this->code($b));
+        $this->assertSame($first, $this->json($b)['data']);
+        $this->assertSame('true', $b->response()->getHeaderLine('Idempotent-Replayed'));
+        $this->assertSame(1, $this->db()->table('engage_leads')->where('source_type', 'seller')->countAllResults());
+        $c = $this->portal('post', 'leads', ['name' => 'Other'] + $body, $s['session'], $h);
+        $this->assertSame(409, $this->code($c));
     }
 
     public function testPartnerMasterIsAdministratorOnly(): void
     {
-        $r = $this->asStaff($this->staff(['member']), 'get', 'v1/partners');
-        $this->assertSame(403, $this->code($r));
-        $r = $this->asStaff($this->staff(['seller_manager'], 'sm@aicountly.org'), 'post', 'v1/partners/1/unlock');
-        $this->assertSame(403, $this->code($r));
+        $this->assertSame(403, $this->code($this->asStaff($this->staff(['member']), 'get', 'v1/partners')));
+        $this->assertSame(403, $this->code($this->asStaff($this->staff(['seller_manager'], 'sm@aicountly.org'), 'post', 'v1/partners/1/unlock')));
     }
 
     public function testPayoutsAreHonestlyNotEnabled(): void
@@ -344,5 +387,11 @@ final class SellerOnboardingTest extends SellerTestCase
         $this->assertFalse($r['enabled']);
         $this->assertSame('payouts not enabled yet', $r['status']);
         $this->assertSame([], $r['items']);
+        $this->assertSame(0, $r['total']);
+        $this->assertSame(404, $this->code($this->portal('get', 'payouts/PO-1/statement', [], $s['session'])));
+        $d = $this->json($this->portal('get', 'dashboard', [], $s['session']))['data'];
+        $this->assertNull($d['next_payout_date']);
+        $this->assertFalse($d['commission_plan']['published']);
+        $this->assertSame('500.00', $d['payout_threshold']);
     }
 }

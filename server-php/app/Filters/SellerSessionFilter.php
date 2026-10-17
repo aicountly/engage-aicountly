@@ -12,8 +12,8 @@ use Config\Services;
  *
  *   X-Seller-Session: <opaque session token from login / activation>
  *
- * 401 session_expired (unknown, revoked, idle > 8 h, older than 7 days); 403 seller_suspended /
- * seller_terminated when access was ended by Engage staff.
+ * 401 session_invalid (missing, unknown, revoked, idle > 8 h, older than 7 days, seller terminated).
+ * Suspended sellers keep a read-only session; write routes answer 403 seller_suspended themselves.
  */
 class SellerSessionFilter implements FilterInterface
 {
@@ -21,7 +21,7 @@ class SellerSessionFilter implements FilterInterface
     {
         $token = trim((string) $request->getHeaderLine('X-Seller-Session'));
         if ($token === '') {
-            return service('response')->setStatusCode(401)->setJSON(['ok' => false, 'code' => 'session_expired', 'error' => 'Sign in to continue.']);
+            return service('response')->setStatusCode(401)->setJSON(['ok' => false, 'code' => 'session_invalid', 'error' => 'Sign in to continue.']);
         }
         try {
             $r = Services::sellerAccounts()->resolveSession($token);

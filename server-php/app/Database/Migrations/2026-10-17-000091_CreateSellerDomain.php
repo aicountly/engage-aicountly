@@ -75,10 +75,11 @@ class CreateSellerDomain extends Migration
             email                 VARCHAR(191) NOT NULL,
             mobile                VARCHAR(32)  NULL,
             organization          VARCHAR(191) NULL,
+            entity_type           VARCHAR(24)  NULL,
             city                  VARCHAR(96)  NULL,
             state                 VARCHAR(96)  NULL,
             status                VARCHAR(16)  NOT NULL DEFAULT 'onboarding',
-            kyc_status            VARCHAR(16)  NOT NULL DEFAULT 'not_submitted',
+            kyc_status            VARCHAR(16)  NOT NULL DEFAULT 'not_started',
             status_reason         TEXT         NULL,
             status_changed_at     TIMESTAMPTZ  NULL,
             status_changed_by     BIGINT       NULL REFERENCES engage_users(id) ON DELETE SET NULL,
@@ -96,7 +97,7 @@ class CreateSellerDomain extends Migration
             created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             CONSTRAINT engage_sellers_status_chk CHECK (status IN ('onboarding','kyc_pending','active','suspended','terminated')),
-            CONSTRAINT engage_sellers_kyc_status_chk CHECK (kyc_status IN ('not_submitted','kyc_submitted','kyc_verified','kyc_rejected'))
+            CONSTRAINT engage_sellers_kyc_status_chk CHECK (kyc_status IN ('not_started','kyc_submitted','kyc_verified','kyc_rejected'))
         )");
         $db->query('CREATE UNIQUE INDEX IF NOT EXISTS uq_engage_sellers_email ON engage_sellers (LOWER(email))');
         $db->query('CREATE INDEX IF NOT EXISTS idx_engage_sellers_status ON engage_sellers (status)');
@@ -173,32 +174,34 @@ class CreateSellerDomain extends Migration
         $db->query("CREATE TABLE IF NOT EXISTS engage_seller_kyc (
             id                  BIGSERIAL PRIMARY KEY,
             seller_id           BIGINT       NOT NULL UNIQUE REFERENCES engage_sellers(id) ON DELETE CASCADE,
-            legal_name          VARCHAR(191) NOT NULL,
-            entity_type         VARCHAR(24)  NOT NULL,
-            pan_enc             TEXT         NOT NULL,
-            pan_last4           VARCHAR(4)   NOT NULL,
+            legal_name          VARCHAR(191) NULL,
+            entity_type         VARCHAR(24)  NULL,
+            pan_enc             TEXT         NULL,
+            pan_last4           VARCHAR(4)   NULL,
             gstin_enc           TEXT         NULL,
             gstin_last4         VARCHAR(4)   NULL,
             gst_state_code      VARCHAR(2)   NULL,
-            address_line1       VARCHAR(191) NOT NULL,
+            address_line1       VARCHAR(191) NULL,
             address_line2       VARCHAR(191) NULL,
-            city                VARCHAR(96)  NOT NULL,
-            state               VARCHAR(96)  NOT NULL,
-            pincode             VARCHAR(6)   NOT NULL,
-            bank_account_holder VARCHAR(191) NOT NULL,
-            bank_account_enc    TEXT         NOT NULL,
-            bank_account_last4  VARCHAR(4)   NOT NULL,
-            bank_ifsc           VARCHAR(11)  NOT NULL,
-            status              VARCHAR(16)  NOT NULL DEFAULT 'kyc_submitted',
+            city                VARCHAR(96)  NULL,
+            state               VARCHAR(96)  NULL,
+            pincode             VARCHAR(6)   NULL,
+            bank_account_holder VARCHAR(191) NULL,
+            bank_account_enc    TEXT         NULL,
+            bank_account_last4  VARCHAR(4)   NULL,
+            bank_ifsc           VARCHAR(11)  NULL,
+            status              VARCHAR(16)  NOT NULL DEFAULT 'draft',
             rejection_reason    TEXT         NULL,
-            submitted_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-            submission_count    INTEGER      NOT NULL DEFAULT 1,
+            submitted_at        TIMESTAMPTZ  NULL,
+            declaration_at      TIMESTAMPTZ  NULL,
+            declaration_ip      VARCHAR(64)  NULL,
+            submission_count    INTEGER      NOT NULL DEFAULT 0,
             reviewed_by         BIGINT       NULL REFERENCES engage_users(id) ON DELETE SET NULL,
             reviewed_at         TIMESTAMPTZ  NULL,
             created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-            CONSTRAINT engage_seller_kyc_status_chk CHECK (status IN ('kyc_submitted','kyc_verified','kyc_rejected')),
-            CONSTRAINT engage_seller_kyc_entity_chk CHECK (entity_type IN ('individual','proprietorship','partnership','llp','company'))
+            CONSTRAINT engage_seller_kyc_status_chk CHECK (status IN ('draft','kyc_submitted','kyc_verified','kyc_rejected')),
+            CONSTRAINT engage_seller_kyc_entity_chk CHECK (entity_type IS NULL OR entity_type IN ('individual','proprietorship','partnership','llp','company'))
         )");
         $db->query('CREATE INDEX IF NOT EXISTS idx_engage_seller_kyc_status ON engage_seller_kyc (status, submitted_at)');
 
@@ -215,7 +218,7 @@ class CreateSellerDomain extends Migration
             uploaded_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             uploaded_ip   VARCHAR(64)  NULL,
             CONSTRAINT engage_seller_kyc_documents_type_chk CHECK (doc_type IN ('pan_card','cancelled_cheque','gst_certificate','address_proof')),
-            CONSTRAINT engage_seller_kyc_documents_status_chk CHECK (status IN ('current','superseded'))
+            CONSTRAINT engage_seller_kyc_documents_status_chk CHECK (status IN ('current','superseded','deleted'))
         )");
         $db->query('CREATE INDEX IF NOT EXISTS idx_engage_seller_kyc_documents_seller ON engage_seller_kyc_documents (seller_id, doc_type, status)');
 
@@ -238,6 +241,7 @@ class CreateSellerDomain extends Migration
         $db->query('ALTER TABLE engage_leads ADD COLUMN IF NOT EXISTS reach_lead_id BIGINT NULL');
         $db->query('ALTER TABLE engage_leads ADD COLUMN IF NOT EXISTS mobile_normalized VARCHAR(16) NULL');
         $db->query('ALTER TABLE engage_leads ADD COLUMN IF NOT EXISTS attribution JSONB NULL');
+        $db->query('ALTER TABLE engage_leads ADD COLUMN IF NOT EXISTS converted_at TIMESTAMPTZ NULL');
         $db->query("DO $$ BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'engage_leads_seller_fk') THEN
                 ALTER TABLE engage_leads ADD CONSTRAINT engage_leads_seller_fk
@@ -286,6 +290,7 @@ class CreateSellerDomain extends Migration
             ['seller_login_otp_enabled', false, 'Ask sellers for an emailed one-time code after their password. Only applies when a seller mailer is configured (ENGAGE_SELLER_MAILER).'],
             ['seller_lead_protection_days', 90, 'Days a seller-registered (or referred) lead stays protected for that seller.'],
             ['commission_default_hold_days', 15, 'Default hold (refund / clawback window) for new commission plans, in days.'],
+            ['seller_payout_min_threshold', '500.00', 'Minimum weekly payout per seller in INR (below it rolls over). Shown on the seller dashboard; used by weekly payouts once they are built.'],
         ];
         foreach ($settings as [$key, $value, $desc]) {
             $db->query('INSERT INTO engage_settings (key, value_json, description, created_at, updated_at)
@@ -297,13 +302,13 @@ class CreateSellerDomain extends Migration
     public function down(): void
     {
         $db = $this->db;
-        $db->query("DELETE FROM engage_settings WHERE key IN ('seller_login_otp_enabled','seller_lead_protection_days','commission_default_hold_days')");
+        $db->query("DELETE FROM engage_settings WHERE key IN ('seller_login_otp_enabled','seller_lead_protection_days','commission_default_hold_days','seller_payout_min_threshold')");
         $db->query("DELETE FROM engage_lead_sources WHERE code IN ('seller_request','seller')");
         foreach (['engage_idempotency_keys', 'engage_seller_lead_registrations'] as $t) {
             $db->query("DROP TABLE IF EXISTS {$t}");
         }
         $db->query('ALTER TABLE engage_leads DROP CONSTRAINT IF EXISTS engage_leads_seller_fk');
-        foreach (['seller_id', 'seller_attribution', 'seller_attributed_at', 'seller_protection_expires_at', 'reach_lead_id', 'mobile_normalized', 'attribution'] as $c) {
+        foreach (['seller_id', 'seller_attribution', 'seller_attributed_at', 'seller_protection_expires_at', 'reach_lead_id', 'mobile_normalized', 'attribution', 'converted_at'] as $c) {
             $db->query("ALTER TABLE engage_leads DROP COLUMN IF EXISTS {$c}");
         }
         $db->query('DROP INDEX IF EXISTS idx_engage_leads_email_lower');

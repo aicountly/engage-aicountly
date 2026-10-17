@@ -74,7 +74,7 @@ class SellersController extends BaseApiController
 
     public function kycDocument($id = null, $docId = null)
     {
-        $r = Services::sellerKyc()->read((int) $id, (int) $docId);
+        $r = Services::sellerKyc()->read((int) $id, (string) $docId);
         if ($r['status'] !== 200) {
             return $this->fail((string) $r['error'], $r['status']);
         }

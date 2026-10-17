@@ -78,7 +78,7 @@ class SellerLeadService
         if ($mobile !== '' && (LeadsModel::normaliseMobile($mobile) === null || strlen(preg_replace('/\D+/', '', $mobile) ?? '') > 15)) {
             $e['mobile'] = 'Enter a valid mobile number.';
         }
-        foreach (['organization' => 191, 'city' => 96, 'notes' => 2000] as $f => $max) {
+        foreach (['company' => 191, 'organization' => 191, 'city' => 96, 'state' => 96, 'interest' => 191, 'notes' => 2000] as $f => $max) {
             if (mb_strlen((string) ($in[$f] ?? '')) > $max) {
                 $e[$f] = "Keep this under {$max} characters.";
             }
@@ -94,17 +94,19 @@ class SellerLeadService
     /** @return array<string,mixed> */
     public function register(array $seller, array $in): array
     {
-        if (! in_array($seller['status'], self::ATTRIBUTABLE_STATUSES, true)) {
-            return ['status' => 403, 'code' => 'agreement_required', 'error' => 'Accept the seller agreement before registering leads.'];
+        if ($block = $this->accounts->writeBlock($seller)) {
+            return $block;
         }
+        if (($in['consent_confirmed'] ?? true) !== true) {
+            return ['status' => 422, 'code' => 'validation_failed', 'error' => 'Confirm that the contact agreed to be contacted.', 'details' => ['consent_confirmed' => 'Required.']];
+        }
+        $in['company'] ??= $in['organization'] ?? null;
         $errors = self::validate($in);
+        // `interest` is free text from the portal; a product code / name in it links the product.
+        $interest = trim((string) ($in['interest'] ?? $in['interested_product'] ?? ''));
         $product = null;
-        $productCode = trim((string) ($in['interested_product'] ?? ''));
-        if ($productCode !== '') {
-            $product = (new ProductsModel())->where('code', $productCode)->first();
-            if (! $product) {
-                $errors['interested_product'] = 'Unknown product.';
-            }
+        if ($interest !== '') {
+            $product = (new ProductsModel())->groupStart()->where('LOWER(code)', strtolower($interest))->orWhere('LOWER(name)', strtolower($interest))->groupEnd()->first();
         }
         if ($errors !== []) {
             return ['status' => 422, 'code' => 'validation_failed', 'error' => 'Please correct the highlighted fields.', 'details' => $errors];
@@ -125,25 +127,27 @@ class SellerLeadService
             if (self::isProtected($existing)) {
                 if ((int) $existing['seller_id'] === (int) $seller['id']) {
                     $log('rejected_duplicate', (int) $existing['id'], 'already registered by this seller');
+                    $on = self::istDate((string) ($existing['seller_attributed_at'] ?? $existing['created_at']), 'j M Y');
+                    $until = self::istDate((string) $existing['seller_protection_expires_at'], 'j M Y');
 
-                    return ['status' => 409, 'code' => 'duplicate_lead', 'error' => 'You have already registered this contact (lead ' . $existing['lead_code'] . ', protected until '
-                        . gmdate('d M Y', (int) strtotime((string) $existing['seller_protection_expires_at'])) . ').',
-                        'details' => ['lead_code' => $existing['lead_code']]];
+                    return ['status' => 409, 'code' => 'duplicate_lead',
+                        'error' => "You registered this lead on {$on}; it is protected for you until {$until}.",
+                        'details' => ['lead_code' => $existing['lead_code'], 'protected_until' => self::istDate((string) $existing['seller_protection_expires_at'])]];
                 }
                 $log('rejected_protected', (int) $existing['id'], 'protected for another seller');
 
-                return ['status' => 409, 'code' => 'lead_protected', 'error' => 'This contact is already registered by another AICOUNTLY seller, so it cannot be registered again right now.'];
+                return self::protectedAnswer();
             }
             if (self::isClosedWon($existing)) {
                 $log('rejected_customer', (int) $existing['id'], 'already a customer');
 
-                return ['status' => 409, 'code' => 'duplicate_lead', 'error' => 'This contact is already an AICOUNTLY customer, so it cannot be registered as a new lead.'];
+                return self::protectedAnswer();
             }
             $recent = max((int) strtotime((string) $existing['created_at']), (int) strtotime((string) ($existing['updated_at'] ?? $existing['created_at'])));
             if ($recent > time() - $days * 86400) {
                 $log('rejected_duplicate', (int) $existing['id'], "matched by {$matchedOn}; already in the pipeline");
 
-                return ['status' => 409, 'code' => 'duplicate_lead', 'error' => 'This contact is already in AICOUNTLY\'s sales pipeline, so it cannot be registered as a new lead.'];
+                return self::protectedAnswer();
             }
             // Stale, unprotected, open: the seller claims it.
             $until = Clock::at(time() + $days * 86400);
@@ -154,7 +158,7 @@ class SellerLeadService
             $log('claimed', (int) $existing['id'], "matched by {$matchedOn}; stale lead claimed", $until);
             Services::sellerAuth()->audit('seller.lead_claimed', $seller, ['lead_id' => (int) $existing['id']]);
 
-            return ['status' => 201, 'data' => ['lead' => self::sellerView($leads->find((int) $existing['id'])), 'result' => 'claimed']];
+            return ['status' => 201, 'data' => ['lead' => self::registeredView($leads->find((int) $existing['id'])), 'result' => 'claimed']];
         }
 
         $until = Clock::at(time() + $days * 86400);
@@ -162,8 +166,8 @@ class SellerLeadService
         $leadId = (int) $leads->insert([
             'lead_code'             => $leads->generateLeadCode(),
             'name'                  => trim((string) $in['name']),
-            'organization'          => self::str($in['organization'] ?? null),
-            'email'                 => $email !== '' ? $email : null,
+            'organization'          => self::str($in['company'] ?? null),
+            'email'                 => $email !== '' ? strtolower($email) : null,
             'mobile'                => $mobile !== '' ? $mobile : null,
             'source_portal'         => 'seller.aicountly.com',
             'source_campaign'       => $seller['seller_code'],
@@ -171,6 +175,7 @@ class SellerLeadService
             'lead_source_id'        => $source['id'] ?? null,
             'interested_product'    => $product['code'] ?? null,
             'interested_product_id' => $product['id'] ?? null,
+            'subscription_interest' => $interest !== '' ? mb_substr($interest, 0, 191) : null,
             'expected_users'        => isset($in['expected_users']) && $in['expected_users'] !== '' ? (int) $in['expected_users'] : null,
             'notes'                 => self::str($in['notes'] ?? null),
             'stage'                 => 'new',
@@ -180,7 +185,8 @@ class SellerLeadService
             'seller_attribution'    => 'registration',
             'seller_attributed_at'  => Clock::now(),
             'seller_protection_expires_at' => $until,
-            'metadata'              => ['seller_registration' => ['city' => self::str($in['city'] ?? null)]],
+            'metadata'              => ['seller_registration' => ['city' => self::str($in['city'] ?? null), 'state' => self::str($in['state'] ?? null),
+                                        'consent_confirmed' => ($in['consent_confirmed'] ?? null) === true]],
         ], true);
         (new LeadActivitiesModel())->record($leadId, 'seller_registration', 'Registered by seller ' . $seller['seller_code'], null, [
             'author_kind' => 'seller', 'metadata' => ['seller_id' => (int) $seller['id'], 'protected_until' => $until],
@@ -188,7 +194,7 @@ class SellerLeadService
         $log('accepted', $leadId, null, $until);
         Services::sellerAuth()->audit('seller.lead_registered', $seller, ['lead_id' => $leadId]);
 
-        return ['status' => 201, 'data' => ['lead' => self::sellerView($leads->find($leadId)), 'result' => 'created']];
+        return ['status' => 201, 'data' => ['lead' => self::registeredView($leads->find($leadId)), 'result' => 'created']];
     }
 
     private function attach(int $leadId, int $sellerId, string $how, string $until): void
@@ -233,34 +239,79 @@ class SellerLeadService
         return ['status' => 'attributed', 'seller_code' => $seller['seller_code']];
     }
 
-    public static function sellerStatus(array $lead): string
+    private static function protectedAnswer(): array
     {
-        return match (true) {
-            self::isClosedWon($lead)                       => 'converted',
-            ($lead['stage'] ?? '') === 'lost'              => 'lost',
-            ($lead['stage'] ?? '') === 'not_relevant'      => 'closed',
-            ($lead['stage'] ?? 'new') === 'new'            => 'registered',
-            default                                        => 'in_progress',
-        };
+        return ['status' => 409, 'code' => 'lead_protected', 'error' => 'This contact is already registered with AICOUNTLY.'];
     }
 
-    /** What a seller may see about one of their leads. @param array<string,mixed> $l */
+    /** IST calendar date of a timestamp (YYYY-MM-DD by default). */
+    public static function istDate(?string $ts, string $format = 'Y-m-d'): ?string
+    {
+        if ($ts === null || $ts === '' || ($t = strtotime($ts)) === false) {
+            return null;
+        }
+
+        return (new \DateTimeImmutable('@' . $t))->setTimezone(new \DateTimeZone('Asia/Kolkata'))->format($format);
+    }
+
+    /** Stage → seller-portal status (registered | contacted | qualified | demo | proposal_sent | converted | lost | expired). */
+    public const STATUS_STAGES = [
+        'registered'    => ['new'],
+        'contacted'     => ['contacted', 'nurture'],
+        'qualified'     => ['qualified'],
+        'demo'          => ['demo_required'],
+        'proposal_sent' => ['proposal_required', 'proposal_sent', 'negotiation', 'waiting_for_approval'],
+        'converted'     => ['converted'],
+        'lost'          => ['lost', 'not_relevant'],
+    ];
+
+    public static function sellerStatus(array $lead): string
+    {
+        if (self::isClosedWon($lead)) {
+            return 'converted';
+        }
+        $stage = (string) ($lead['stage'] ?? 'new');
+        if (in_array($stage, self::STATUS_STAGES['lost'], true) || ($lead['sales_status'] ?? '') === 'lost') {
+            return 'lost';
+        }
+        if (! empty($lead['seller_protection_expires_at']) && ! self::isProtected($lead)) {
+            return 'expired';
+        }
+        foreach (self::STATUS_STAGES as $status => $stages) {
+            if (in_array($stage, $stages, true)) {
+                return $status;
+            }
+        }
+
+        return 'contacted';
+    }
+
+    /** POST leads answer. @param array<string,mixed> $l */
+    public static function registeredView(array $l): array
+    {
+        return [
+            'lead_code'       => $l['lead_code'],
+            'name'            => $l['name'],
+            'status'          => self::sellerStatus($l),
+            'registered_at'   => Clock::iso($l['seller_attributed_at'] ?? $l['created_at']),
+            'protected_until' => self::istDate($l['seller_protection_expires_at'] ?? null),
+        ];
+    }
+
+    /** GET leads item. @param array<string,mixed> $l */
     public static function sellerView(array $l): array
     {
         return [
-            'lead_code'          => $l['lead_code'],
-            'name'               => $l['name'],
-            'organization'       => $l['organization'],
-            'email'              => $l['email'],
-            'mobile'             => $l['mobile'],
-            'interested_product' => $l['interested_product'],
-            'status'             => self::sellerStatus($l),
-            'stage'              => $l['stage'],
-            'attribution'        => $l['seller_attribution'],
-            'protected_until'    => Clock::iso($l['seller_protection_expires_at'] ?? null),
-            'protection_active'  => self::isProtected($l),
-            'registered_at'      => Clock::iso($l['seller_attributed_at'] ?? $l['created_at']),
-            'updated_at'         => Clock::iso($l['updated_at'] ?? null),
+            'lead_code'       => $l['lead_code'],
+            'name'            => $l['name'],
+            'company'         => $l['organization'],
+            'email_masked'    => SellerAccountService::maskEmail($l['email'] ?? null),
+            'mobile_masked'   => SellerAccountService::maskMobile($l['mobile'] ?? $l['whatsapp'] ?? null),
+            'status'          => self::sellerStatus($l),
+            'registered_at'   => Clock::iso($l['seller_attributed_at'] ?? $l['created_at']),
+            'protected_until' => self::istDate($l['seller_protection_expires_at'] ?? null),
+            'converted_at'    => Clock::iso($l['converted_at'] ?? null),
+            'source'          => ($l['seller_attribution'] ?? '') === 'referral' ? 'referral_link' : 'registered',
         ];
     }
 
@@ -269,11 +320,15 @@ class SellerLeadService
     {
         $b = $this->accounts->db()->table('engage_leads')->where('seller_id', (int) $seller['id']);
         $status = (string) ($q['status'] ?? '');
-        $map = ['registered' => ['new'], 'converted' => ['converted'], 'lost' => ['lost'], 'closed' => ['not_relevant']];
-        if (isset($map[$status])) {
-            $b->whereIn('stage', $map[$status]);
-        } elseif ($status === 'in_progress') {
-            $b->whereNotIn('stage', ['new', 'converted', 'lost', 'not_relevant']);
+        if ($status === 'converted') {
+            $b->groupStart()->where('stage', 'converted')->orWhere('sales_status', 'won')->groupEnd();
+        } elseif ($status === 'lost') {
+            $b->whereIn('stage', self::STATUS_STAGES['lost']);
+        } elseif ($status === 'expired') {
+            $b->whereNotIn('stage', ['converted', 'lost', 'not_relevant'])->where('seller_protection_expires_at <=', Clock::now());
+        } elseif (isset(self::STATUS_STAGES[$status])) {
+            $b->whereIn('stage', self::STATUS_STAGES[$status])->groupStart()
+                ->where('seller_protection_expires_at >', Clock::now())->orWhere('seller_protection_expires_at', null)->groupEnd();
         }
         if (! empty($q['q'])) {
             $b->groupStart()->like('name', (string) $q['q'], 'both', null, true)->orLike('organization', (string) $q['q'], 'both', null, true)
