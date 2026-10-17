@@ -16,6 +16,17 @@ use App\Services\RenewalReminderService;
 use App\Services\SalesBotService;
 use App\Services\StaffAccessService;
 use App\Services\WorkerClient;
+use App\Services\LeadLifecycleService;
+use App\Services\ReachOutcomeOutbox;
+use App\Services\Seller\CommissionService;
+use App\Services\Seller\SellerAccountService;
+use App\Services\Seller\SellerAdminService;
+use App\Services\Seller\SellerAgreementService;
+use App\Services\Seller\SellerApplicationService;
+use App\Services\Seller\SellerAuthService;
+use App\Services\Seller\SellerKycService;
+use App\Services\Seller\SellerLeadService;
+use App\Services\Seller\SellerMailer;
 use CodeIgniter\Config\BaseService;
 
 class Services extends BaseService
@@ -130,5 +141,95 @@ class Services extends BaseService
             return static::getSharedInstance('staffAccess') ?? static::staffAccess(false);
         }
         return new StaffAccessService();
+    }
+
+    // Seller programme (docs/SELLER_PROGRAM.md).
+
+    public static function sellerAccounts(bool $getShared = true): SellerAccountService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerAccounts') ?? static::sellerAccounts(false);
+        }
+        return new SellerAccountService();
+    }
+
+    public static function sellerMailer(bool $getShared = true): SellerMailer
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerMailer') ?? static::sellerMailer(false);
+        }
+        return new SellerMailer();
+    }
+
+    public static function sellerAuth(bool $getShared = true): SellerAuthService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerAuth') ?? static::sellerAuth(false);
+        }
+        return new SellerAuthService();
+    }
+
+    public static function sellerApplications(bool $getShared = true): SellerApplicationService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerApplications') ?? static::sellerApplications(false);
+        }
+        return new SellerApplicationService();
+    }
+
+    public static function sellerAdmin(bool $getShared = true): SellerAdminService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerAdmin') ?? static::sellerAdmin(false);
+        }
+        return new SellerAdminService();
+    }
+
+    public static function sellerKyc(bool $getShared = true): SellerKycService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerKyc') ?? static::sellerKyc(false);
+        }
+        return new SellerKycService();
+    }
+
+    public static function sellerLeads(bool $getShared = true): SellerLeadService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerLeads') ?? static::sellerLeads(false);
+        }
+        return new SellerLeadService();
+    }
+
+    public static function sellerAgreements(bool $getShared = true): SellerAgreementService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerAgreements') ?? static::sellerAgreements(false);
+        }
+        return new SellerAgreementService();
+    }
+
+    public static function commissions(bool $getShared = true): CommissionService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('commissions') ?? static::commissions(false);
+        }
+        return new CommissionService();
+    }
+
+    public static function reachOutcomes(bool $getShared = true): ReachOutcomeOutbox
+    {
+        if ($getShared) {
+            return static::getSharedInstance('reachOutcomes') ?? static::reachOutcomes(false);
+        }
+        return new ReachOutcomeOutbox();
+    }
+
+    public static function leadLifecycle(bool $getShared = true): LeadLifecycleService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('leadLifecycle') ?? static::leadLifecycle(false);
+        }
+        return new LeadLifecycleService();
     }
 }

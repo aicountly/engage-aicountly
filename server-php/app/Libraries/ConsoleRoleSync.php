@@ -23,11 +23,24 @@ namespace App\Libraries;
  */
 final class ConsoleRoleSync
 {
-    /** Engage role catalog (Console app_code `engage`), highest privilege first. */
-    public const CATALOG = ['super_admin', 'member'];
+    /**
+     * Engage role catalog (Console app_code `engage`), highest privilege first:
+     * super_admin (100), sales_manager (70), seller_manager (60), kyc_reviewer (40), member (10).
+     * Migration 2026-10-17-000090 upserts the engage_roles rows.
+     */
+    public const CATALOG = ['super_admin', 'sales_manager', 'seller_manager', 'kyc_reviewer', 'member'];
 
-    public const SUPER_ADMIN = 'super_admin';
-    public const MEMBER      = 'member';
+    public const SUPER_ADMIN    = 'super_admin';
+    public const SALES_MANAGER  = 'sales_manager';
+    public const SELLER_MANAGER = 'seller_manager';
+    public const KYC_REVIEWER   = 'kyc_reviewer';
+    public const MEMBER         = 'member';
+
+    /** Role gates (Routes.php `role:` filter arguments), per the seller contract. */
+    public const SELLER_ADMIN_ROLES   = [self::SUPER_ADMIN, self::SELLER_MANAGER];
+    public const KYC_REVIEW_ROLES     = [self::SUPER_ADMIN, self::SELLER_MANAGER, self::KYC_REVIEWER];
+    public const SELLER_VIEW_ROLES    = [self::SUPER_ADMIN, self::SALES_MANAGER, self::SELLER_MANAGER, self::KYC_REVIEWER];
+    public const COMMISSION_ROLES     = [self::SUPER_ADMIN, self::SALES_MANAGER];
 
     public const DENY_MESSAGE    = 'Access not assigned. Ask a Console superadmin to assign you a role.';
     public const REVOKED_MESSAGE = 'Your Engage access was removed in Console. Ask a Console superadmin to assign you a role.';

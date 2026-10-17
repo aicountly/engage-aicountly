@@ -27,6 +27,8 @@ $routes->get('/health', static function () {
     $reachOk   = (string) env('REACH_INBOUND_TOKEN', '') !== '';
     $svcKeyOk  = (string) env('ENGAGE_SERVICE_KEY', '') !== '';
     $partnerOk = (string) env('PARTNER_PORTAL_API_URL', '') !== '' && (string) env('PARTNER_PORTAL_ADMIN_KEY', '') !== '';
+    $sellerKeyOk = strlen(trim((string) env('SELLER_PORTAL_KEY', ''))) >= 32;
+    $dataKeyOk = (new \App\Libraries\Seller\SellerCrypto())->isConfigured();
 
     $dbAlive = false;
     if ($dbOk) {
@@ -56,6 +58,11 @@ $routes->get('/health', static function () {
             'reach_inbound_token' => $reachOk ? 'ok' : 'REACH_INBOUND_TOKEN not set',
             'console_inbound_key' => $svcKeyOk ? 'ok' : 'ENGAGE_SERVICE_KEY not set',
             'partner_portal'      => $partnerOk ? 'ok' : 'PARTNER_PORTAL_API_URL / PARTNER_PORTAL_ADMIN_KEY not configured — Partner Master screen will fail',
+            'seller_portal_key'   => $sellerKeyOk ? 'ok' : 'SELLER_PORTAL_KEY missing or shorter than 32 characters — seller.aicountly.com gets 503',
+            'seller_data_key'     => $dataKeyOk ? 'ok' : 'ENGAGE_DATA_KEY not set — seller KYC cannot be stored (503)',
+            'seller_mailer'       => \Config\Services::sellerMailer()->status(),
+            'reach_outcomes'      => \Config\Services::reachOutcomes()->status(),
+            'seller_payouts'      => 'pending — weekly payouts are not built yet (docs/SELLER_PROGRAM.md)',
         ],
     ]);
 });
@@ -76,6 +83,45 @@ $routes->group('v1', static function ($routes) {
         $routes->get('reports/(:num)',      'Portal\\ReportsController::show/$1');
         $routes->put('mode',                'Portal\\ModeController::update');
         $routes->post('approval-callback',  'Portal\\ApprovalCallbackController::store');
+    });
+
+    // seller.aicountly.com BFF → Engage (docs/SELLER_PROGRAM.md). Every route: X-Seller-Portal-Key
+    // (SELLER_PORTAL_KEY); signed-in routes also X-Seller-Session. Idempotency-Key replays writes.
+    $routes->group('seller-portal', ['filter' => 'seller-portal-key'], static function ($routes) {
+        $P = 'SellerPortal\\';
+        $idem    = ['filter' => 'idempotency'];
+        $session = ['filter' => 'seller-session'];
+        $sessionIdem = ['filter' => ['seller-session', 'idempotency']];
+
+        $routes->post('applications',          $P . 'ApplicationsController::create', $idem);
+        $routes->post('auth/login',            $P . 'AuthController::login');
+        $routes->post('auth/login/otp',        $P . 'AuthController::otp');
+        $routes->get('auth/activation',        $P . 'AuthController::activation');
+        $routes->post('auth/activate',         $P . 'AuthController::activate');
+        $routes->post('auth/forgot-password',  $P . 'AuthController::forgot');
+        $routes->get('auth/reset-password',    $P . 'AuthController::resetCheck');
+        $routes->post('auth/reset-password',   $P . 'AuthController::reset');
+        $routes->get('agreement',              $P . 'AccountController::agreement');
+
+        $routes->post('auth/logout',           $P . 'AuthController::logout', $session);
+        $routes->post('auth/change-password',  $P . 'AuthController::changePassword', $session);
+        $routes->get('me',                     $P . 'AccountController::me', $session);
+        $routes->get('profile',                $P . 'AccountController::profile', $session);
+        $routes->put('profile',                $P . 'AccountController::updateProfile', $sessionIdem);
+        $routes->post('agreement/accept',      $P . 'AccountController::acceptAgreement', $sessionIdem);
+        $routes->get('dashboard',              $P . 'AccountController::dashboard', $session);
+        $routes->get('referral',               $P . 'AccountController::referral', $session);
+        $routes->get('kyc',                    $P . 'KycController::show', $session);
+        $routes->put('kyc',                    $P . 'KycController::submit', $sessionIdem);
+        $routes->post('kyc',                   $P . 'KycController::submit', $sessionIdem);
+        $routes->get('kyc/documents',          $P . 'KycController::documents', $session);
+        $routes->post('kyc/documents',         $P . 'KycController::upload', $sessionIdem);
+        $routes->get('kyc/documents/(:num)',   $P . 'KycController::download/$1', $session);
+        $routes->get('leads',                  $P . 'LeadsController::index', $session);
+        $routes->post('leads',                 $P . 'LeadsController::create', $sessionIdem);
+        $routes->get('leads/(:segment)',       $P . 'LeadsController::show/$1', $session);
+        $routes->get('commissions',            $P . 'EarningsController::commissions', $session);
+        $routes->get('payouts',                $P . 'EarningsController::payouts', $session);
     });
 
     // Internal Reach ingest — validated by X-Portal-Token header.
@@ -114,12 +160,62 @@ $routes->group('v1', static function ($routes) {
         $routes->get('pipeline/summary', 'Api\\V1\\PipelineController::summary');
 
         // Partner Master — Engage owns every partner write; partner.aicountly.com only reads.
-        $routes->post('partners/(:num)/activate',   'Api\\V1\\PartnersController::activate/$1');
-        $routes->post('partners/(:num)/deactivate', 'Api\\V1\\PartnersController::deactivate/$1');
-        $routes->post('partners/(:num)/password',   'Api\\V1\\PartnersController::setPassword/$1');
-        $routes->post('partners/(:num)/unlock',     'Api\\V1\\PartnersController::unlock/$1');
-        $routes->post('partners/(:num)/restore',    'Api\\V1\\PartnersController::restore/$1');
-        $routes->resource('partners', ['controller' => 'Api\\V1\\PartnersController']);
+        // Engage Administrator only (it was open to every signed-in role before the seller programme).
+        $partnerOnly = ['filter' => 'role:super_admin'];
+        $routes->post('partners/(:num)/activate',   'Api\\V1\\PartnersController::activate/$1', $partnerOnly);
+        $routes->post('partners/(:num)/deactivate', 'Api\\V1\\PartnersController::deactivate/$1', $partnerOnly);
+        $routes->post('partners/(:num)/password',   'Api\\V1\\PartnersController::setPassword/$1', $partnerOnly);
+        $routes->post('partners/(:num)/unlock',     'Api\\V1\\PartnersController::unlock/$1', $partnerOnly);
+        $routes->post('partners/(:num)/restore',    'Api\\V1\\PartnersController::restore/$1', $partnerOnly);
+        $routes->resource('partners', ['controller' => 'Api\\V1\\PartnersController', 'filter' => 'role:super_admin']);
+
+        // Seller programme (docs/SELLER_PROGRAM.md). Roles come from Console (ConsoleRoleSync::CATALOG).
+        $sellerView  = ['filter' => 'role:super_admin,sales_manager,seller_manager,kyc_reviewer'];
+        $sellerAdmin = ['filter' => 'role:super_admin,seller_manager'];
+        $kycReview   = ['filter' => 'role:super_admin,seller_manager,kyc_reviewer'];
+        $commission  = ['filter' => 'role:super_admin,sales_manager'];
+        $S = 'Api\\V1\\Sellers\\';
+        $routes->get('seller-applications',                 $S . 'SellerApplicationsController::index', $sellerView);
+        $routes->get('seller-applications/(:num)',          $S . 'SellerApplicationsController::show/$1', $sellerView);
+        $routes->post('seller-applications/(:num)/review',  $S . 'SellerApplicationsController::review/$1', $sellerAdmin);
+        $routes->post('seller-applications/(:num)/approve', $S . 'SellerApplicationsController::approve/$1', $sellerAdmin);
+        $routes->post('seller-applications/(:num)/reject',  $S . 'SellerApplicationsController::reject/$1', $sellerAdmin);
+
+        $routes->get('sellers',                              $S . 'SellersController::index', $sellerView);
+        $routes->get('sellers/(:num)',                       $S . 'SellersController::show/$1', $sellerView);
+        $routes->post('sellers/(:num)/suspend',              $S . 'SellersController::suspend/$1', $sellerAdmin);
+        $routes->post('sellers/(:num)/reactivate',           $S . 'SellersController::reactivate/$1', $sellerAdmin);
+        $routes->post('sellers/(:num)/terminate',            $S . 'SellersController::terminate/$1', $sellerAdmin);
+        $routes->post('sellers/(:num)/resend-activation',    $S . 'SellersController::resendActivation/$1', $sellerAdmin);
+        $routes->post('sellers/(:num)/reset-password',       $S . 'SellersController::resetPassword/$1', $sellerAdmin);
+        $routes->post('sellers/(:num)/unlock',               $S . 'SellersController::unlock/$1', $sellerAdmin);
+        $routes->get('sellers/(:num)/kyc',                   $S . 'SellersController::kyc/$1', $kycReview);
+        $routes->get('sellers/(:num)/kyc/documents/(:num)',  $S . 'SellersController::kycDocument/$1/$2', $kycReview);
+        $routes->post('sellers/(:num)/kyc/verify',           $S . 'SellersController::kycVerify/$1', $kycReview);
+        $routes->post('sellers/(:num)/kyc/reject',           $S . 'SellersController::kycReject/$1', $kycReview);
+        $routes->post('sellers/(:num)/kyc/reveal',           $S . 'SellersController::kycReveal/$1', $kycReview);
+        $routes->get('seller-kyc',                           $S . 'SellersController::kycQueue', $kycReview);
+
+        $routes->get('seller-agreements',                    $S . 'SellerAgreementsController::index', $sellerView);
+        $routes->post('seller-agreements',                   $S . 'SellerAgreementsController::create', $sellerAdmin);
+        $routes->put('seller-agreements/(:num)',             $S . 'SellerAgreementsController::update/$1', $sellerAdmin);
+        $routes->post('seller-agreements/(:num)/publish',    $S . 'SellerAgreementsController::publish/$1', $sellerAdmin);
+
+        $routes->get('commission-plans',                     $S . 'CommissionPlansController::index', $sellerView);
+        $routes->get('commission-plans/(:num)',              $S . 'CommissionPlansController::show/$1', $sellerView);
+        $routes->post('commission-plans',                    $S . 'CommissionPlansController::create', $commission);
+        $routes->put('commission-plans/(:num)',              $S . 'CommissionPlansController::update/$1', $commission);
+        $routes->post('commission-plans/(:num)/publish',     $S . 'CommissionPlansController::publish/$1', $commission);
+        $routes->post('commission-plans/(:num)/retire',      $S . 'CommissionPlansController::retire/$1', $commission);
+        $routes->post('commission-plans/(:num)/new-version', $S . 'CommissionPlansController::newVersion/$1', $commission);
+
+        $routes->get('commission-entries',                   $S . 'CommissionEntriesController::index', $sellerView);
+        $routes->post('commission-entries/(:num)/reverse',   $S . 'CommissionEntriesController::reverse/$1', $commission);
+        $routes->get('leads/(:num)/payments',                $S . 'CommissionEntriesController::payments/$1');
+        $routes->post('leads/(:num)/payments',               $S . 'CommissionEntriesController::confirmPayment/$1', $commission);
+        $routes->post('lead-payments/(:num)/refund',         $S . 'CommissionEntriesController::refund/$1', $commission);
+        $routes->post('leads/(:num)/seller',                 $S . 'CommissionEntriesController::attribute/$1', ['filter' => 'role:super_admin,sales_manager,seller_manager']);
+        $routes->get('status/reach-outcomes',                $S . 'CommissionEntriesController::outboxStatus');
 
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);

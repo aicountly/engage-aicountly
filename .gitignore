@@ -12,3 +12,5 @@ server-php/vendor/
 web/node_modules/
 web/dist/
 server-php/writable/.phpunit.cache/
+server-php/writable/seller-kyc/
+server-php/writable/seller-kyc-test/

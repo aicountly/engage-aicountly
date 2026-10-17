@@ -37,6 +37,17 @@ abstract class BaseApiController extends Controller
         return $this->response->setStatusCode($status)->setJSON($body);
     }
 
+    /** Relay a service result: ['status' => 2xx, 'data' => ...] or ['status' => 4xx/5xx, 'error' => ..., 'details' => ?]. */
+    protected function respondWith(array $r): ResponseInterface
+    {
+        $status = (int) ($r['status'] ?? 500);
+        if ($status >= 200 && $status < 300) {
+            return $this->ok($r['data'] ?? [], $status);
+        }
+
+        return $this->fail((string) ($r['error'] ?? 'Request failed.'), $status, $r['details'] ?? null);
+    }
+
     protected function audit(string $event, array $opts = []): void
     {
         Services::auditService()->log($event, $opts);

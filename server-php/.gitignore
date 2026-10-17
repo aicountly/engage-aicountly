@@ -5,3 +5,5 @@ writable/logs/*
 writable/session/*
 writable/uploads/*
 !writable/**/.gitkeep
+writable/seller-kyc/
+writable/seller-kyc-test/
