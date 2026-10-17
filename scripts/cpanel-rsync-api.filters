@@ -14,3 +14,5 @@ P writable/cache/
 P writable/logs/
 P writable/session/
 P writable/uploads/
+# Seller KYC documents (encrypted) when ENGAGE_SELLER_DOCS_PATH is left at its default
+P writable/seller-kyc/

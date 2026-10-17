@@ -52,6 +52,20 @@ echo 'ENGAGE_SERVICE_KEY=' . ($svcKey === '' ? '(EMPTY — Console callbacks wil
 echo 'CONSOLE_INBOUND_KEY=' . ($consoleKey === '' ? '(EMPTY — outbound audit will 401 at Console)' : '*** (' . strlen($consoleKey) . " chars)") . "\n";
 echo 'REACH_INBOUND_TOKEN=' . ($reachKey === '' ? '(EMPTY — Reach ingest will 401)' : '*** (' . strlen($reachKey) . " chars)") . "\n";
 
+echo "\n--- Seller programme (docs/SELLER_PROGRAM.md) ---\n";
+foreach ([
+    'SELLER_PORTAL_KEY'   => [32, 'seller.aicountly.com gets 503'],
+    'ENGAGE_DATA_KEY'     => [64, 'seller KYC cannot be stored (503); 64 hex chars or base64 of 32 bytes'],
+    'REACH_OUTCOME_TOKEN' => [32, 'lead outcomes stay queued, not sent to Reach'],
+] as $k => [$min, $why]) {
+    $v = $read($k);
+    echo $k . '=' . ($v === '' ? "(EMPTY — {$why})" : '*** (' . strlen($v) . ' chars' . (strlen($v) < $min && $k !== 'ENGAGE_DATA_KEY' ? ', TOO SHORT' : '') . ')') . "\n";
+}
+foreach (['REACH_API_BASE_URL', 'ENGAGE_SELLER_MAILER', 'ENGAGE_SELLER_DOCS_PATH', 'SELLER_PORTAL_BASE_URL'] as $k) {
+    $v = $read($k);
+    echo $k . '=' . ($v === '' ? '(empty — see .env.example)' : $v) . "\n";
+}
+
 echo "\n--- ENGAGE_DB_* (from .env) ---\n";
 foreach ($vars as $key => $val) {
     if ($key === 'ENGAGE_DB_PASSWORD') {
