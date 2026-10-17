@@ -193,7 +193,7 @@ $routes->group('v1', static function ($routes) {
         $routes->post('sellers/(:num)/reset-password',       $S . 'SellersController::resetPassword/$1', $sellerAdmin);
         $routes->post('sellers/(:num)/unlock',               $S . 'SellersController::unlock/$1', $sellerAdmin);
         $routes->get('sellers/(:num)/kyc',                   $S . 'SellersController::kyc/$1', $kycReview);
-        $routes->get('sellers/(:num)/kyc/documents/(:num)',  $S . 'SellersController::kycDocument/$1/$2', $kycReview);
+        $routes->get('sellers/(:num)/kyc/documents/(:segment)', $S . 'SellersController::kycDocument/$1/$2', $kycReview);
         $routes->post('sellers/(:num)/kyc/verify',           $S . 'SellersController::kycVerify/$1', $kycReview);
         $routes->post('sellers/(:num)/kyc/reject',           $S . 'SellersController::kycReject/$1', $kycReview);
         $routes->post('sellers/(:num)/kyc/reveal',           $S . 'SellersController::kycReveal/$1', $kycReview);

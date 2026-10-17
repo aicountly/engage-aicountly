@@ -171,10 +171,12 @@ class LeadsController extends BaseApiController
         foreach ($stages as $s) {
             if ($s['code'] === $stage) {
                 $updates['conversion_probability'] = (int) $s['default_probability'];
-                if (! empty($s['is_won'])) {
+                // Postgres booleans arrive as 't' / 'f' strings: '! empty()' was true for 'f' too, so every
+                // stage move (converted included) used to set sales_status = 'lost'.
+                if (self::pgBool($s['is_won'] ?? false)) {
                     $updates['sales_status'] = 'won';
                 }
-                if (! empty($s['is_lost'])) {
+                if (self::pgBool($s['is_lost'] ?? false)) {
                     $updates['sales_status'] = 'lost';
                 }
                 break;
@@ -219,5 +221,10 @@ class LeadsController extends BaseApiController
         $this->m->update((int) $id, ['last_contacted_at' => date('Y-m-d H:i:s')]);
         $this->audit('lead_note', ['subject_kind' => 'lead', 'subject_id' => $id]);
         return $this->ok(['ok' => true]);
+    }
+
+    private static function pgBool(mixed $v): bool
+    {
+        return $v === true || $v === 1 || in_array($v, ['t', 'true', '1', 1], true);
     }
 }
