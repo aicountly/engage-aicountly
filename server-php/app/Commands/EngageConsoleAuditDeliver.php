@@ -12,8 +12,8 @@ use CodeIgniter\CLI\CLI;
  * yet (engage_console_audit_outbox, pending, due) to POST {CONSOLE_API_URL}/portal/audit in
  * batches of 100 (back-off 2, 4, 8 … minutes, at most 6 hours; dead after 12 attempts).
  *
- * Cron (every 5 minutes):
- *   0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1
+ * Cron (every 5 minutes): scheduled by the production deploy from bin/ops/jobs.txt (README "Production SSH deploy
+ * setup") — not pasted into cPanel by hand.
  */
 class EngageConsoleAuditDeliver extends BaseCommand
 {

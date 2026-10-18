@@ -1,7 +1,8 @@
 name: Deploy Production via SSH
 
 # Manual only — run from Actions → Deploy Production via SSH → Run workflow.
-# Never triggered by push; server api/.env is not modified by this workflow.
+# Never triggered by push. Server api/.env is never uploaded or replaced; the one line this workflow
+# writes into it is CONSOLE_CRON_MONITOR_KEY (step "Scheduled jobs", from the repo secret of that name).
 on:
   workflow_dispatch:
 
@@ -167,6 +168,33 @@ jobs:
           ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" \
             "chmod +x '${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh' && \
              bash '${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh' '${REMOTE_ROOT}/api'"
+
+      # Scheduled jobs (E8-OPS F160 — a README cron is not a worker). api/bin/ops/post-deploy-jobs.sh
+      # ON THE SERVER (ops kit, identical to console-react-app ops/estate/kit): writes the Cron Job
+      # Monitor key (repo secret CONSOLE_CRON_MONITOR_KEY, sent on STDIN, never an argument) into
+      # api/.env — Console's production refuses the shared CONSOLE_SERVICE_KEY for heartbeats — then
+      # installs server-php/bin/ops/jobs.txt into the crontab with the PHP CLI the migrations above ran
+      # with, replacing a hand-pasted `spark engage:console-audit-deliver` line. The job reports to
+      # Console's Cron Job Monitor (engage.console_audit_deliver), so one that stops shows up OVERDUE.
+      - name: Scheduled jobs (crontab + Cron Job Monitor key)
+        working-directory: .
+        env:
+          CONSOLE_CRON_MONITOR_KEY: ${{ secrets.CONSOLE_CRON_MONITOR_KEY }}
+        run: |
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          set +e
+          printf '%s' "$CONSOLE_CRON_MONITOR_KEY" \
+            | ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" \
+                "bash '${REMOTE_ROOT}/api/bin/ops/post-deploy-jobs.sh' --php=php" \
+            | tee /tmp/jobs.out
+          rc=${PIPESTATUS[1]}
+          set -e
+          case "$rc" in
+            0)  echo "Scheduled jobs installed; heartbeats go to Console's Cron Job Monitor." ;;
+            20) echo "::warning::The jobs are installed, but api/.env has no CONSOLE_CRON_MONITOR_KEY and the repo secret is empty — they run without reporting, so Console shows them OVERDUE. Add the CONSOLE_CRON_MONITOR_KEY repository secret and deploy again." ;;
+            21) echo "::error::The crontab could not be installed on the host (output above). The release is live; the jobs are not scheduled."; exit 1 ;;
+            *)  echo "::error::post-deploy-jobs.sh failed (exit $rc, output above)."; exit 1 ;;
+          esac
 
       - name: Verify files on remote server
         working-directory: .
