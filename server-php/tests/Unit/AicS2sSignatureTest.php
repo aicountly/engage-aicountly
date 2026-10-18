@@ -60,8 +60,21 @@ final class AicS2sSignatureTest extends CIUnitTestCase
         $set = ['ENGAGE_S2S_ENVIRONMENT' => 'Production', 'ENGAGE_INBOUND_TESTCLIENT_KEY_IDS' => 'a-1, b.2,bad id,c3',
             'ENGAGE_INBOUND_TESTCLIENT_SECRET_A_1' => str_repeat('a', 32), 'ENGAGE_INBOUND_TESTCLIENT_SECRET_B_2' => str_repeat('b', 40),
             'ENGAGE_INBOUND_TESTCLIENT_SCOPE_B_2' => 'issue', 'ENGAGE_INBOUND_TESTCLIENT_SECRET_C3' => 'short'];
+        // env() reads $_ENV / $_SERVER before getenv(); set all three and restore afterwards
+        // (a developer's api/.env may define ENGAGE_S2S_ENVIRONMENT).
+        $saved = [];
+        $put = static function (string $k, ?string $v) use (&$saved): void {
+            $saved[$k] ??= [$_ENV[$k] ?? null, $_SERVER[$k] ?? null, getenv($k)];
+            if ($v === null) {
+                putenv($k);
+                unset($_ENV[$k], $_SERVER[$k]);
+            } else {
+                putenv("{$k}={$v}");
+                $_ENV[$k] = $_SERVER[$k] = $v;
+            }
+        };
         foreach ($set as $k => $v) {
-            putenv("{$k}={$v}");
+            $put($k, $v);
         }
         try {
             $c = AicS2sConfig::forClient('testclient');
@@ -71,14 +84,18 @@ final class AicS2sSignatureTest extends CIUnitTestCase
             $this->assertSame('read', $c->keys['a-1']['scope']);
             $this->assertSame('issue', $c->keys['b.2']['scope']);
             $this->assertStringNotContainsString(str_repeat('a', 32), $c->status());
-            putenv('ENGAGE_S2S_ENVIRONMENT=staging');
+            $put('ENGAGE_S2S_ENVIRONMENT', 'staging');
             $this->assertFalse(AicS2sConfig::forClient('testclient')->isConfigured(), 'unknown environment');
+            $put('ENGAGE_S2S_ENVIRONMENT', null);
+            $this->assertFalse(AicS2sConfig::forClient('testclient')->isConfigured(), 'no environment');
         } finally {
-            foreach (array_keys($set) as $k) {
-                putenv($k);
+            foreach ($saved as $k => [$e, $sv, $g]) {
+                $g === false ? putenv($k) : putenv("{$k}={$g}");
+                if ($e === null) { unset($_ENV[$k]); } else { $_ENV[$k] = $e; }
+                if ($sv === null) { unset($_SERVER[$k]); } else { $_SERVER[$k] = $sv; }
             }
         }
-        $this->assertFalse(AicS2sConfig::forClient('testclient')->isConfigured());
+        $this->assertSame([], AicS2sConfig::forClient('testclient')->keys);
         $this->assertStringContainsString('dormant', AicS2sConfig::forClient('testclient')->status());
     }
 }

@@ -178,17 +178,15 @@ class LicenceService
         return $v;
     }
 
-    public static function seatView(array $s, bool $internal = false): array
+    public static function seatView(array $s): array
     {
-        $v = [
+        return [
             'seat_id'      => (int) $s['id'],
             'member_ref'   => $s['member_ref'],
             'member_label' => $s['member_label'],
             'assigned_at'  => S::iso($s['assigned_at']),
             'released_at'  => S::iso($s['released_at']),
         ];
-
-        return $v;
     }
 
     // ------------------------------------------------------------------ reads (staff)
@@ -251,7 +249,7 @@ class LicenceService
 
         return self::staffView($l) + [
             'events' => array_map([self::class, 'staffEvent'], $this->eventsForLicence((int) $l['id'])),
-            'seat_assignments' => array_map(static fn ($s) => self::seatView($s), $this->seatsForLicence((int) $l['id'])),
+            'seat_assignments' => array_map([self::class, 'seatView'], $this->seatsForLicence((int) $l['id'])),
         ];
     }
 

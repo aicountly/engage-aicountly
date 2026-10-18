@@ -30,6 +30,12 @@ abstract class LicensingTestCase extends DatabaseTestCase
     {
         parent::setUp();
         Services::reset(false);
+        // Start unconfigured whatever a developer's api/.env holds (CodeIgniter loads it for tests too).
+        foreach (array_keys(array_merge($_ENV, $_SERVER, getenv())) as $k) {
+            if (is_string($k) && (str_starts_with($k, 'ENGAGE_INBOUND_MANAGE_') || $k === 'ENGAGE_S2S_ENVIRONMENT')) {
+                $this->setEnv($k, null);
+            }
+        }
     }
 
     protected function tearDown(): void

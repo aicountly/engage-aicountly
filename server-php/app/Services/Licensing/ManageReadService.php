@@ -84,7 +84,7 @@ class ManageReadService
             'licence_ref' => $l['licence_ref'],
             'total'       => $l['seats_total'] !== null ? (int) $l['seats_total'] : null,
             'assigned'    => (int) $l['seats_assigned'],
-            'items'       => array_map(static fn ($s) => LicenceService::seatView($s), $svc->seatsForLicence((int) $l['id'], false)),
+            'items'       => array_map([LicenceService::class, 'seatView'], $svc->seatsForLicence((int) $l['id'], false)),
         ];
     }
 
