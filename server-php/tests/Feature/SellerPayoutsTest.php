@@ -344,6 +344,40 @@ final class SellerPayoutsTest extends SellerTestCase
         $this->assertSame('in_payout', $this->entryRow($e)['status']);
     }
 
+    /**
+     * FINANCE_API_BASE_URL without /api reaches finance.aicountly.org's SPA fallback, which answers any POST with
+     * 200 index.html. That is not Finance's receipt: the batch must not be reported sent (found end to end).
+     */
+    public function testTwoHundredWithoutFinanceReceiptIsNotDelivered(): void
+    {
+        $w = PayoutWeek::lastCompleted();
+        $sid = $this->payableSeller('SLR-000451');
+        $this->entry($sid, '900.00', self::inWeek($w));
+        $spa = ['status' => 200, 'body' => '<!doctype html><html><body><div id="root"></div></body></html>', 'content_type' => 'text/html; charset=utf-8'];
+        $this->answers = [$spa, ['status' => 200, 'body' => '{"ok":true,"data":{"status":"received"}}'],
+            ['status' => 200, 'body' => '{"success":true,"message":"Batch already received.","data":{"batch_id":7,"status":"received","duplicate":true}}']];
+
+        $r = Services::sellerPayouts()->run($w->code());
+        $this->assertSame('rejected', $r['data']['delivery']);
+        $run = $r['data']['run'];
+        $this->assertSame('delivery_failed', $run['status']);
+        $this->assertStringContainsString('FINANCE_API_BASE_URL', $run['error']);
+        $this->assertStringContainsString('text/html', $run['error']);
+        $this->assertSame('queued', $this->payout($w->payoutRef('SLR-000451'))['status'], 'not draft_sent: Finance never answered');
+        $this->assertSame('rejected', Services::financePayouts()->forRun($run['id'])['status']);
+
+        // JSON 2xx without a batch_id is not a receipt either.
+        $admin = $this->staff(['super_admin'], 'admin@aicountly.org');
+        $this->assertSame('rejected', $this->json($this->asStaff($admin, 'post', "v1/payout-runs/{$run['id']}/resend"))['data']['delivery']);
+
+        // Finance's real envelope ({success, message, data:{batch_id, …, duplicate}}) is delivered.
+        $rs = $this->json($this->asStaff($admin, 'post', "v1/payout-runs/{$run['id']}/resend"))['data'];
+        $this->assertSame('delivered', $rs['delivery']);
+        $this->assertSame('sent', $rs['run']['status']);
+        $this->assertSame('7', (string) Services::financePayouts()->forRun($run['id'])['finance_batch_id']);
+        $this->assertSame('draft_sent', $this->payout($w->payoutRef('SLR-000451'))['status']);
+    }
+
     // ------------------------------------------------------------------ Finance status
 
     public function testFinanceStatusAuth(): void

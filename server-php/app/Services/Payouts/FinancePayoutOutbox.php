@@ -24,8 +24,9 @@ use Config\Database;
  * One outbox row per run (engage_finance_payout_outbox). The request body is never stored: the payee's PAN,
  * GSTIN and bank account are decrypted from KYC (ENGAGE_DATA_KEY) only while the body is built, and the body
  * lives only for the HTTP call. Delivery is attempted right after the run and then by
- * `php spark engage:finance-payouts-deliver` (every 5 minutes): 2xx → delivered (payouts draft_sent);
- * 400 / 409 / 422 → rejected (not retried — fix and "Re-send to Finance"); anything else → retry with back-off
+ * `php spark engage:finance-payouts-deliver` (every 5 minutes): 2xx with Finance's JSON batch_id → delivered (payouts
+ * draft_sent); 400 / 409 / 422, or a 2xx that is not Finance's receipt (e.g. FINANCE_API_BASE_URL without /api hitting
+ * the SPA fallback) → rejected (not retried — fix and "Re-send to Finance"); anything else → retry with back-off
  * 2, 4, 8 … minutes (at most 6 h), dead after 12 attempts.
  */
 class FinancePayoutOutbox
@@ -222,13 +223,24 @@ class FinancePayoutOutbox
         $status = (int) ($res['status'] ?? 0);
         $raw = is_string($res['body'] ?? null) ? $res['body'] : null;
         $json = $raw !== null ? json_decode($raw, true) : null;
-        $ok = $status >= 200 && $status < 300 && (! is_array($json) || ($json['ok'] ?? true) !== false);
-        if ($ok) {
-            $data = is_array($json['data'] ?? null) ? $json['data'] : (is_array($json) ? $json : []);
-            $batchId = isset($data['batch_id']) ? substr((string) $data['batch_id'], 0, 96) : null;
-            $this->delivered($row, $status, $batchId);
+        $is2xx = $status >= 200 && $status < 300;
+        if ($is2xx) {
+            // Only Finance's receipt counts: JSON carrying the batch_id (201 {batch_id, status:"received"}, or 200
+            // {..., duplicate:true} for a replay). A 2xx without it is not Finance — typically FINANCE_API_BASE_URL
+            // without /api, which lands on the web app's SPA fallback (200 text/html) — so nothing is "sent".
+            $data = is_array($json) ? (is_array($json['data'] ?? null) ? $json['data'] : $json) : [];
+            $batchId = is_scalar($data['batch_id'] ?? null) && (string) $data['batch_id'] !== '' ? substr((string) $data['batch_id'], 0, 96) : null;
+            $refused = is_array($json) && (($json['ok'] ?? true) === false || ($json['success'] ?? true) === false);
+            if ($batchId !== null && ! $refused) {
+                $this->delivered($row, $status, $batchId);
 
-            return 'delivered';
+                return 'delivered';
+            }
+            if (! $refused) {
+                return $this->failed($row, $status, "http_status={$status} but the answer is not Finance's batch receipt (no JSON batch_id"
+                    . (is_array($json) ? '' : '; got ' . (is_string($res['content_type'] ?? null) && $res['content_type'] !== '' ? $res['content_type'] : 'a non-JSON body'))
+                    . ') — check FINANCE_API_BASE_URL (production: https://finance.aicountly.org/api, with /api). Fix it and Re-send.', true);
+            }
         }
         $err = (string) ($res['error'] ?? '');
         if ($err === '') {
@@ -287,7 +299,7 @@ class FinancePayoutOutbox
         return $this->db ??= Database::connect();
     }
 
-    /** @return array{status:int, body:string|false, error:string} */
+    /** @return array{status:int, body:string|false, error:string, content_type:string} */
     private static function curlPost(string $url, array $headers, string $body): array
     {
         $ch = curl_init($url);
@@ -301,9 +313,10 @@ class FinancePayoutOutbox
         ]);
         $raw = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $type = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
         $err = curl_error($ch);
         curl_close($ch);
 
-        return ['status' => $status, 'body' => $raw, 'error' => $err];
+        return ['status' => $status, 'body' => $raw, 'error' => $err, 'content_type' => $type];
     }
 }

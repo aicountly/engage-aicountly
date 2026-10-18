@@ -199,8 +199,10 @@ Idempotency-Key: PB-2026-42
 
 - Payee PAN / GSTIN / account number are **decrypted from KYC only while the request body is built**; the body is
   never stored (the outbox holds only the batch ref and delivery state).
-- Sent right after the run, retried by `php spark engage:finance-payouts-deliver` (every 5 min): 2xx → delivered
-  (payouts `queued → draft_sent`, run `sent`, Finance `batch_id` kept); 400 / 409 / 422 → **rejected** (not retried);
+- Sent right after the run, retried by `php spark engage:finance-payouts-deliver` (every 5 min): 2xx **with Finance's
+  JSON `batch_id`** (201, or 200 `duplicate: true` for a replay) → delivered (payouts `queued → draft_sent`, run `sent`,
+  Finance `batch_id` kept); 400 / 409 / 422, or a 2xx that is not Finance's receipt (e.g. `FINANCE_API_BASE_URL`
+  without `/api`, answered by Finance's web app with `200 index.html`) → **rejected** (not retried);
   anything else → retry 2, 4, 8 … min (max 6 h), **dead** after 12 attempts. Rejected / dead → run
   `delivery_failed`, shown on Sellers → Payouts with the error.
 - **Re-send to Finance** (super_admin): a rejected / dead / pending batch gets a fresh attempt budget and is sent now.
@@ -374,7 +376,7 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
 5. Engage → Sellers → Agreement: publish the seller agreement (approved sellers cannot finish activation without it).
 6. When the commission plan is decided: Sellers → Commission plans → create, check, publish.
 7. Payouts: generate two keys (`php -r "echo bin2hex(random_bytes(32)).PHP_EOL;"`). Engage `FINANCE_OUTBOUND_KEY` =
-   Finance `FINANCE_INBOUND_ENGAGE_KEY`; Engage `ENGAGE_INBOUND_FINANCE_KEY` = the key Finance sends as `X-Finance-Key`.
+   Finance `FINANCE_INBOUND_ENGAGE_KEY`; Engage `ENGAGE_INBOUND_FINANCE_KEY` = Finance `ENGAGE_FINANCE_KEY` (sent as `X-Finance-Key`).
    Set `FINANCE_API_BASE_URL=https://finance.aicountly.org/api`. Confirm the minimum payout in Settings. Check
    Sellers → Payouts → "Preview next run", then let Monday's cron run (or run a week manually as super_admin).
    Finance's operator must confirm the TDS (194H) rate / threshold and GST settings there — Engage never computes them.
