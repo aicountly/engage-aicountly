@@ -5,6 +5,11 @@ import PageHeader from '../components/PageHeader.jsx'
 import DataTable from '../components/DataTable.jsx'
 import { StageBadge, ScoreBadge } from '../components/Badges.jsx'
 import { formatDate } from '../lib/format.js'
+import { lazy, Suspense } from 'react'
+
+// Licensing panels load on first use (docs/LICENSING.md).
+const AccountCompaniesPanel = lazy(() => import('../components/AccountCompaniesPanel.jsx'))
+const AccountLicencesPanel = lazy(() => import('../components/AccountLicencesPanel.jsx'))
 
 export default function AccountDetail() {
   const { id } = useParams()
@@ -64,6 +69,10 @@ export default function AccountDetail() {
                 emptyMessage="No leads linked."
               />
             </div>
+            <Suspense fallback={<div className="text-sm text-neutral-500">Loading licensing…</div>}>
+              <AccountCompaniesPanel accountId={Number(id)} />
+              <AccountLicencesPanel accountId={Number(id)} />
+            </Suspense>
           </div>
         </div>
       )}

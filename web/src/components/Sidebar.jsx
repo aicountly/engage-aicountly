@@ -52,6 +52,15 @@ const groups = [
     ],
   },
   {
+    title: 'Licensing',
+    items: [
+      { to: '/licences', label: 'Licences' },
+      { to: '/offers', label: 'Offers' },
+      { to: '/licence-types', label: 'Licence types' },
+      { to: '/company-mappings', label: 'Account ↔ company' },
+    ],
+  },
+  {
     title: 'Engagement',
     items: [
       { to: '/follow-ups', label: 'Follow-ups' },

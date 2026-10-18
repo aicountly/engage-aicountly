@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import RequireAuth from './components/RequireAuth.jsx'
 import Layout from './components/Layout.jsx'
@@ -47,6 +48,14 @@ import CommissionPlans from './pages/sellers/CommissionPlans.jsx'
 import CommissionEntries from './pages/sellers/CommissionEntries.jsx'
 import ReachOutcomes from './pages/sellers/ReachOutcomes.jsx'
 import Payouts from './pages/sellers/Payouts.jsx'
+
+// Licensing screens (docs/LICENSING.md) load on first use, keeping the main bundle as it was.
+const LicenceTypes = lazy(() => import('./pages/licensing/LicenceTypes.jsx'))
+const Offers = lazy(() => import('./pages/licensing/Offers.jsx'))
+const CompanyMappings = lazy(() => import('./pages/licensing/CompanyMappings.jsx'))
+const Licences = lazy(() => import('./pages/licensing/Licences.jsx'))
+const LicenceDetail = lazy(() => import('./pages/licensing/LicenceDetail.jsx'))
+const lazyPage = (el) => <Suspense fallback={<div className="text-sm text-neutral-500">Loading…</div>}>{el}</Suspense>
 
 export default function App() {
   const { user, loading, ssoPending } = useAuth()
@@ -98,6 +107,11 @@ export default function App() {
         <Route path="/proposals/:id" element={<ProposalDetail />} />
         <Route path="/discount-requests" element={<DiscountRequests />} />
         <Route path="/renewals" element={<Renewals />} />
+        <Route path="/licence-types" element={lazyPage(<LicenceTypes />)} />
+        <Route path="/offers" element={lazyPage(<Offers />)} />
+        <Route path="/company-mappings" element={lazyPage(<CompanyMappings />)} />
+        <Route path="/licences" element={lazyPage(<Licences />)} />
+        <Route path="/licences/:ref" element={lazyPage(<LicenceDetail />)} />
 
         <Route path="/follow-ups" element={<FollowUps />} />
         <Route path="/communication-drafts" element={<Communications />} />
