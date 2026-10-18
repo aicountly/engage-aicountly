@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import clsx from 'clsx'
 import { useAuth } from '../lib/auth.jsx'
-import { KYC_REVIEW, SELLER_VIEW } from '../lib/sellerRoles.js'
+import { KYC_REVIEW, PAYOUT_VIEW, SELLER_VIEW } from '../lib/sellerRoles.js'
 
 const groups = [
   {
@@ -36,6 +36,7 @@ const groups = [
       { to: '/seller-agreements', label: 'Agreement', roles: SELLER_VIEW },
       { to: '/commission-plans', label: 'Commission plans', roles: SELLER_VIEW },
       { to: '/commission-entries', label: 'Commission entries', roles: SELLER_VIEW },
+      { to: '/seller-payouts', label: 'Payouts', roles: PAYOUT_VIEW },
     ],
   },
   {

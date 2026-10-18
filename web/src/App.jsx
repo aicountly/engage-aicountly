@@ -46,6 +46,7 @@ import SellerAgreements from './pages/sellers/SellerAgreements.jsx'
 import CommissionPlans from './pages/sellers/CommissionPlans.jsx'
 import CommissionEntries from './pages/sellers/CommissionEntries.jsx'
 import ReachOutcomes from './pages/sellers/ReachOutcomes.jsx'
+import Payouts from './pages/sellers/Payouts.jsx'
 
 export default function App() {
   const { user, loading, ssoPending } = useAuth()
@@ -85,6 +86,7 @@ export default function App() {
         <Route path="/commission-plans" element={<CommissionPlans />} />
         <Route path="/commission-entries" element={<CommissionEntries />} />
         <Route path="/reach-outcomes" element={<ReachOutcomes />} />
+        <Route path="/seller-payouts" element={<Payouts />} />
         <Route path="/lead-sources" element={<LeadSources />} />
         <Route path="/campaigns" element={<Campaigns />} />
 

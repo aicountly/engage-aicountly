@@ -27,7 +27,7 @@ export default function CommissionEntries() {
 
   return (
     <>
-      <PageHeader title="Commission entries" subtitle="Accrued on a converted lead's confirmed payment → approved after the plan's hold → (payouts: not enabled yet)." />
+      <PageHeader title="Commission entries" subtitle="Accrued on a converted lead's confirmed payment → approved after the plan's hold → in payout (weekly draft to Finance) → paid when Finance reports a UTR." />
       {error ? <div className="mb-4 rounded-md bg-red-50 border border-red-200 text-red-800 text-sm px-3 py-2">{error}</div> : null}
       <div className="mb-3 flex gap-2">
         {['', 'accrued', 'approved', 'in_payout', 'paid', 'reversed'].map((s) => (
