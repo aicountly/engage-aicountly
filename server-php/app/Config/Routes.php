@@ -63,6 +63,7 @@ $routes->get('/health', static function () {
             'seller_mailer'       => \Config\Services::sellerMailer()->status(),
             'reach_outcomes'      => \Config\Services::reachOutcomes()->status(),
             'finance_payouts'     => \Config\Services::financePayouts()->status(),
+            'manage_inbound'      => \App\Libraries\AicS2s\AicS2sConfig::forClient('manage')->status(),
             'finance_inbound_key' => strlen(trim((string) env('ENGAGE_INBOUND_FINANCE_KEY', ''))) >= 32 ? 'ok' : 'ENGAGE_INBOUND_FINANCE_KEY missing or shorter than 32 characters — Finance payout status updates get 503',
         ],
     ]);
@@ -130,6 +131,20 @@ $routes->group('v1', static function ($routes) {
 
     // finance.aicountly.org → Engage: payout status per item (X-Finance-Key = ENGAGE_INBOUND_FINANCE_KEY).
     $routes->post('inbound/finance/payout-status', 'Inbound\\FinanceController::payoutStatus', ['filter' => 'finance-inbound']);
+
+    // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
+    // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
+    // ENGAGE_INBOUND_MANAGE_* key are set. Read keys may only GET; no write route exists in Phase A.
+    $routes->group('manage', ['filter' => 'aic-s2s:manage'], static function ($routes) {
+        $M = 'Inbound\\ManageLicensingController::';
+        $routes->get('companies/(:segment)/licences',                    $M . 'licences/$1');
+        $routes->get('companies/(:segment)/licences/(:segment)',         $M . 'licence/$1/$2');
+        $routes->get('companies/(:segment)/licences/(:segment)/seats',   $M . 'seats/$1/$2');
+        $routes->get('companies/(:segment)/activity',                    $M . 'activity/$1');
+        $routes->get('catalogue',                                        $M . 'catalogue');
+        $routes->get('licence-types',                                    $M . 'licenceTypes');
+        $routes->match(['POST', 'PUT', 'PATCH', 'DELETE'], '(:any)',     $M . 'noRoute');
+    });
 
     // Internal Reach ingest — validated by X-Portal-Token header.
     $routes->group('internal', ['filter' => 'internal-token'], static function ($routes) {
@@ -235,6 +250,37 @@ $routes->group('v1', static function ($routes) {
         $routes->post('payout-runs/(:num)/cancel',           $S . 'PayoutsController::cancel/$1', $payoutAdmin);
         $routes->get('seller-payouts',                       $S . 'PayoutsController::payouts', $payoutView);
         $routes->get('seller-payouts/(:num)',                $S . 'PayoutsController::payout/$1', $payoutView);
+
+        // Licensing, Phase A (docs/LICENSING.md). Read: every signed-in role; write: super_admin | sales_manager.
+        $licAdmin = ['filter' => 'role:super_admin,sales_manager'];
+        $L = 'Api\\V1\\Licensing\\';
+        $routes->get('licence-types',                         $L . 'LicenceTypesController::index');
+        $routes->post('licence-types',                        $L . 'LicenceTypesController::create', $licAdmin);
+        $routes->put('licence-types/(:num)',                  $L . 'LicenceTypesController::update/$1', $licAdmin);
+        $routes->get('offers',                                $L . 'OffersController::index');
+        $routes->get('offers/(:num)',                         $L . 'OffersController::show/$1');
+        $routes->post('offers',                               $L . 'OffersController::create', $licAdmin);
+        $routes->put('offers/(:num)',                         $L . 'OffersController::update/$1', $licAdmin);
+        $routes->delete('offers/(:num)',                      $L . 'OffersController::delete/$1', $licAdmin);
+        $routes->post('offers/(:num)/publish',                $L . 'OffersController::publish/$1', $licAdmin);
+        $routes->post('offers/(:num)/retire',                 $L . 'OffersController::retire/$1', $licAdmin);
+        $routes->post('offers/(:num)/new-version',            $L . 'OffersController::newVersion/$1', $licAdmin);
+        $routes->get('account-companies',                     $L . 'AccountCompaniesController::index');
+        $routes->post('account-companies',                    $L . 'AccountCompaniesController::create', $licAdmin);
+        $routes->post('account-companies/(:num)/unlink',      $L . 'AccountCompaniesController::unlink/$1', $licAdmin);
+        $routes->get('licences',                              $L . 'LicencesController::index');
+        $routes->post('licences',                             $L . 'LicencesController::create', $licAdmin);
+        $routes->get('licences/(:segment)',                   $L . 'LicencesController::show/$1');
+        $routes->post('licences/(:segment)/activate',         $L . 'LicencesController::activate/$1', $licAdmin);
+        $routes->post('licences/(:segment)/suspend',          $L . 'LicencesController::suspend/$1', $licAdmin);
+        $routes->post('licences/(:segment)/reinstate',        $L . 'LicencesController::reinstate/$1', $licAdmin);
+        $routes->post('licences/(:segment)/revoke',           $L . 'LicencesController::revoke/$1', $licAdmin);
+        $routes->post('licences/(:segment)/renew',            $L . 'LicencesController::renew/$1', $licAdmin);
+        $routes->post('licences/(:segment)/extend',           $L . 'LicencesController::extend/$1', $licAdmin);
+        $routes->post('licences/(:segment)/seats',            $L . 'LicencesController::seats/$1', $licAdmin);
+        $routes->post('licences/(:segment)/seat-assignments', $L . 'LicencesController::assignSeat/$1', $licAdmin);
+        $routes->post('licences/(:segment)/seat-assignments/(:num)/release', $L . 'LicencesController::releaseSeat/$1/$2', $licAdmin);
+        $routes->post('licences/(:segment)/invoice-refs',     $L . 'LicencesController::invoiceRef/$1', $licAdmin);
 
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);
