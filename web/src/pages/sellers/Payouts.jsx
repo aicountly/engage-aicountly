@@ -211,7 +211,8 @@ export default function Payouts() {
       <Drawer open={!!runId} title={run.data ? `Payout run ${run.data.week} · ${run.data.batch_ref}` : 'Payout run'} onClose={() => setRunId(null)} size="xl"
         footer={isAdmin && run.data?.can_resend ? (
           <>
-            <button className="engage-btn-danger" onClick={() => { const reason = window.prompt('Cancel this batch (Finance never received it) — reason:'); if (reason) cancel.mutate({ id: run.data.id, reason }) }}>Cancel batch</button>
+            <button className="engage-btn-danger" disabled={!run.data.can_cancel} title={run.data.can_cancel ? 'Finance never received this batch' : run.data.cancel_blocked_reason || ''}
+              onClick={() => { const reason = window.prompt('Cancel this batch (Finance never received it) — reason:'); if (reason) cancel.mutate({ id: run.data.id, reason }) }}>Cancel batch</button>
             <button className="engage-btn-primary" onClick={() => resend.mutate(run.data.id)}>Re-send to Finance</button>
           </>
         ) : null}>
@@ -232,6 +233,7 @@ export default function Payouts() {
               <Field label="Sent">{formatDate(run.data.sent_at, { withTime: true })}</Field>
             </div>
             {run.data.error ? <Notice tone="red">{run.data.error}</Notice> : null}
+            {isAdmin && run.data.cancel_blocked_reason ? <Notice>Cancel batch is not available here: {run.data.cancel_blocked_reason}</Notice> : null}
             <DataTable
               rows={run.data.payouts || []}
               onRowClick={(r) => setPayoutId(r.id)}

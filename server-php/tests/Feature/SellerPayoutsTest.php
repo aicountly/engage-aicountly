@@ -378,6 +378,88 @@ final class SellerPayoutsTest extends SellerTestCase
         $this->assertSame('draft_sent', $this->payout($w->payoutRef('SLR-000451'))['status']);
     }
 
+    /** Build last week's run for one payable seller with the given Finance answers; returns [run view, entry id, admin token]. */
+    private function runAnswered(array $answers, bool $deliver = true): array
+    {
+        $w = PayoutWeek::lastCompleted();
+        $sid = $this->payableSeller('SLR-000471');
+        $e = $this->entry($sid, '900.00', self::inWeek($w));
+        $this->answers = $answers;
+        $run = Services::sellerPayouts()->run($w->code(), 'schedule', null, $deliver)['data']['run'];
+
+        return [$run, $e, $this->staff(['super_admin'], 'admin@aicountly.org')];
+    }
+
+    private function cancel(string $token, int $runId)
+    {
+        return $this->asStaff($token, 'post', "v1/payout-runs/{$runId}/cancel", ['reason' => 'Bank details to be fixed']);
+    }
+
+    /** Finance's 409 = it already knows this batch_ref: Engage must not cancel (Finance may pay it). */
+    public function testCancelRefusedAfterFinance409(): void
+    {
+        [$run, $e, $admin] = $this->runAnswered([['status' => 409, 'body' => '{"success":false,"message":"batch_ref PB-2026-41 was already received with different content."}']]);
+        $this->assertSame('delivery_failed', $run['status']);
+        $this->assertSame('rejected', $run['delivery']['status']);
+        $this->assertTrue($run['can_resend']);
+        $this->assertFalse($run['can_cancel']);
+        $this->assertStringContainsString('cancel it in Finance', $run['cancel_blocked_reason']);
+        $r = $this->cancel($admin, $run['id']);
+        $this->assertSame(409, $this->code($r));
+        $this->assertStringContainsString('cancel it in Finance', $this->json($r)['error']);
+        $this->assertSame('in_payout', $this->entryRow($e)['status'], 'entries stay reserved');
+        $this->assertSame('rejected', Services::financePayouts()->forRun($run['id'])['status']);
+    }
+
+    /** A lost / unknown answer (502) makes it sticky: a later explicit 422 does not make the batch cancellable. */
+    public function testCancelRefusedAfterLostAnswerEvenIfLaterRejected(): void
+    {
+        [$run, $e, $admin] = $this->runAnswered([['status' => 502, 'body' => 'bad gateway'], ['status' => 422, 'body' => '{"success":false,"message":"invalid"}']]);
+        $this->assertSame(409, $this->code($this->cancel($admin, $run['id'])), 'pending after a 502');
+        $this->db()->query('UPDATE engage_finance_payout_outbox SET next_attempt_at = NOW()');
+        $this->assertSame(1, Services::financePayouts()->deliverDue()['rejected']);
+        $this->assertSame(409, $this->code($this->cancel($admin, $run['id'])), 'still refused after the 422');
+        $this->assertSame('in_payout', $this->entryRow($e)['status']);
+        // A dead outbox is refused too.
+        $this->db()->query("UPDATE engage_finance_payout_outbox SET status = 'dead', finance_may_hold = FALSE");
+        $this->assertSame(409, $this->code($this->cancel($admin, $run['id'])), 'dead');
+    }
+
+    public function testCancelAllowedAfterExplicit422(): void
+    {
+        [$run, $e, $admin] = $this->runAnswered([['status' => 422, 'body' => '{"success":false,"message":"The payout batch is invalid; nothing was stored."}']]);
+        $this->assertTrue($run['can_cancel']);
+        $this->assertNull($run['cancel_blocked_reason']);
+        $r = $this->cancel($admin, $run['id']);
+        $this->assertSame(200, $this->code($r));
+        $this->assertSame(1, $this->json($r)['data']['entries_returned']);
+        $this->assertSame('approved', $this->entryRow($e)['status']);
+    }
+
+    public function testCancelAllowedWhenNothingEverReachedFinance(): void
+    {
+        // Never attempted.
+        [$run, $e, $admin] = $this->runAnswered([['status' => 201, 'body' => '{"ok":true,"data":{"batch_id":"X","status":"received"}}']], false);
+        $this->assertSame(0, $run['delivery']['attempts']);
+        $this->assertTrue($run['can_cancel']);
+        // Connection refused / DNS (curl errno 7 / 6) and the SPA fallback (200 text/html) prove Finance has nothing.
+        $this->answers = [['status' => 0, 'body' => false, 'error' => 'Failed to connect', 'errno' => 7], ['status' => 0, 'body' => false, 'error' => 'Could not resolve host', 'errno' => 6],
+            ['status' => 200, 'body' => '<!doctype html><html></html>', 'content_type' => 'text/html']];
+        $this->assertSame('retry', Services::financePayouts()->deliverRun($run['id']));
+        $this->db()->query('UPDATE engage_finance_payout_outbox SET next_attempt_at = NOW()');
+        Services::financePayouts()->deliverDue();
+        $this->db()->query('UPDATE engage_finance_payout_outbox SET next_attempt_at = NOW()');
+        $this->assertSame(1, Services::financePayouts()->deliverDue()['rejected'], 'SPA answer rejected');
+        $this->assertSame(3, (int) Services::financePayouts()->forRun($run['id'])['attempts']);
+        $this->assertSame(200, $this->code($this->cancel($admin, $run['id'])));
+        $this->assertSame('approved', $this->entryRow($e)['status']);
+        // A timeout (errno 28) may have reached Finance.
+        $this->assertTrue(FinancePayoutOutbox::financeMayHold(0, null, 28));
+        $this->assertTrue(FinancePayoutOutbox::financeMayHold(503, null));
+        $this->assertTrue(FinancePayoutOutbox::financeMayHold(201, ['success' => true, 'data' => ['batch_id' => 4]]));
+        $this->assertFalse(FinancePayoutOutbox::financeMayHold(400, null));
+    }
+
     // ------------------------------------------------------------------ Finance status
 
     public function testFinanceStatusAuth(): void

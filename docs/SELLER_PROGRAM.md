@@ -206,8 +206,12 @@ Idempotency-Key: PB-2026-42
   anything else → retry 2, 4, 8 … min (max 6 h), **dead** after 12 attempts. Rejected / dead → run
   `delivery_failed`, shown on Sellers → Payouts with the error.
 - **Re-send to Finance** (super_admin): a rejected / dead / pending batch gets a fresh attempt budget and is sent now.
-  **Cancel batch** (super_admin, reason): only while Finance never accepted it — payouts `cancelled`, entries back to
-  `approved`. A batch Finance has must be cancelled in Finance.
+  **Cancel batch** (super_admin, reason): only while Finance **cannot** hold it — nothing was ever attempted, or every
+  attempt failed before reaching Finance (DNS / connect / TLS) or got a non-receipt (SPA `200 index.html`), or Finance
+  explicitly rejected it (400 / 422) — payouts `cancelled`, entries back to `approved`. After a 409 (Finance knows the
+  batch_ref), a lost / unknown answer (5xx, timeout) or a dead outbox the cancel is refused (409; the UI disables the
+  button and shows why; sticky `engage_finance_payout_outbox.finance_may_hold`, migration 000095): Re-send to find out,
+  then cancel it in Finance, whose `failed` status per item returns the entries to `approved`.
 
 ### Finance → Engage (`POST /api/v1/inbound/finance/payout-status`, `X-Finance-Key`)
 
@@ -363,6 +367,7 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
 | `2026-10-17-000092_CreateCommissionTables` | `engage_commission_plans`, `engage_lead_payments`, `engage_commission_entries` |
 | `2026-10-17-000093_CreateReachOutcomeOutbox` | `engage_reach_outcome_outbox` |
 | `2026-10-18-000094_CreateSellerPayouts` | `engage_payout_runs`, `engage_seller_payouts`, `engage_seller_payout_events`, `engage_finance_payout_outbox`; index on `engage_commission_entries.payout_item_ref` |
+| `2026-10-18-000095_AddFinanceMayHoldToPayoutOutbox` | `engage_finance_payout_outbox.finance_may_hold` (sticky; existing rows back-filled conservatively) — blocks Engage-side "Cancel batch" |
 
 ## 13. Operator steps after deploy
 

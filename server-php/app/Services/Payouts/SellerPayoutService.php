@@ -360,7 +360,11 @@ class SellerPayoutService implements SellerPayoutGateway
         return ['status' => 200, 'data' => ['delivery' => $result, 'run' => $this->runView($this->findRun($runId))]];
     }
 
-    /** Cancel a batch Finance never received (rejected / dead / still pending): payouts cancelled, entries back to approved. */
+    /**
+     * Cancel a batch Finance cannot hold — nothing ever reached it, or it explicitly rejected it (400 / 422): payouts
+     * cancelled, entries back to approved. Refused (409) whenever Finance may hold it (delivered, a 409, a lost /
+     * unknown answer, a dead outbox): that batch is cancelled in Finance, whose `failed` callbacks release the entries.
+     */
     public function cancelRun(int $runId, array $staff, string $reason): array
     {
         $reason = trim($reason);
@@ -373,9 +377,8 @@ class SellerPayoutService implements SellerPayoutGateway
             return ['status' => 404, 'error' => 'Payout run not found.'];
         }
         $row = $this->outbox()->forRun($runId);
-        if (! $row || ! in_array($row['status'], ['pending', 'rejected', 'dead'], true)) {
-            return ['status' => 409, 'error' => $row && $row['status'] === 'delivered'
-                ? 'Finance has this batch; it must be cancelled in Finance (its status comes back here).' : 'Nothing to cancel.'];
+        if (($blocker = FinancePayoutOutbox::cancelBlocker($row)) !== null) {
+            return ['status' => 409, 'code' => 'finance_may_hold', 'error' => $blocker];
         }
         $db->transStart();
         $db->query("UPDATE engage_finance_payout_outbox SET status = 'cancelled', last_error = ? WHERE id = ?", ['cancelled: ' . $reason, $row['id']]);
@@ -600,6 +603,8 @@ class SellerPayoutService implements SellerPayoutGateway
                 'last_error' => $box['last_error'], 'next_attempt_at' => Clock::iso($box['next_attempt_at']), 'delivered_at' => Clock::iso($box['delivered_at']),
             ] : null,
             'can_resend'           => $box !== null && in_array($box['status'], ['rejected', 'dead', 'pending'], true),
+            'can_cancel'           => $box !== null && in_array($box['status'], ['rejected', 'dead', 'pending'], true) && FinancePayoutOutbox::cancelBlocker($box) === null,
+            'cancel_blocked_reason' => $box !== null && in_array($box['status'], ['rejected', 'dead', 'pending'], true) ? FinancePayoutOutbox::cancelBlocker($box) : null,
         ];
     }
 

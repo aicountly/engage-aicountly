@@ -223,6 +223,9 @@ class FinancePayoutOutbox
         $status = (int) ($res['status'] ?? 0);
         $raw = is_string($res['body'] ?? null) ? $res['body'] : null;
         $json = $raw !== null ? json_decode($raw, true) : null;
+        if (self::financeMayHold($status, $json, (int) ($res['errno'] ?? 0))) {
+            $this->db()->query('UPDATE engage_finance_payout_outbox SET finance_may_hold = TRUE WHERE id = ?', [$row['id']]);
+        }
         $is2xx = $status >= 200 && $status < 300;
         if ($is2xx) {
             // Only Finance's receipt counts: JSON carrying the batch_id (201 {batch_id, status:"received"}, or 200
@@ -249,6 +252,47 @@ class FinancePayoutOutbox
         }
 
         return $this->failed($row, $status, $err, in_array($status, [400, 409, 422], true));
+    }
+
+    /**
+     * Could Finance have stored the batch on this attempt? False only when the answer proves it did not: an explicit
+     * 400 / 422 rejection, a 2xx that is not Finance at all (no JSON batch_id — e.g. the SPA fallback), or a
+     * connection-level failure before the request was sent (DNS, connect refused, TLS handshake). A receipt, a 409
+     * (Finance knows the batch_ref), a 5xx, a timeout or anything else unknown → it may (the 201 may have been lost).
+     */
+    public static function financeMayHold(int $status, mixed $json, int $curlErrno = 0): bool
+    {
+        if ($status === 0) {
+            return ! in_array($curlErrno, [5, 6, 7, 35], true); // COULDNT_RESOLVE_PROXY / _HOST, COULDNT_CONNECT, SSL_CONNECT_ERROR
+        }
+        if ($status === 400 || $status === 422) {
+            return false;
+        }
+        if ($status >= 200 && $status < 300) {
+            $data = is_array($json) ? (is_array($json['data'] ?? null) ? $json['data'] : $json) : [];
+
+            return is_scalar($data['batch_id'] ?? null) && (string) $data['batch_id'] !== '';
+        }
+
+        return true;
+    }
+
+    /** Why Engage must not cancel this run's batch itself (null = it may). @param array<string,mixed>|null $row outbox row */
+    public static function cancelBlocker(?array $row): ?string
+    {
+        if (! $row || $row['status'] === 'cancelled') {
+            return 'Nothing to cancel.';
+        }
+        if ($row['status'] === 'delivered') {
+            return 'Finance has this batch; it must be cancelled in Finance (its failed status for each item returns the entries to approved).';
+        }
+        if ($row['status'] === 'dead' || in_array($row['finance_may_hold'] ?? false, [true, 't', 1, '1'], true)) {
+            return 'Finance may already hold this batch (an earlier delivery attempt got '
+                . ($row['status'] === 'dead' ? 'no definite answer and the outbox is dead' : 'an answer that does not rule it out: a lost / unknown answer or a 409')
+                . '). Re-send it to find out, then cancel it in Finance — its failed status for each item returns the entries to approved.';
+        }
+
+        return null;
     }
 
     private function delivered(array $row, int $status, ?string $batchId): void
@@ -299,7 +343,7 @@ class FinancePayoutOutbox
         return $this->db ??= Database::connect();
     }
 
-    /** @return array{status:int, body:string|false, error:string, content_type:string} */
+    /** @return array{status:int, body:string|false, error:string, content_type:string, errno:int} */
     private static function curlPost(string $url, array $headers, string $body): array
     {
         $ch = curl_init($url);
@@ -315,8 +359,9 @@ class FinancePayoutOutbox
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $type = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
         $err = curl_error($ch);
+        $errno = curl_errno($ch);
         curl_close($ch);
 
-        return ['status' => $status, 'body' => $raw, 'error' => $err, 'content_type' => $type];
+        return ['status' => $status, 'body' => $raw, 'error' => $err, 'content_type' => $type, 'errno' => $errno];
     }
 }
