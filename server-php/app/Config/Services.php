@@ -18,6 +18,8 @@ use App\Services\StaffAccessService;
 use App\Services\WorkerClient;
 use App\Services\LeadLifecycleService;
 use App\Services\ReachOutcomeOutbox;
+use App\Services\Payouts\FinancePayoutOutbox;
+use App\Services\Payouts\SellerPayoutService;
 use App\Services\Seller\CommissionService;
 use App\Services\Seller\SellerAccountService;
 use App\Services\Seller\SellerAdminService;
@@ -231,5 +233,21 @@ class Services extends BaseService
             return static::getSharedInstance('leadLifecycle') ?? static::leadLifecycle(false);
         }
         return new LeadLifecycleService();
+    }
+
+    public static function financePayouts(bool $getShared = true): FinancePayoutOutbox
+    {
+        if ($getShared) {
+            return static::getSharedInstance('financePayouts') ?? static::financePayouts(false);
+        }
+        return new FinancePayoutOutbox();
+    }
+
+    public static function sellerPayouts(bool $getShared = true): SellerPayoutService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('sellerPayouts') ?? static::sellerPayouts(false);
+        }
+        return new SellerPayoutService();
     }
 }

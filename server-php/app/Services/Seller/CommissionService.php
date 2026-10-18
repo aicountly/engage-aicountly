@@ -26,7 +26,8 @@ use Config\Services;
  * that moment for the payment's product. The lead must be attributed to a seller who is not terminated.
  * Entry: accrued, hold_until = now + plan.hold_days. `php spark engage:commission-release` (hourly)
  * moves due entries to approved. Reversal (staff, or a refunded payment) applies to accrued / approved
- * entries; in_payout / paid need a clawback, which arrives with payouts (not built yet).
+ * entries. in_payout entries belong to a weekly payout with Finance (Services/Payouts); paid ones would need a
+ * clawback, which Engage does not do.
  */
 class CommissionService
 {
@@ -599,8 +600,11 @@ class CommissionService
         if (! $e) {
             return ['status' => 404, 'error' => 'Commission entry not found.'];
         }
-        if (in_array($e['status'], ['in_payout', 'paid'], true)) {
-            return ['status' => 409, 'error' => 'This entry is ' . $e['status'] . '; reversing it needs a clawback, which comes with payouts (not enabled yet).'];
+        if ($e['status'] === 'in_payout') {
+            return ['status' => 409, 'error' => 'This entry is in payout ' . $e['payout_item_ref'] . ' with Finance. It can be reversed once Finance reports that payout failed, reversed or cancelled (the entry then returns to approved).'];
+        }
+        if ($e['status'] === 'paid') {
+            return ['status' => 409, 'error' => 'This entry has been paid out. Recovering paid commission (clawback) is not supported in Engage; handle it with Finance.'];
         }
         if ($e['status'] === 'reversed') {
             return ['status' => 409, 'error' => 'This entry is already reversed.'];

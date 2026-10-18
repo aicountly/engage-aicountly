@@ -380,17 +380,15 @@ final class SellerOnboardingTest extends SellerTestCase
         $this->assertSame(403, $this->code($this->asStaff($this->staff(['seller_manager'], 'sm@aicountly.org'), 'post', 'v1/partners/1/unlock')));
     }
 
-    public function testPayoutsAreHonestlyNotEnabled(): void
+    public function testNoPayoutsBeforeTheFirstRun(): void
     {
         $s = $this->activeSellerSession();
         $r = $this->json($this->portal('get', 'payouts', [], $s['session']))['data'];
-        $this->assertFalse($r['enabled']);
-        $this->assertSame('payouts not enabled yet', $r['status']);
         $this->assertSame([], $r['items']);
         $this->assertSame(0, $r['total']);
         $this->assertSame(404, $this->code($this->portal('get', 'payouts/PO-1/statement', [], $s['session'])));
         $d = $this->json($this->portal('get', 'dashboard', [], $s['session']))['data'];
-        $this->assertNull($d['next_payout_date']);
+        $this->assertNull($d['next_payout_date'], 'KYC not verified: no payout date');
         $this->assertFalse($d['commission_plan']['published']);
         $this->assertSame('500.00', $d['payout_threshold']);
     }

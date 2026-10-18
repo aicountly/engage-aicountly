@@ -8,6 +8,7 @@ use App\Filters\InternalTokenFilter;
 use App\Filters\JwtFilter;
 use App\Filters\RoleFilter;
 use App\Filters\IdempotencyFilter;
+use App\Filters\FinanceInboundFilter;
 use App\Filters\SellerPortalKeyFilter;
 use App\Filters\SellerSessionFilter;
 use CodeIgniter\Config\Filters as BaseFilters;
@@ -39,6 +40,7 @@ class Filters extends BaseFilters
         'seller-portal-key' => SellerPortalKeyFilter::class,
         'seller-session'    => SellerSessionFilter::class,
         'idempotency'       => IdempotencyFilter::class,
+        'finance-inbound'   => FinanceInboundFilter::class,
     ];
 
     public array $required = [

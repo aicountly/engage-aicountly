@@ -62,7 +62,8 @@ $routes->get('/health', static function () {
             'seller_data_key'     => $dataKeyOk ? 'ok' : 'ENGAGE_DATA_KEY not set — seller KYC cannot be stored (503)',
             'seller_mailer'       => \Config\Services::sellerMailer()->status(),
             'reach_outcomes'      => \Config\Services::reachOutcomes()->status(),
-            'seller_payouts'      => 'pending — weekly payouts are not built yet (docs/SELLER_PROGRAM.md)',
+            'finance_payouts'     => \Config\Services::financePayouts()->status(),
+            'finance_inbound_key' => strlen(trim((string) env('ENGAGE_INBOUND_FINANCE_KEY', ''))) >= 32 ? 'ok' : 'ENGAGE_INBOUND_FINANCE_KEY missing or shorter than 32 characters — Finance payout status updates get 503',
         ],
     ]);
 });
@@ -124,8 +125,11 @@ $routes->group('v1', static function ($routes) {
         $routes->get('commissions',                   $P . 'EarningsController::commissions', $session);
         $routes->get('payouts',                       $P . 'EarningsController::payouts', $session);
         $routes->get('payouts/(:segment)',            $P . 'EarningsController::payout/$1', $session);
-        $routes->get('payouts/(:segment)/statement',  $P . 'EarningsController::payout/$1', $session);
+        $routes->get('payouts/(:segment)/statement',  $P . 'EarningsController::statement/$1', $session);
     });
+
+    // finance.aicountly.org → Engage: payout status per item (X-Finance-Key = ENGAGE_INBOUND_FINANCE_KEY).
+    $routes->post('inbound/finance/payout-status', 'Inbound\\FinanceController::payoutStatus', ['filter' => 'finance-inbound']);
 
     // Internal Reach ingest — validated by X-Portal-Token header.
     $routes->group('internal', ['filter' => 'internal-token'], static function ($routes) {
@@ -219,6 +223,18 @@ $routes->group('v1', static function ($routes) {
         $routes->post('lead-payments/(:num)/refund',         $S . 'CommissionEntriesController::refund/$1', $commission);
         $routes->post('leads/(:num)/seller',                 $S . 'CommissionEntriesController::attribute/$1', ['filter' => 'role:super_admin,sales_manager,seller_manager']);
         $routes->get('status/reach-outcomes',                $S . 'CommissionEntriesController::outboxStatus');
+
+        // Weekly payouts (drafts for finance.aicountly.org). View: super_admin | sales_manager; run / re-send / cancel: super_admin.
+        $payoutView  = ['filter' => 'role:super_admin,sales_manager'];
+        $payoutAdmin = ['filter' => 'role:super_admin'];
+        $routes->get('payout-runs',                          $S . 'PayoutsController::runs', $payoutView);
+        $routes->get('payout-runs/preview',                  $S . 'PayoutsController::preview', $payoutView);
+        $routes->post('payout-runs',                         $S . 'PayoutsController::createRun', $payoutAdmin);
+        $routes->get('payout-runs/(:num)',                   $S . 'PayoutsController::showRun/$1', $payoutView);
+        $routes->post('payout-runs/(:num)/resend',           $S . 'PayoutsController::resend/$1', $payoutAdmin);
+        $routes->post('payout-runs/(:num)/cancel',           $S . 'PayoutsController::cancel/$1', $payoutAdmin);
+        $routes->get('seller-payouts',                       $S . 'PayoutsController::payouts', $payoutView);
+        $routes->get('seller-payouts/(:num)',                $S . 'PayoutsController::payout/$1', $payoutView);
 
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);

@@ -159,8 +159,8 @@ class AccountController extends BaseSellerPortalController
             'earnings_this_week' => Money::format($week),
             'pending_amount'     => Money::format($pending),
             'paid_total'         => Money::format($paid),
-            'next_payout_date'   => null, // weekly payouts are not enabled yet
-            'payouts_enabled'    => false,
+            'next_payout_date'   => \App\Services\Payouts\SellerPayoutService::nextPayoutDate($s),
+            'payouts_enabled'    => true,
             'payout_threshold'   => $threshold,
             'commission_plan'    => ['published' => $plan['published'], 'name' => $plan['name'], 'version' => $plan['version']],
         ]);

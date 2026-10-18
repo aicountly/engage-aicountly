@@ -57,11 +57,13 @@ foreach ([
     'SELLER_PORTAL_KEY'   => [32, 'seller.aicountly.com gets 503'],
     'ENGAGE_DATA_KEY'     => [64, 'seller KYC cannot be stored (503); 64 hex chars or base64 of 32 bytes'],
     'REACH_OUTCOME_TOKEN' => [32, 'lead outcomes stay queued, not sent to Reach'],
+    'FINANCE_OUTBOUND_KEY' => [32, 'weekly payout runs fail closed (nothing sent to Finance)'],
+    'ENGAGE_INBOUND_FINANCE_KEY' => [32, 'Finance payout status updates get 503'],
 ] as $k => [$min, $why]) {
     $v = $read($k);
     echo $k . '=' . ($v === '' ? "(EMPTY — {$why})" : '*** (' . strlen($v) . ' chars' . (strlen($v) < $min && $k !== 'ENGAGE_DATA_KEY' ? ', TOO SHORT' : '') . ')') . "\n";
 }
-foreach (['REACH_API_BASE_URL', 'ENGAGE_SELLER_MAILER', 'ENGAGE_SELLER_DOCS_PATH', 'SELLER_PORTAL_BASE_URL'] as $k) {
+foreach (['REACH_API_BASE_URL', 'FINANCE_API_BASE_URL', 'ENGAGE_SELLER_MAILER', 'ENGAGE_SELLER_DOCS_PATH', 'SELLER_PORTAL_BASE_URL'] as $k) {
     $v = $read($k);
     echo $k . '=' . ($v === '' ? '(empty — see .env.example)' : $v) . "\n";
 }
