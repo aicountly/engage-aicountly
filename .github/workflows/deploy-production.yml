@@ -201,6 +201,7 @@ jobs:
       # account is refused, the staff account signs in with its Console roles and a refresh
       # re-checks them; on request, the revocation drill. Signs the verification accounts in only.
       - name: Live feature checks
+        working-directory: .
         env:
           # Shared verification identities (org-level secrets; docs/GO_LIVE_VERIFICATION.md in flow-react-app).
           VERIFY_CONSOLE_API: ${{ vars.VERIFY_CONSOLE_API }}
