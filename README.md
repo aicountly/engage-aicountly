@@ -65,7 +65,7 @@ npm run dev
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
 | **Deploy to GitHub Pages** | `.github/workflows/deploy-github-pages.yml` | **Automatic** on every push to `main` (optional manual re-run) | Builds `web/` and publishes to GitHub Pages |
-| **Deploy Production via SSH** | `.github/workflows/deploy-production.yml` | **Manual only** (`workflow_dispatch`) | Builds web + server-php, rsyncs to cPanel via SSH; **does not modify server `api/.env`** |
+| **Deploy Production via SSH** | `.github/workflows/deploy-production.yml` | **Manual only** (`workflow_dispatch`) | Builds web + server-php, rsyncs to cPanel via SSH, installs the scheduled jobs; **does not replace server `api/.env`** (writes only `CONSOLE_CRON_MONITOR_KEY`) |
 
 ### GitHub Pages setup
 
@@ -97,6 +97,7 @@ Production deploy uses **GitHub Secrets / Variables only for SSH access and the 
    | `PROD_SFTP_REMOTE_ROOT` | Document root (e.g. `/home/engage/public_html`) |
    | `VITE_API_URL` | Frontend build only — use `/api` or `https://engage.aicountly.org/api` (not the domain root) |
    | `VITE_APP_NAME` | Frontend build only (optional; defaults in workflow) |
+   | `CONSOLE_CRON_MONITOR_KEY` | Console's Cron Job Monitor key (what Console's `CRON_MONITOR_KEY` / `CRON_MONITOR_KEY_HASH` accepts); the deploy writes it into `api/.env` |
 
 2. On cPanel: authorize the deploy key for `PROD_SFTP_USER`.
 3. Create `public_html/api/.env` **manually on the server** before the first deploy (copy from `.env.example`). The workflow **never overwrites or edits** this file.
@@ -107,6 +108,15 @@ Deploy flow (mirrors books):
 - `web/dist/` → `public_html/` (preserves `api/`)
 - `server-php/` → `public_html/api/` via rsync with `scripts/cpanel-rsync-api.filters` (`P .env` — protect server `.env` from `--delete`)
 - `scripts/cpanel-post-deploy-api.sh` runs migrate + one-time seeders; fails if `.env` is missing; **does not modify `.env` content**
+- **Scheduled jobs:** `api/bin/ops/post-deploy-jobs.sh` (the AICOUNTLY ops kit, identical to console-react-app
+  `ops/estate/kit/bin/ops/`) writes `CONSOLE_CRON_MONITOR_KEY` (repository secret, sent over SSH on STDIN) into `api/.env`
+  — the only line of `.env` a deploy writes; Console's production refuses the shared `CONSOLE_SERVICE_KEY` for
+  heartbeats — and installs `server-php/bin/ops/jobs.txt` into the deploy user's crontab (block `aicountly-engage jobs`,
+  `flock -n`, log `~/logs/aicountly-engage-console-audit-deliver.log`): `php spark engage:console-audit-deliver` every
+  5 minutes, reporting itself as `engage.console_audit_deliver`. A hand-pasted `spark engage:console-audit-deliver`
+  line is removed so it never runs twice; the seller-programme crons stay hand-installed. No secret: a warning (the job
+  runs, Console shows it OVERDUE). Crontab not writable: the deploy fails. Check on the server:
+  `bash public_html/api/bin/ops/install-jobs.sh --check`.
 
 ## Production deployment (cPanel)
 
@@ -149,8 +159,8 @@ Deploy flow (mirrors books):
    **Central audit:** every `AuditService` event in its fan-out list (`bot.`, `approval.`,
    `lead.converted`, `discount.applied`, `credit.large`, `auto_mode.`, or `fanout_console`) goes to
    `POST {CONSOLE_API_URL}/portal/audit` with Engage's own key (`CONSOLE_API_TOKEN`, capability
-   `audit.write`) through `engage_console_audit_outbox`, retried by cron every 5 minutes:
-   `0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1`. The command reports each delivery run to Console's Cron Job Monitor as `engage.console_audit_deliver` (`app/Libraries/CronHeartbeat.php`; `CONSOLE_CRON_MONITOR_KEY` in `.env`, console-react-app `docs/CRON_MONITORS.md`); without the key nothing is reported, and a failed report never fails the command.
+   `audit.write`) through `engage_console_audit_outbox`, retried every 5 minutes by
+   `php spark engage:console-audit-deliver`, which the production deploy schedules (`server-php/bin/ops/jobs.txt`; see "Production SSH deploy setup"). The command reports each delivery run to Console's Cron Job Monitor as `engage.console_audit_deliver` (`app/Libraries/CronHeartbeat.php`; `CONSOLE_CRON_MONITOR_KEY` in `.env`, console-react-app `docs/CRON_MONITORS.md`); without the key nothing is reported, and a failed report never fails the command.
    (It used to go to `portal/bot-audit`, which refused Engage's body with 422.)
    **Seller programme crons** ([docs/SELLER_PROGRAM.md § 11](docs/SELLER_PROGRAM.md#11-cron)):
    `7 * * * * cd /path/to/api && php spark engage:commission-release >> writable/logs/commission_release.log 2>&1`,
