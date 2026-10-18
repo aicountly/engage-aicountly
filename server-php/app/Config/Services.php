@@ -29,6 +29,11 @@ use App\Services\Seller\SellerAuthService;
 use App\Services\Seller\SellerKycService;
 use App\Services\Seller\SellerLeadService;
 use App\Services\Seller\SellerMailer;
+use App\Services\Licensing\AccountCompanyService;
+use App\Services\Licensing\LicenceService;
+use App\Services\Licensing\LicenceTypeService;
+use App\Services\Licensing\ManageReadService;
+use App\Services\Licensing\OfferService;
 use CodeIgniter\Config\BaseService;
 
 class Services extends BaseService
@@ -249,5 +254,47 @@ class Services extends BaseService
             return static::getSharedInstance('sellerPayouts') ?? static::sellerPayouts(false);
         }
         return new SellerPayoutService();
+    }
+
+    // Licensing, Phase A (docs/LICENSING.md).
+
+    public static function licenceTypes(bool $getShared = true): LicenceTypeService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('licenceTypes') ?? static::licenceTypes(false);
+        }
+        return new LicenceTypeService();
+    }
+
+    public static function offers(bool $getShared = true): OfferService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('offers') ?? static::offers(false);
+        }
+        return new OfferService();
+    }
+
+    public static function accountCompanies(bool $getShared = true): AccountCompanyService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('accountCompanies') ?? static::accountCompanies(false);
+        }
+        return new AccountCompanyService();
+    }
+
+    public static function licences(bool $getShared = true): LicenceService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('licences') ?? static::licences(false);
+        }
+        return new LicenceService();
+    }
+
+    public static function manageLicensing(bool $getShared = true): ManageReadService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('manageLicensing') ?? static::manageLicensing(false);
+        }
+        return new ManageReadService();
     }
 }

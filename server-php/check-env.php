@@ -68,6 +68,17 @@ foreach (['REACH_API_BASE_URL', 'FINANCE_API_BASE_URL', 'ENGAGE_SELLER_MAILER', 
     echo $k . '=' . ($v === '' ? '(empty — see .env.example)' : $v) . "\n";
 }
 
+echo "\n--- Licensing: Manage read API (docs/LICENSING.md § 7; optional — dormant when empty) ---\n";
+$s2sEnv = $read('ENGAGE_S2S_ENVIRONMENT');
+echo 'ENGAGE_S2S_ENVIRONMENT=' . ($s2sEnv === '' ? '(empty — Manage routes answer 503 inbound_not_configured)' : $s2sEnv) . "\n";
+$keyIds = array_values(array_filter(array_map('trim', explode(',', $read('ENGAGE_INBOUND_MANAGE_KEY_IDS'))), 'strlen'));
+echo 'ENGAGE_INBOUND_MANAGE_KEY_IDS=' . ($keyIds === [] ? '(empty — Manage routes answer 503 inbound_not_configured)' : implode(',', $keyIds)) . "\n";
+foreach ($keyIds as $id) {
+    $name = 'ENGAGE_INBOUND_MANAGE_SECRET_' . preg_replace('/[^A-Z0-9]/', '_', strtoupper($id));
+    $v = $read($name);
+    echo $name . '=' . ($v === '' ? '(EMPTY — this key id is not live)' : '*** (' . strlen($v) . ' bytes' . (strlen($v) < 32 ? ', TOO SHORT — not live' : '') . ')') . "\n";
+}
+
 echo "\n--- ENGAGE_DB_* (from .env) ---\n";
 foreach ($vars as $key => $val) {
     if ($key === 'ENGAGE_DB_PASSWORD') {

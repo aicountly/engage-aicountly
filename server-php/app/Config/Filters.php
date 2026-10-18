@@ -2,6 +2,7 @@
 
 namespace Config;
 
+use App\Filters\AicS2sFilter;
 use App\Filters\ConsolePortalFilter;
 use App\Filters\CorsFilter;
 use App\Filters\InternalTokenFilter;
@@ -41,6 +42,8 @@ class Filters extends BaseFilters
         'seller-session'    => SellerSessionFilter::class,
         'idempotency'       => IdempotencyFilter::class,
         'finance-inbound'   => FinanceInboundFilter::class,
+        // AIC-S2S v1 inbound (commerce contract §0.1); argument = calling client, e.g. 'aic-s2s:manage'.
+        'aic-s2s'           => AicS2sFilter::class,
     ];
 
     public array $required = [
