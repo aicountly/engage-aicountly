@@ -10,6 +10,15 @@ use Config\Services;
 
 class LeadsController extends BaseApiController
 {
+    /**
+     * Set only by the seller-attribution / Reach services (or POST v1/leads/{id}/seller with a reason),
+     * never from a create / update body.
+     */
+    private const PROTECTED_FIELDS = [
+        'seller_id', 'seller_attribution', 'seller_attributed_at', 'seller_protection_expires_at',
+        'reach_lead_id', 'mobile_normalized', 'attribution', 'converted_at',
+    ];
+
     private LeadsModel $m;
 
     public function __construct()
@@ -89,7 +98,7 @@ class LeadsController extends BaseApiController
 
     public function create()
     {
-        $data = $this->input();
+        $data = array_diff_key($this->input(), array_flip(self::PROTECTED_FIELDS));
         if (empty($data['name'])) return $this->fail('name is required.', 400);
         if (empty($data['lead_code'])) {
             $data['lead_code'] = $this->m->generateLeadCode();
@@ -107,12 +116,15 @@ class LeadsController extends BaseApiController
     {
         $row = $this->m->find((int) $id);
         if (! $row) return $this->fail('Lead not found.', 404);
-        $data = $this->input();
+        $data = array_diff_key($this->input(), array_flip(self::PROTECTED_FIELDS));
         $this->m->update((int) $id, $data);
         (new LeadActivitiesModel())->record((int) $id, 'updated', 'Lead updated', null, [
             'metadata' => ['keys' => array_keys($data)],
         ]);
         $this->audit('lead_update', ['subject_kind' => 'lead', 'subject_id' => $id]);
+        if (isset($data['stage']) && (string) $data['stage'] !== (string) $row['stage']) {
+            Services::leadLifecycle()->stageChanged((int) $id, (string) $row['stage'], (string) $data['stage']);
+        }
         return $this->ok($this->m->find((int) $id));
     }
 
@@ -159,10 +171,12 @@ class LeadsController extends BaseApiController
         foreach ($stages as $s) {
             if ($s['code'] === $stage) {
                 $updates['conversion_probability'] = (int) $s['default_probability'];
-                if (! empty($s['is_won'])) {
+                // Postgres booleans arrive as 't' / 'f' strings: '! empty()' was true for 'f' too, so every
+                // stage move (converted included) used to set sales_status = 'lost'.
+                if (self::pgBool($s['is_won'] ?? false)) {
                     $updates['sales_status'] = 'won';
                 }
-                if (! empty($s['is_lost'])) {
+                if (self::pgBool($s['is_lost'] ?? false)) {
                     $updates['sales_status'] = 'lost';
                 }
                 break;
@@ -178,6 +192,8 @@ class LeadsController extends BaseApiController
             'subject_kind' => 'lead', 'subject_id' => $id,
             'metadata'     => ['from' => $row['stage'], 'to' => $stage],
         ]);
+        // Reach outcome event + commission evaluation on conversion.
+        Services::leadLifecycle()->stageChanged((int) $id, (string) $row['stage'], $stage);
         return $this->ok($this->m->find((int) $id));
     }
 
@@ -205,5 +221,10 @@ class LeadsController extends BaseApiController
         $this->m->update((int) $id, ['last_contacted_at' => date('Y-m-d H:i:s')]);
         $this->audit('lead_note', ['subject_kind' => 'lead', 'subject_id' => $id]);
         return $this->ok(['ok' => true]);
+    }
+
+    private static function pgBool(mixed $v): bool
+    {
+        return $v === true || $v === 1 || in_array($v, ['t', 'true', '1', 1], true);
     }
 }

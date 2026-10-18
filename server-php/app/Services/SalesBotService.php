@@ -164,6 +164,7 @@ class SalesBotService
 
         if ($verdict === 'qualified' && $lead['stage'] === 'new') {
             $this->leads->update((int) $lead['id'], ['stage' => 'qualified', 'lead_score' => $score['score']]);
+            Services::leadLifecycle()->stageChanged((int) $lead['id'], 'new', 'qualified');
             (new LeadActivitiesModel())->record((int) $lead['id'], 'bot_qualified', 'Bot qualified lead', null, [
                 'author_kind' => 'bot', 'metadata' => $score,
             ]);
@@ -410,6 +411,7 @@ class SalesBotService
             $approvalStatus = $approvalId ? 'pending' : 'not_required';
         } else {
             $this->leads->update((int) $lead['id'], ['stage' => $to]);
+            Services::leadLifecycle()->stageChanged((int) $lead['id'], (string) ($lead['stage'] ?? ''), (string) $to);
             (new LeadActivitiesModel())->record((int) $lead['id'], 'bot_stage_move', "Bot moved to {$to}", null, [
                 'author_kind' => 'bot',
             ]);

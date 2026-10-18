@@ -16,7 +16,10 @@ Engage integrates with:
 | `console.aicountly.org` | Central approval center, audit fan-out, bot report summary | `CONSOLE_API_BASE_URL`, `CONSOLE_INBOUND_KEY`, `ENGAGE_SERVICE_KEY` |
 | `console.aicountly.org` | SSO sign-in + staff roles (Roles & Access) | `CONSOLE_API_URL`, `CONTROLLER_APP_CODE=engage`, `CONSOLE_API_TOKEN` |
 | `worker.apis.aicountly.com` | Playwright screenshots / UI review only | `WORKER_BASE_URL`, `WORKER_API_TOKEN` |
-| `reach.aicountly.org` | Campaign leads pushed into Engage | `REACH_INBOUND_TOKEN` |
+| `reach.aicountly.org` | Campaign leads pushed into Engage (de-duplicated, `ref` → seller attribution) | `REACH_INBOUND_TOKEN` |
+| `reach.aicountly.org` | Lead outcomes (stage changes, payments) sent back to Reach via outbox | `REACH_API_BASE_URL`, `REACH_OUTCOME_TOKEN` |
+| `finance.aicountly.org` | Weekly seller payout DRAFT batches out; payout status (approved / on hold / paid + UTR / failed …) back — see [docs/SELLER_PROGRAM.md § 6](docs/SELLER_PROGRAM.md) | `FINANCE_API_BASE_URL`, `FINANCE_OUTBOUND_KEY`, `ENGAGE_INBOUND_FINANCE_KEY` |
+| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` |
 
 ## Repository layout
 
@@ -149,6 +152,12 @@ Deploy flow (mirrors books):
    `audit.write`) through `engage_console_audit_outbox`, retried by cron every 5 minutes:
    `0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/api && php spark engage:console-audit-deliver >> writable/logs/console_audit.log 2>&1`. The command reports each delivery run to Console's Cron Job Monitor as `engage.console_audit_deliver` (`app/Libraries/CronHeartbeat.php`; `CONSOLE_CRON_MONITOR_KEY` in `.env`, console-react-app `docs/CRON_MONITORS.md`); without the key nothing is reported, and a failed report never fails the command.
    (It used to go to `portal/bot-audit`, which refused Engage's body with 422.)
+   **Seller programme crons** ([docs/SELLER_PROGRAM.md § 11](docs/SELLER_PROGRAM.md#11-cron)):
+   `7 * * * * cd /path/to/api && php spark engage:commission-release >> writable/logs/commission_release.log 2>&1`,
+   `1,6,11,16,21,26,31,36,41,46,51,56 * * * * cd /path/to/api && php spark engage:reach-outcomes-deliver >> writable/logs/reach_outcomes.log 2>&1`,
+   `17 3 * * * cd /path/to/api && php spark engage:seller-cleanup >> writable/logs/seller_cleanup.log 2>&1`,
+   weekly payout run (Monday 10:00 IST = 04:30 UTC) `30 4 * * 1 cd /path/to/api && php spark engage:seller-payout-run >> writable/logs/seller_payout_run.log 2>&1`,
+   Finance batch delivery `3,8,13,18,23,28,33,38,43,48,53,58 * * * * cd /path/to/api && php spark engage:finance-payouts-deliver >> writable/logs/finance_payouts.log 2>&1`.
    **JSON columns:** every model with a JSON cast extends `EngageModel` (`TolerantJsonCast`); pass
    arrays to those fields, never `json_encode()` output. Rows an older release stored double-encoded
    still read; `php spark engage:repair-json` (dry run) / `--apply` rewrites them once after deploy.
@@ -166,8 +175,13 @@ any more — the old "every new user becomes `super_admin`" provisioning is gone
 
 | Role (Console app_code `engage`) | Slug | Can do |
 |---|---|---|
-| Engage Administrator | `super_admin` | Everything |
-| Engage Member | `member` | Everything except the `role:super_admin` routes: `PUT /v1/settings` and `PUT /v1/bot/settings` |
+| Engage Administrator | `super_admin` (100) | Everything |
+| Sales Manager | `sales_manager` (70) | Member rights + commission plans (publish / retire), payment confirmed, commission reversal |
+| Seller Manager | `seller_manager` (60) | Member rights + seller applications, suspension / termination, seller agreement, KYC review |
+| KYC Reviewer | `kyc_reviewer` (40) | Member rights + seller KYC review |
+| Engage Member | `member` (10) | Everything except role-gated routes: `PUT /v1/settings`, `PUT /v1/bot/settings`, Partner Master, seller programme |
+
+Seller-programme gates are listed in [docs/SELLER_PROGRAM.md § 8](docs/SELLER_PROGRAM.md#8-roles-console--roles--access-app-engage).
 
 **At sign-in** (`POST /v1/auth/controller-sso`, `GET /v1/auth/sso-callback`,
 `POST /v1/auth/console-session`) Console's SSO exchange / introspect payload is used:
@@ -205,7 +219,8 @@ editing in Engage: the Topbar, Settings and Bot settings screens say "Roles are
 assigned in Console → Roles & Access". Members do not see **Settings** in the
 sidebar, and Settings / Bot settings are read-only for them.
 
-Schema: migration `2026-10-14-000080_AddConsoleRoleSync` adds
+Schema: migration `2026-10-17-000090_AddSellerProgramRoles` adds the seller-programme roles and `engage_roles.level`;
+migration `2026-10-14-000080_AddConsoleRoleSync` adds
 `engage_users.console_user_id`, `roles_synced_at`, `authz_version`,
 `tokens_revoked_at` and upserts the `super_admin` / `member` role rows.
 
@@ -216,7 +231,7 @@ cd server-php
 vendor/bin/phpunit --testsuite Unit
 # Feature tests need an isolated Postgres DB (they self-skip otherwise):
 createdb engage_test
-database.tests.database=engage_test database.tests.username=postgres \
+env database.tests.database=engage_test database.tests.username=postgres \
   database.tests.password=postgres vendor/bin/phpunit
 ```
 
@@ -255,7 +270,9 @@ Engage covers the 18 modules from the plan:
 18. Audit Logs
 
 Plus the **Partner Master** (see below), which Engage owns on behalf of
-`partner.aicountly.com`.
+`partner.aicountly.com`, and the **Seller programme** for `seller.aicountly.com`
+(applications, sellers, KYC review, seller agreement, commission plans and
+entries, lead payments) — [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md).
 
 ## Partner Master
 
@@ -301,7 +318,7 @@ ENGAGE.AICOUNTLY.ORG                        PARTNER.AICOUNTLY.COM
 | Delete | Soft delete — history is kept and the partner can never sign in again |
 | Restore | Brings a deleted partner back when the email is still free |
 
-**API** (all under the `jwt` filter, so superadmin only — same as before):
+**API** (`jwt` + `role:super_admin` — Engage Administrators only; before the seller programme any signed-in role could use it):
 
 ```
 GET    /api/v1/partners                  ?q=&status=&partner_type=&country=
@@ -377,9 +394,21 @@ audited and mirrored to Console.
   for Playwright UI/screenshot/review jobs. Results logged in
   `engage_worker_health`.
 - **Reach inbound** (`POST /api/v1/internal/reach/leads`): Reach posts a
-  lead payload; Engage validates, upserts campaign + lead, scores it with the
-  bot, schedules a follow-up, and emits an audit event to Console. Auth:
+  lead payload; Engage validates, upserts the campaign, de-duplicates the lead
+  (email case-insensitive, then mobile — a repeat push never changes stage,
+  sales_status or owner), records UTM / landing touches, attributes `ref`
+  (seller code) to a seller, scores it with the bot, schedules a follow-up for
+  new leads, and emits an audit event to Console. Answers 201 `result: created`
+  or 200 `result: updated, duplicate: true, matched_on`. Auth:
   `X-Portal-Token: <REACH_INBOUND_TOKEN>`.
+- **Reach outbound** (`engage_reach_outcome_outbox`): stage changes (qualified,
+  demo, proposal_sent, converted, lost) and confirmed payments of Reach leads go to
+  `POST {REACH_API_BASE_URL}/v1/inbound/engage/lead-outcomes` (`X-Engage-Token`),
+  delivered by `php spark engage:reach-outcomes-deliver` every 5 minutes.
+- **Seller portal** (`/api/v1/seller-portal/*`, `X-Seller-Portal-Key`): the
+  seller.aicountly.com BFF. Sellers, credentials, KYC, seller leads and
+  commissions live in Engage; weekly payouts are **pending** (not built). See
+  [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md).
 - **LLM (placeholder)**: `LlmClient` uses deterministic templates when
   `llm_enabled` is off. Configure `ENGAGE_LLM_*` and enable it to route to a
   real provider (integration point is stubbed but wired).

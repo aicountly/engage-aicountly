@@ -7,6 +7,10 @@ use App\Filters\CorsFilter;
 use App\Filters\InternalTokenFilter;
 use App\Filters\JwtFilter;
 use App\Filters\RoleFilter;
+use App\Filters\IdempotencyFilter;
+use App\Filters\FinanceInboundFilter;
+use App\Filters\SellerPortalKeyFilter;
+use App\Filters\SellerSessionFilter;
 use CodeIgniter\Config\Filters as BaseFilters;
 use CodeIgniter\Filters\CSRF;
 use CodeIgniter\Filters\DebugToolbar;
@@ -33,6 +37,10 @@ class Filters extends BaseFilters
         'role'           => RoleFilter::class,
         'console-portal' => ConsolePortalFilter::class,
         'internal-token' => InternalTokenFilter::class,
+        'seller-portal-key' => SellerPortalKeyFilter::class,
+        'seller-session'    => SellerSessionFilter::class,
+        'idempotency'       => IdempotencyFilter::class,
+        'finance-inbound'   => FinanceInboundFilter::class,
     ];
 
     public array $required = [

@@ -18,7 +18,10 @@ use CodeIgniter\Test\CIUnitTestCase;
 final class JsonCastsTest extends CIUnitTestCase
 {
     /** Writers that legitimately encode: query-builder writes, where no cast applies (file => fields). */
-    private const BUILDER_WRITES = [];
+    private const BUILDER_WRITES = [
+        // engage_seller_applications has no model (query builder insert): the JSONB column takes the encoded document.
+        'Services/Seller/SellerApplicationService.php' => ['metadata'],
+    ];
 
     public function testTolerantCast(): void
     {
