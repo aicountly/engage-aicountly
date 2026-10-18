@@ -91,7 +91,7 @@ final class AicS2sFilterTest extends LicensingTestCase
         $this->headers = [];
         $r = $this->withHeaders($h)->get('v1/manage/catalogue?cmp_id=43');
         $this->assertError($r, 401, 'signature_invalid');
-        // The signature covers the method too (a GET signature reused for HEAD-less paths is still bound to GET).
+        // The signature covers the method too: headers signed for POST do not authorise a GET.
         $sig = AicS2sSignature::headers('manage', self::READ_KEY_ID, self::READ_SECRET, 'sandbox', 'POST', '/v1/' . self::PATH);
         $this->headers = [];
         $this->assertError($this->withHeaders($sig)->get('v1/' . self::PATH), 401, 'signature_invalid');
