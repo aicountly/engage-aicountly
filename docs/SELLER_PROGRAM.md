@@ -10,7 +10,8 @@ Engage staff (Console SSO, role-gated) ──▶ engage /api/v1/{seller-applicat
                                                           commission-plans, commission-entries, leads/{id}/payments}
 reach ──X-Portal-Token──▶ engage /api/v1/internal/reach/leads        (now carries ref + UTM / landing data)
 engage ──X-Engage-Token──▶ reach /api/v1/inbound/engage/lead-outcomes (outbox, every 5 min)
-engage ──▶ finance (payout batches)                                   PENDING — not built, see "Weekly payouts"
+engage ──X-Engage-Key──▶ finance /api/v1/inbound/engage/payout-batches  (weekly DRAFT batches, outbox)
+finance ──X-Finance-Key──▶ engage /api/v1/inbound/finance/payout-status (approved / on_hold / paid + UTR / failed …)
 ```
 
 Binding contract: `SELLER-CONTRACTS.md` (the build's shared contract). Wire shapes of the seller-portal API:
@@ -147,23 +148,106 @@ matched_on: "email"|"mobile"}`, plus `seller_attribution` and `lead.lead_code` a
   later does not accrue retroactively.
 - `accrued → approved` by `php spark engage:commission-release` (hourly) once `hold_until` has passed.
 - **Reverse** (reason) applies to accrued / approved entries; **Refund** on a payment reverses its entries.
-  `in_payout` / `paid` entries need a clawback, which arrives with payouts (409 today).
+  `in_payout` entries belong to a payout with Finance (409 naming the payout; once Finance reports it failed /
+  reversed / cancelled the entry is approved again and can be reversed). `paid` entries would need a clawback, which
+  Engage does not do (409; the refund lists them in `needs_clawback`) — handle it with Finance.
 - `engage_credit_ledger` is **not** used for commission: it is a generic credit / points book without plan versions,
   hold windows or payout state. Commission entries are their own ledger; the credit ledger is unchanged.
 
-## 6. Weekly payouts — PENDING (not built)
+## 6. Weekly payouts (drafts for finance.aicountly.org)
 
-On hold pending the product owner's decision. Nothing in Engage builds payout runs, calls Finance or accepts a Finance
-callback. The seam:
+Product decision: Engage compiles weekly payouts **automatically as drafts** and hands them to
+**finance.aicountly.org**, where a person reviews and finalises them (TDS under 194H, GST, approval, bank file).
+There is no payment-provider API. **Engage never marks a payout paid on its own** — only when Finance reports
+`paid` with a UTR.
 
-- `app/Services/Payouts/SellerPayoutGateway.php` — the interface a payout implementation provides
-  (`buildWeeklyRun()`: Monday 10:00 IST, active + kyc_verified sellers, approved entries, minimum threshold setting
-  `seller_payout_min_threshold` = 500.00, entries → `in_payout` with `payout_item_ref`, POST
-  `finance /api/v1/inbound/engage/payout-batches`; `applyFinanceStatus()`: `POST engage /api/v1/inbound/finance/payout-status`).
-- Schema already allows `in_payout` / `paid`, `payout_item_ref`, `paid_at` on entries.
-- Today: `GET seller-portal/payouts` → `{enabled: false, status: "payouts not enabled yet", items: [], total: 0}`;
-  `payouts/{ref}` and its statement → 404; dashboard `next_payout_date: null`; `/health` → `seller_payouts: pending`.
-- Env names reserved by the contract (not read yet): `FINANCE_INBOUND_ENGAGE_KEY`, `ENGAGE_INBOUND_FINANCE_KEY`.
+### Run (`php spark engage:seller-payout-run [--week=YYYY-Www] [--dry-run]`)
+
+- Week = ISO week, Monday 00:00 – Sunday 23:59 IST. The scheduled run (Monday 10:00 IST) pays the week that just
+  ended; `--week=2026-W42` names one explicitly. `--dry-run` prints what would be included and writes nothing
+  (default week then: the current one, i.e. next Monday's run).
+- Collects commission entries `approved` **before the week ended** (cutoff Monday 00:00 IST) and not in a payout, per
+  seller that is `active` **and** `kyc_verified` (verified KYC row with PAN and bank account). Suspended / terminated /
+  KYC-pending sellers are held: their entries stay `approved` and are picked up by the first run after they qualify.
+- Minimum per seller: setting `seller_payout_min_threshold` (Settings, default `"500.00"`); gross below it is
+  skipped that week and **rolls over** (exactly the minimum is paid).
+- Per paid seller: one `engage_seller_payouts` row `PO-YYYY-WW-NNNNNN` (= Finance `item_ref`; the number is the
+  seller code's), entries → `in_payout` with `payout_item_ref`. One batch `PB-YYYY-WW` per run.
+- **Idempotent per ISO week**: a week that already has a run (`empty`, `queued`, `sent`, `delivery_failed`,
+  `cancelled`) is reported, not rebuilt; only a `failed` run (nothing was written) can be run again. A week earlier
+  than one that already ran is refused (409). Concurrency: an advisory lock + `FOR UPDATE` on the entries.
+- **Fail closed**: Finance unconfigured (`FINANCE_API_BASE_URL` / `FINANCE_OUTBOUND_KEY`) or no `ENGAGE_DATA_KEY` →
+  the run is recorded `failed` with the reason, nothing is reserved, the command exits non-zero; the commission
+  simply rolls into a later run.
+- Run statuses: `running → empty | queued → sent | delivery_failed`, `failed`, `cancelled`.
+  Payout statuses: `queued` (built, Finance has not accepted it yet) → `draft_sent` → `on_hold` / `approved` → `paid`,
+  or `failed` / `reversed` / `cancelled`. (`queued` is an Engage addition: nothing says "sent" before Finance answered 2xx.)
+
+### Engage → Finance (outbox `engage_finance_payout_outbox`)
+
+```
+POST {FINANCE_API_BASE_URL}/v1/inbound/engage/payout-batches
+X-Engage-Key: {FINANCE_OUTBOUND_KEY}            (Finance: FINANCE_INBOUND_ENGAGE_KEY)
+Idempotency-Key: PB-2026-42
+{"batch_ref":"PB-2026-42","period_start":"2026-10-12","period_end":"2026-10-18","currency":"INR",
+ "items":[{"item_ref":"PO-2026-42-000123","seller_code":"SLR-000123",
+           "payee":{"legal_name":"…","pan":"ABCPK1234F","gstin":null,"entity_type":"individual",
+                    "bank":{"account_holder":"…","account_number":"123456789012","ifsc":"HDFC0001234"}},
+           "gross_amount":"12500.00","entries":[501,502]}]}
+→ 201 {"batch_id":"…","status":"received"}      (idempotent on batch_ref)
+```
+
+- Payee PAN / GSTIN / account number are **decrypted from KYC only while the request body is built**; the body is
+  never stored (the outbox holds only the batch ref and delivery state).
+- Sent right after the run, retried by `php spark engage:finance-payouts-deliver` (every 5 min): 2xx → delivered
+  (payouts `queued → draft_sent`, run `sent`, Finance `batch_id` kept); 400 / 409 / 422 → **rejected** (not retried);
+  anything else → retry 2, 4, 8 … min (max 6 h), **dead** after 12 attempts. Rejected / dead → run
+  `delivery_failed`, shown on Sellers → Payouts with the error.
+- **Re-send to Finance** (super_admin): a rejected / dead / pending batch gets a fresh attempt budget and is sent now.
+  **Cancel batch** (super_admin, reason): only while Finance never accepted it — payouts `cancelled`, entries back to
+  `approved`. A batch Finance has must be cancelled in Finance.
+
+### Finance → Engage (`POST /api/v1/inbound/finance/payout-status`, `X-Finance-Key`)
+
+`{batch_ref, item_ref, status, tds_amount, gst_amount, net_amount, utr|null, paid_at|null, reason|null, tds_section?}`,
+key `ENGAGE_INBOUND_FINANCE_KEY` (≥ 32, `hash_equals`; unset → 503 `finance_key_missing`, wrong → 401
+`finance_key_invalid`). Answers 200 `{item_ref, status, result: "updated"|"unchanged", entries_paid, entries_returned}`;
+422 `validation_failed` (unknown status, bad amount, **`paid` without `utr`**, batch_ref not the item's);
+404 unknown item_ref; 409 transition not allowed.
+
+| Payout status | Finance may send | Effect on entries |
+|---|---|---|
+| `queued` / `draft_sent` / `on_hold` / `approved` | approved, on_hold, paid, failed, reversed, cancelled | — |
+| `paid` (UTR required) | reversed (bank return) | `in_payout → paid` (`paid_at`) |
+| `failed` / `reversed` / `cancelled` | — (final) | back to `approved`, out of the payout → rolled into a later run |
+
+Idempotent: a repeat of any status already applied (same fields) answers `unchanged`; `paid` again with a different
+UTR → 409. Null amounts keep what Finance sent before. Every status is kept in `engage_seller_payout_events`
+(timeline on the staff payout page). A status for a batch whose 201 never reached Engage also marks it delivered.
+`cancelled` is an Engage addition to the contract's list (Finance cancelling a draft).
+
+### Seller portal
+
+- `GET payouts?status=&page=&limit=` → items `{payout_ref, batch_ref, period_start, period_end, gross_amount,
+  tds_amount, gst_amount, net_amount, utr, status, paid_at, reason, entries_count}` — status `processing`
+  (queued / draft_sent) | approved | on_hold | paid | failed | reversed | cancelled. TDS / GST / net are `null` until
+  Finance reports them; `utr` / `paid_at` only once paid.
+- `GET payouts/{payout_ref}` → `{payout: {…item, currency, tds_section: "194H", entries: [{id: "CE-n", lead_code,
+  product, amount, accrued_at}], payee: {legal_name, seller_code, entity_type, pan_masked, gstin_masked},
+  issuer: {name, address, gstin} | null, generated_at}}`; another seller's ref → 404.
+- `GET payouts/{payout_ref}/statement` → `text/html` statement (period, entries, gross, TDS, GST, net, UTR, status;
+  "Pending" where Finance has not reported; escaped, no scripts). Issuer block from `PAYOUT_ISSUER_*` env.
+- Dashboard: `next_payout_date` = next Monday (run day) when the seller is active and KYC verified, else `null`.
+
+### Staff (Sellers → Payouts)
+
+View: super_admin, sales_manager. Manual run / re-send / cancel: super_admin.
+`GET v1/payout-runs` (runs, Finance configuration, schedule), `GET v1/payout-runs/preview?week=` (dry run — default:
+what next Monday's run would include so far), `POST v1/payout-runs {week?}`, `GET v1/payout-runs/{id}`,
+`POST v1/payout-runs/{id}/resend`, `POST v1/payout-runs/{id}/cancel {reason}`,
+`GET v1/seller-payouts?seller_id=&status=&week=&run_id=`, `GET v1/seller-payouts/{id}` (entries + status timeline).
+Code: `app/Services/Payouts/` (`SellerPayoutService` implements the `SellerPayoutGateway` seam, `FinancePayoutOutbox`),
+`app/Libraries/Seller/PayoutWeek.php`, commands `SellerPayoutRun` / `FinancePayoutsDeliver`.
 
 ## 7. Reach outcomes
 
@@ -183,8 +267,8 @@ max 6 h), dead after 12 attempts. Events queue even while Reach is unconfigured.
 
 | Role | Level | Seller programme rights |
 |---|---|---|
-| super_admin | 100 | everything (incl. Partner Master, settings) |
-| sales_manager | 70 | view sellers; commission plans (create / publish / retire); payment confirmed; reverse / refund; lead attribution |
+| super_admin | 100 | everything (incl. Partner Master, settings, manual payout run, re-send / cancel a payout batch) |
+| sales_manager | 70 | view sellers; commission plans (create / publish / retire); payment confirmed; reverse / refund; lead attribution; view payouts (runs, preview, per seller) |
 | seller_manager | 60 | view; approve / reject applications; suspend / reactivate / terminate; resend activation; reset password; unlock; agreement versions; KYC review; lead attribution |
 | kyc_reviewer | 40 | view; KYC review (documents, verify, reject, reveal) |
 | member | 10 | nothing in the seller programme; the rest of Engage as before |
@@ -219,7 +303,9 @@ Errors: `{ok: false, error, code, details?}`; codes per ENGAGE_SELLER_API.md (`p
   per-document review.
 - Lead-registration duplicate detection also matches open leads from other sources inside the window
   (`lead_protected`), and claims older unprotected ones, as described in § 4.
-- `GET payouts` adds `enabled`, `status` and `message` to the list envelope; payout detail / statement are 404.
+- Payout `status` can also be `cancelled` (Finance cancelled the draft, or staff cancelled a batch Finance never
+  received); the BFF shows unknown statuses by name. The statement is `text/html` (the doc prefers PDF; HTML is allowed).
+- Payout detail adds `currency`; `issuer` is `null` unless `PAYOUT_ISSUER_NAME` is set.
 
 ## 10. Configuration
 
@@ -234,9 +320,12 @@ Errors: `{ok: false, error, code, details?}`; codes per ENGAGE_SELLER_API.md (`p
 | `ENGAGE_SELLER_NOTIFY_PRODUCT` | Console product for seller mail (default `engage`). |
 | `ENGAGE_SMTP_HOST/_PORT/_USER/_PASS/_CRYPTO`, `ENGAGE_MAIL_FROM(_NAME)` | SMTP mailer. |
 | `REACH_API_BASE_URL`, `REACH_OUTCOME_TOKEN` | Reach outcomes (token = Reach's `REACH_INBOUND_ENGAGE_TOKEN`, ≥ 32). |
+| `FINANCE_API_BASE_URL`, `FINANCE_OUTBOUND_KEY` | Payout batches to Finance (`https://finance.aicountly.org/api`; key = Finance's `FINANCE_INBOUND_ENGAGE_KEY`, ≥ 32). Unset → runs fail closed. |
+| `ENGAGE_INBOUND_FINANCE_KEY` | Finance → Engage payout status (`X-Finance-Key`, ≥ 32, same value in Finance). Unset → 503. |
+| `PAYOUT_ISSUER_NAME`, `_ADDRESS`, `_GSTIN` | Optional issuer block on payout statements. |
 
 Settings (Settings screen, `engage_settings`): `seller_login_otp_enabled` (false), `seller_lead_protection_days` (90),
-`commission_default_hold_days` (15), `seller_payout_min_threshold` ("500.00", display only until payouts exist).
+`commission_default_hold_days` (15), `seller_payout_min_threshold` ("500.00", minimum weekly payout; below rolls over).
 
 **Console mail:** sellers are not Console users, so Console must (a) give Engage's `CONSOLE_API_TOKEN` the
 `notify.send` + `notify.direct` capabilities for the product, (b) accept direct recipients for that product
@@ -254,10 +343,14 @@ so (links shown once to staff). SMTP is the alternative.
 1,6,11,16,21,26,31,36,41,46,51,56 * * * * cd /path/to/api && php spark engage:reach-outcomes-deliver >> writable/logs/reach_outcomes.log 2>&1
 # seller sessions / one-time tokens / idempotency records cleanup (daily)
 17 3 * * * cd /path/to/api && php spark engage:seller-cleanup >> writable/logs/seller_cleanup.log 2>&1
+# weekly seller payout run — Monday 10:00 IST (= 04:30 UTC; with CRON_TZ=Asia/Kolkata write "0 10 * * 1")
+30 4 * * 1 cd /path/to/api && php spark engage:seller-payout-run >> writable/logs/seller_payout_run.log 2>&1
+# payout batches to Finance — retries (every 5 minutes, offset from the other outboxes)
+3,8,13,18,23,28,33,38,43,48,53,58 * * * * cd /path/to/api && php spark engage:finance-payouts-deliver >> writable/logs/finance_payouts.log 2>&1
 ```
 
 Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage.reach_outcomes_deliver`,
-`engage.seller_cleanup`) when `CONSOLE_CRON_MONITOR_KEY` is set; register those monitors in Console.
+`engage.seller_cleanup`, `engage.seller_payout_run`, `engage.finance_payouts_deliver`) when `CONSOLE_CRON_MONITOR_KEY` is set; register those monitors in Console.
 
 ## 12. Schema
 
@@ -267,6 +360,7 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
 | `2026-10-17-000091_CreateSellerDomain` | `engage_seller_applications`, `engage_sellers`, `engage_seller_sessions`, `engage_seller_tokens`, `engage_seller_agreement_versions`, `engage_seller_agreement_acceptances`, `engage_seller_kyc`, `engage_seller_kyc_documents`, `engage_seller_referral_codes`, `engage_seller_lead_registrations`, `engage_idempotency_keys`; `engage_leads` + seller_id, seller_attribution, seller_attributed_at, seller_protection_expires_at, reach_lead_id, mobile_normalized (backfilled), attribution, converted_at; lead sources `seller_request`, `seller`; settings above |
 | `2026-10-17-000092_CreateCommissionTables` | `engage_commission_plans`, `engage_lead_payments`, `engage_commission_entries` |
 | `2026-10-17-000093_CreateReachOutcomeOutbox` | `engage_reach_outcome_outbox` |
+| `2026-10-18-000094_CreateSellerPayouts` | `engage_payout_runs`, `engage_seller_payouts`, `engage_seller_payout_events`, `engage_finance_payout_outbox`; index on `engage_commission_entries.payout_item_ref` |
 
 ## 13. Operator steps after deploy
 
@@ -275,8 +369,14 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
    `ENGAGE_SELLER_DOCS_PATH` (create the directory outside `public_html`, writable by PHP only),
    `REACH_API_BASE_URL` + `REACH_OUTCOME_TOKEN` (same as Reach's `REACH_INBOUND_ENGAGE_TOKEN`), and a seller mailer
    (`ENGAGE_SELLER_MAILER=smtp` + `ENGAGE_SMTP_*`, or `console` once Console is set up as in § 10). `php check-env.php`.
-3. Add the three cron lines; register the Console cron monitors.
+3. Add the five cron lines; register the Console cron monitors.
 4. In Console → Roles & Access assign sales_manager / seller_manager / kyc_reviewer.
 5. Engage → Sellers → Agreement: publish the seller agreement (approved sellers cannot finish activation without it).
 6. When the commission plan is decided: Sellers → Commission plans → create, check, publish.
-7. `GET /health`: `seller_portal_key`, `seller_data_key`, `seller_mailer`, `reach_outcomes` should read ok.
+7. Payouts: generate two keys (`php -r "echo bin2hex(random_bytes(32)).PHP_EOL;"`). Engage `FINANCE_OUTBOUND_KEY` =
+   Finance `FINANCE_INBOUND_ENGAGE_KEY`; Engage `ENGAGE_INBOUND_FINANCE_KEY` = the key Finance sends as `X-Finance-Key`.
+   Set `FINANCE_API_BASE_URL=https://finance.aicountly.org/api`. Confirm the minimum payout in Settings. Check
+   Sellers → Payouts → "Preview next run", then let Monday's cron run (or run a week manually as super_admin).
+   Finance's operator must confirm the TDS (194H) rate / threshold and GST settings there — Engage never computes them.
+8. `GET /health`: `seller_portal_key`, `seller_data_key`, `seller_mailer`, `reach_outcomes`, `finance_payouts`,
+   `finance_inbound_key` should read ok.

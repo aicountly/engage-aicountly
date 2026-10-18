@@ -45,6 +45,13 @@ if ! grep -qE '^ENGAGE_SELLER_DOCS_PATH=.+' .env; then
   echo "WARNING: ENGAGE_SELLER_DOCS_PATH is not set — KYC documents go to writable/seller-kyc (inside public_html; .htaccess-denied). Prefer a directory outside the web root."
 fi
 
+if ! grep -qE '^FINANCE_OUTBOUND_KEY=.{32,}' .env || ! grep -qE '^FINANCE_API_BASE_URL=.+' .env; then
+  echo "WARNING: FINANCE_API_BASE_URL / FINANCE_OUTBOUND_KEY (>= 32 chars) not set — weekly seller payout runs fail closed."
+fi
+if ! grep -qE '^ENGAGE_INBOUND_FINANCE_KEY=.{32,}' .env; then
+  echo "WARNING: ENGAGE_INBOUND_FINANCE_KEY is not set (>= 32 chars) — Finance payout status updates get 503."
+fi
+
 echo "---- Running database migrations ----"
 CI_ENVIRONMENT=production php spark migrate 2>&1
 

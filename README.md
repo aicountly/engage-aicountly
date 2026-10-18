@@ -18,7 +18,8 @@ Engage integrates with:
 | `worker.apis.aicountly.com` | Playwright screenshots / UI review only | `WORKER_BASE_URL`, `WORKER_API_TOKEN` |
 | `reach.aicountly.org` | Campaign leads pushed into Engage (de-duplicated, `ref` → seller attribution) | `REACH_INBOUND_TOKEN` |
 | `reach.aicountly.org` | Lead outcomes (stage changes, payments) sent back to Reach via outbox | `REACH_API_BASE_URL`, `REACH_OUTCOME_TOKEN` |
-| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` |
+| `finance.aicountly.org` | Weekly seller payout DRAFT batches out; payout status (approved / on hold / paid + UTR / failed …) back — see [docs/SELLER_PROGRAM.md § 6](docs/SELLER_PROGRAM.md) | `FINANCE_API_BASE_URL`, `FINANCE_OUTBOUND_KEY`, `ENGAGE_INBOUND_FINANCE_KEY` |
+| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` |
 
 ## Repository layout
 
@@ -154,7 +155,9 @@ Deploy flow (mirrors books):
    **Seller programme crons** ([docs/SELLER_PROGRAM.md § 11](docs/SELLER_PROGRAM.md#11-cron)):
    `7 * * * * cd /path/to/api && php spark engage:commission-release >> writable/logs/commission_release.log 2>&1`,
    `1,6,11,16,21,26,31,36,41,46,51,56 * * * * cd /path/to/api && php spark engage:reach-outcomes-deliver >> writable/logs/reach_outcomes.log 2>&1`,
-   `17 3 * * * cd /path/to/api && php spark engage:seller-cleanup >> writable/logs/seller_cleanup.log 2>&1`.
+   `17 3 * * * cd /path/to/api && php spark engage:seller-cleanup >> writable/logs/seller_cleanup.log 2>&1`,
+   weekly payout run (Monday 10:00 IST = 04:30 UTC) `30 4 * * 1 cd /path/to/api && php spark engage:seller-payout-run >> writable/logs/seller_payout_run.log 2>&1`,
+   Finance batch delivery `3,8,13,18,23,28,33,38,43,48,53,58 * * * * cd /path/to/api && php spark engage:finance-payouts-deliver >> writable/logs/finance_payouts.log 2>&1`.
    **JSON columns:** every model with a JSON cast extends `EngageModel` (`TolerantJsonCast`); pass
    arrays to those fields, never `json_encode()` output. Rows an older release stored double-encoded
    still read; `php spark engage:repair-json` (dry run) / `--apply` rewrites them once after deploy.
