@@ -169,7 +169,7 @@ final class HolderLicensingTest extends LicensingTestCase
         // A seat assignment does not change the entitlement state: nothing queued.
         $this->assertSame(200, $this->code($this->asStaff($admin, 'post', "v1/licences/{$ref}/seat-assignments", ['version' => 4, 'member_ref' => 'm1'])));
         $this->assertSame(200, $this->code($this->asStaff($admin, 'post', "v1/licences/{$ref}/extend", ['version' => 5, 'ends_at' => gmdate('Y-m-d', strtotime('+3 years')), 'reason' => 'Goodwill'])));
-        $this->assertSame(200, $this->code($this->asStaff($admin, 'post', "v1/licences/{$ref}/renew", ['version' => 6, 'quote_ref' => 'QT-000001'])));
+        $this->assertSame(200, $this->code($this->asStaff($admin, 'post', "v1/licences/{$ref}/renew", ['version' => 6])));
         $this->assertSame(200, $this->code($this->asStaff($admin, 'post', "v1/licences/{$ref}/revoke", ['version' => 7, 'reason' => 'Refund'])));
 
         $rows = $this->outbox('u-2002');
@@ -247,10 +247,19 @@ final class HolderLicensingTest extends LicensingTestCase
 
     public function testQuoteRefIsValidatedAndPassedThrough(): void
     {
-        $r = $this->issueToHolder('u-quote', ['quote_ref' => 'not a ref!']);
+        $r = $this->issueToHolder('u-quote-holder', ['quote_ref' => 'not a ref!']);
         $this->assertSame(422, $this->code($r));
         $this->assertArrayHasKey('quote_ref', $this->json($r)['details']);
-        $this->assertSame(201, $this->code($this->issueToHolder('u-quote', ['quote_ref' => 'QT-000042'])));
+        // A well-formed ref no quote carries: the coupons hook (LicenceHooks) refuses and the licence rolls back.
+        $r = $this->issueToHolder('u-quote-holder', ['quote_ref' => 'QTE-000042']);
+        $this->assertSame(422, $this->code($r));
+        $this->assertSame(['quote_invalid', 'quote_not_found'], [$this->json($r)['code'], $this->json($r)['details']['reason']]);
+        $this->assertSame(0, $this->db()->table('engage_licences')->where('holder_uuid', 'u-quote-holder')->countAllResults());
+        // A real staff quote for this holder and offer is passed through and accepted.
+        $q = $this->asStaff($this->admin(), 'post', 'v1/quotes', ['holder_uuid' => 'u-quote-holder', 'offer_code' => 'books-annual']);
+        $this->assertSame(201, $this->code($q), (string) $q->getJSON());
+        $ref = $this->json($q)['data']['quote_ref'];
+        $this->assertSame(201, $this->code($this->issueToHolder('u-quote-holder', ['quote_ref' => $ref])));
     }
 
     // ------------------------------------------------------------------ default offers + Basic
@@ -345,7 +354,7 @@ final class HolderLicensingTest extends LicensingTestCase
         $l = $this->json($this->issueToHolder('u-chg'))['data'];
         $this->publishedOffer('books-pro', ['label' => 'Books Pro', 'price_paise' => 2360000, 'seats' => 10,
             'entitlements' => [['code' => 'max_companies', 'label' => 'Companies', 'value' => 5, 'unit' => 'count']]]);
-        $r = $this->asStaff($this->admin(), 'post', "v1/licences/{$l['licence_ref']}/change-offer", ['version' => 1, 'offer_code' => 'books-pro', 'reason' => 'Upgrade', 'quote_ref' => 'QT-1']);
+        $r = $this->asStaff($this->admin(), 'post', "v1/licences/{$l['licence_ref']}/change-offer", ['version' => 1, 'offer_code' => 'books-pro', 'reason' => 'Upgrade']);
         $this->assertSame(200, $this->code($r), (string) $r->response()->getBody());
         $d = $this->json($r)['data'];
         $this->assertSame('books-pro', $d['offer']['code']);

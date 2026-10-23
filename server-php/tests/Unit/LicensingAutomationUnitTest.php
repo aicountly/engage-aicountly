@@ -93,7 +93,8 @@ final class LicensingAutomationUnitTest extends CIUnitTestCase
         $this->assertSame(['GET', 'HEAD'], AicS2sConfig::methodsFor('read'));
         $this->assertSame(['POST'], AicS2sConfig::methodsFor('issue'));
         $this->assertSame([], AicS2sConfig::methodsFor('nope'));
-        $this->assertSame(['read' => 120, 'issue' => 30], AicS2sConfig::DEFAULT_RATE_LIMITS);
+        $this->assertSame(['POST'], AicS2sConfig::methodsFor('quote')); // coupons: Manage's preview / upgrade requests
+        $this->assertSame(['read' => 120, 'issue' => 30, 'quote' => 60], AicS2sConfig::DEFAULT_RATE_LIMITS);
     }
 
     public function testJobsFileSchedulesLicensingJobs(): void

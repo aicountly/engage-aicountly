@@ -18,12 +18,19 @@ use CodeIgniter\Database\BaseConnection;
  * throw LicenceHookRejected (the licence is rolled back and the staff call answers its status / code / message);
  * any other exception rolls back too and answers 500.
  *
- * This is a no-op here: the coupons stream implements the redemption commit (quote_ref → committed redemption with
- * licence_ref) and integration wires it in by replacing this body.
+ * Wired to coupons (docs/COUPONS.md): a `quote_ref` on issue / renew / change-offer commits that quote's reserved
+ * redemption with this licence's licence_ref in the same transaction (CouponLicenceHook). A quote that does not fit
+ * (unknown, expired, used, other holder / offer) refuses the write: 422 `quote_invalid`, details.reason = the coupon
+ * reason code. Without a quote_ref nothing happens.
  */
 final class LicenceHooks
 {
     public static function afterLicenceWrite(BaseConnection $db, string $event, array $licence, array $input): void
     {
+        try {
+            \App\Services\Coupons\CouponLicenceHook::afterLicenceWrite($db, $event, $licence, $input);
+        } catch (\App\Services\Coupons\CouponException $e) {
+            throw new LicenceHookRejected($e->getMessage(), $e->status, 'quote_invalid', ['quote_ref' => $input['quote_ref'] ?? null, 'reason' => $e->reason]);
+        }
     }
 }

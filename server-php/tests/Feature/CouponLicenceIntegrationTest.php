@@ -6,20 +6,11 @@ use Tests\Support\CouponTestCase;
 
 /**
  * CouponLicenceHook inside a REAL licence write (docs/COUPONS.md §6): issue / renew with quote_ref commit the reserved
- * redemption in the licence transaction; a refused quote rolls the licence back. Runs once LicenceHooks (licensing
- * stream) calls CouponLicenceHook; skipped before that integration.
+ * redemption in the licence transaction; a refused quote rolls the licence back (LicenceHooks → CouponLicenceHook,
+ * wired at integration).
  */
 final class CouponLicenceIntegrationTest extends CouponTestCase
 {
-    protected function setUp(): void
-    {
-        parent::setUp();
-        $hooks = 'App\\Services\\Licensing\\LicenceHooks';
-        if (! class_exists($hooks) || ! str_contains((string) file_get_contents((new \ReflectionClass($hooks))->getFileName()), 'CouponLicenceHook')) {
-            $this->markTestSkipped('LicenceHooks is not wired to CouponLicenceHook yet (integration step).');
-        }
-    }
-
     public function testIssueWithQuoteCommitsTheRedemptionAndRefusedQuotesRollBack(): void
     {
         $this->offers();

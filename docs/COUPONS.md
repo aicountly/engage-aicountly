@@ -217,6 +217,23 @@ detailed reasons only to staff.
   the discount still applies). The redemption records the lead's seller at commit (the coupon's seller when there is
   no lead).
 
+## 9b. Quote → Finance invoice line: field mapping (integration 2026-10)
+
+Finance (`finance-aicountly`, docs/INVOICING.md "Discounted lines", migration `004_invoice_line_discounts`) stores
+exactly what `finance_line` carries; nothing is renamed on the way:
+
+| Engage quote (`POST /api/v1/quotes` → `data`, or `data.finance_line`) | Finance invoice line field | Note |
+| --- | --- | --- |
+| `finance_line.amount_paise` = `net_paise` | `amount_paise` (or leave out: computed as list − discount) | on the offer's price basis |
+| `finance_line.list_amount_paise` = `list_paise` | `list_amount_paise` | null when no discount |
+| `finance_line.discount_paise` = `discount_paise` | `discount_paise` | null when no discount; Engage caps it at list − 100, Finance validates the same bound |
+| `finance_line.discount_ref` = the coupon code | `discount_ref` | the `quote_ref` (`QTE-…`) is also accepted by Finance |
+| `finance_line.price_basis` (`price.basis` of the offer) | `price_basis` (`inclusive` / `exclusive`) | |
+| `finance_line.gst_rate` (`gst_rate`) | `gst_rate` (percent) | |
+| `finance_line.sac` | `sac` | |
+| `taxable_paise`, `gst_paise`, `total_paise` | computed by Finance's GstCalculator on `amount` — must equal the quote's | same formula, integer paise, round half up per line |
+| `quote_ref` | (not on the line) — staff then issue/renew the licence in Engage with this `quote_ref` | commits the redemption |
+
 ## 10. Runbook — quote → Finance invoice with discount → licence
 
 1. **Create the coupon** (Sales → Coupons → New coupon): label, shared or single-use, percent / flat, cap, minimum,
