@@ -17,7 +17,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
   const blank = () => ({
     target: cmpId ? 'company' : 'holder', mapping: '', account_id: accountId ? String(accountId) : '', accountQ: '',
     holderQ: holderUuid || '', holder_uuid: holderUuid || '', holder_note: '', also_company: false,
-    offer_id: '', starts_at: todayIST(), activate: true, seats_total: '', invoice_refs: '', notes: '', is_addon: false,
+    offer_id: '', starts_at: todayIST(), activate: true, seats_total: '', invoice_refs: '', notes: '', is_addon: false, quote_ref: '',
   })
   const [f, setF] = useState(blank)
   const [error, setError] = useState(null)
@@ -53,6 +53,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
       const body = {
         offer_code: offer.offer_code, offer_version: offer.version, starts_at: f.starts_at || null, activate: f.activate,
         seats_total: f.seats_total === '' ? undefined : Number(f.seats_total), invoice_refs: f.invoice_refs, notes: f.notes, is_addon: f.is_addon,
+        ...(f.quote_ref.trim() ? { quote_ref: f.quote_ref.trim() } : {}),
       }
       if (f.target === 'holder') {
         if (!f.holder_uuid.trim()) throw new Error('Choose the holder (search by e-mail) or type their my.aicountly uuid.')
@@ -142,6 +143,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.activate} onChange={(e) => set({ activate: e.target.checked })} /> Activate now (otherwise it stays “issued” until you activate it)</label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.is_addon} onChange={(e) => set({ is_addon: e.target.checked })} /> Add-on: a second live licence of this product for the same holder / company, on purpose</label>
       <div><div className="engage-label">Invoice numbers (optional, comma separated)</div><input className="engage-input font-mono" placeholder="e.g. the invoice number" value={f.invoice_refs} onChange={(e) => set({ invoice_refs: e.target.value })} /></div>
+      <div><div className="engage-label">Quote ref (optional — from Sales → Quotes; commits its coupon with this licence)</div><input className="engage-input font-mono uppercase" placeholder="QTE-000012" value={f.quote_ref} onChange={(e) => set({ quote_ref: e.target.value })} /></div>
       <div><div className="engage-label">Internal notes (not shown to the customer)</div><textarea className="engage-input" rows={2} value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></div>
     </Drawer>
   )

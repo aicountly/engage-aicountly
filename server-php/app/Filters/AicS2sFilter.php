@@ -27,7 +27,7 @@ use Config\Database;
  *   401 nonce_replayed           nonce already used by this key id in the last 600 s
  *   403 route_not_allowed_for_key  read key on a non-GET route, issue key on a non-POST route, or a scope the
  *                                  route does not accept
- *   429 rate_limited (+ Retry-After)  120 req/min per read key, 30/min per issue key (or the client's
+ *   429 rate_limited (+ Retry-After)  120 req/min per read key, 30/min per issue key, 60/min per quote key (or the client's
  *                                  ENGAGE_INBOUND_<CLIENT>_RATE_PER_MINUTE)
  *   503 database_unavailable     the nonce / rate tables could not be reached
  * On success $request->aicS2s = {client, key_id, scope, actor, request_id, environment}.

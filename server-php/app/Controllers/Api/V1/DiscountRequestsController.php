@@ -63,7 +63,15 @@ class DiscountRequestsController extends BaseApiController
 
     public function update($id = null)
     {
-        $this->m->update((int) $id, $this->input());
+        $data = $this->input();
+        if (! $this->userHasRole(['super_admin', 'sales_manager'])) {
+            // The decision is only made through approve / reject (role-gated in Routes.php), never by editing the row.
+            $data = array_diff_key($data, array_flip(['status', 'decided_by', 'decided_at', 'decision_notes', 'approval_id']));
+        }
+        if ($data === []) {
+            return $this->ok($this->m->find((int) $id));
+        }
+        $this->m->update((int) $id, $data);
         $this->audit('discount_request_update', ['subject_kind' => 'discount_request', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));
     }

@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import clsx from 'clsx'
 import { useAuth } from '../lib/auth.jsx'
 import { KYC_REVIEW, PAYOUT_VIEW, SELLER_VIEW } from '../lib/sellerRoles.js'
+import { COUPON_VIEW } from '../lib/coupons.js'
 
 const groups = [
   {
@@ -19,6 +20,9 @@ const groups = [
       { to: '/contacts', label: 'Contacts' },
       { to: '/lead-sources', label: 'Lead sources' },
       { to: '/campaigns', label: 'Campaigns' },
+      { to: '/coupons', label: 'Coupons', roles: COUPON_VIEW },
+      { to: '/quotes', label: 'Quotes', roles: COUPON_VIEW },
+      { to: '/coupon-report', label: 'Coupon report', roles: COUPON_VIEW },
     ],
   },
   {

@@ -9,7 +9,9 @@ namespace App\Libraries\AicS2s;
  *   ENGAGE_S2S_ENVIRONMENT                     production | sandbox | local — must equal the caller's X-AIC-Environment
  *   ENGAGE_INBOUND_<CLIENT>_KEY_IDS            comma-separated live key ids (two may be live during a rotation)
  *   ENGAGE_INBOUND_<CLIENT>_SECRET_<KEYID>     the shared secret for that key id, at least 32 bytes
- *   ENGAGE_INBOUND_<CLIENT>_SCOPE_<KEYID>      read (GET routes only; the default) | issue (POST routes only)
+ *   ENGAGE_INBOUND_<CLIENT>_SCOPE_<KEYID>      read (GET routes only; the default) | issue (POST routes only) |
+ *                                              quote (POST only, and only on routes that name it: Manage's coupon preview
+ *                                              and upgrade requests, docs/COUPONS.md §7)
  *   ENGAGE_INBOUND_<CLIENT>_RATE_PER_MINUTE    optional: requests per minute per key for this client (1–6000),
  *                                              instead of the per-scope default (read 120, issue 30)
  *
@@ -22,9 +24,9 @@ final class AicS2sConfig
 {
     public const ENVIRONMENTS = ['production', 'sandbox', 'local'];
     /** HTTP methods each key scope may call. A route may further require scopes (filter 'aic-s2s:<client>,<scope>…'). */
-    public const SCOPE_METHODS = ['read' => ['GET', 'HEAD'], 'issue' => ['POST']];
-    public const SCOPES = ['read', 'issue'];
-    public const DEFAULT_RATE_LIMITS = ['read' => 120, 'issue' => 30];
+    public const SCOPE_METHODS = ['read' => ['GET', 'HEAD'], 'issue' => ['POST'], 'quote' => ['POST']];
+    public const SCOPES = ['read', 'issue', 'quote'];
+    public const DEFAULT_RATE_LIMITS = ['read' => 120, 'issue' => 30, 'quote' => 60];
     public const MIN_SECRET_BYTES = 32;
 
     /** @param array<string, array{secret:string, scope:string}> $keys */
