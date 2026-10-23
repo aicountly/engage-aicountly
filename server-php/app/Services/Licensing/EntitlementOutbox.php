@@ -65,8 +65,10 @@ class EntitlementOutbox
         }
         $keys = [];
         foreach ($appKeys as $k) {
-            $k = ManageAppRegistry::fold((string) $k);
-            if ($k !== '' && ! in_array($k, $keys, true)) {
+            // Only keys Manage holds a plan for: a push for `manage` (or a legacy key Manage does not know) would be
+            // refused 422 unknown_application on every attempt.
+            $k = ManageAppRegistry::planKey((string) $k);
+            if ($k !== null && ! in_array($k, $keys, true)) {
                 $keys[] = $k;
             }
         }

@@ -163,8 +163,9 @@ manage, books, hrms, auditor, fr, secretarial, vault, chat, calendar, docs, note
 purchases, insights, buddy, contacts, remote, advisor, appointments, contracts, pay, crm, helpdesk, receptionist,
 valuations, email, messaging, voice, edge, aspire, integrate, benefits, capital, apis, community) — idempotent, no price,
 no offer; existing rows and the legacy codes (ourpeople, flow, console, other) are never touched. Offers' `app_keys` are
-validated against the same mirror (drive → docs, pulse → buddy, lobby → receptionist, connect → chat). Note: Manage
-stores no plan for `app_key: manage` (its push answers 422), so an offer should not name `manage`.
+validated against the same mirror (drive → docs, pulse → buddy, lobby → receptionist, connect → chat). Manage
+stores no plan for `app_key: manage` (its push answers 422), so publishing an offer that names `manage` is refused and
+`engage:basic-offers` skips the `manage` product (see §6.1).
 `GET v1/entitlement-codes[?app=sales,drive]` (any signed-in role) lists the limit codes staff can pick
 (`EntitlementCodeCatalogue`: `max_companies` and `max_users`, which Manage enforces for every app, plus each product's
 own codes from its fleet role file — e.g. `sales.max_orders_per_month`, `pos.max_terminals`, `drive.storage_mb`);
@@ -275,6 +276,15 @@ Manage's `CompanyAppRegistry` (APP_KEYS, COMPANY_LEVEL_KEYS, ALIASES — the `Ap
 `GET /api/apps`), pinned by `tests/Unit/LicensingAutomationUnitTest.php`. Aliases are folded when a draft is saved
 (`drive` → `docs`, `connect` → `chat`, `ourpeople` → `hrms` …); an unknown key blocks publishing. When Manage adds an
 application, add it to the mirror in the same change.
+
+Publishing, `engage:basic-offers` and the entitlement outbox accept exactly the keys **Manage holds a plan for**:
+`ManageAppRegistry::PLAN_KEYS` / `planKey()` — every catalogued key except `manage` (Manage's `max_companies` /
+`max_users` ride on each application's plan). An offer naming `manage` is refused at publish ("Manage holds no plan for:
+manage"), and the outbox never queues a push Manage would refuse. The list is pinned in both repositories to the same file,
+`server-php/tests/_support/fixtures/manage_plan_app_keys.json` here and `server-php/tests/fixtures/manage_plan_app_keys.json`
+in manage-aicountly (byte-identical; `ManageAppRegistryTest` and Manage's `plan_app_keys_contract_test` pin each side to
+it). `engage:entitlements-reconcile` also reads Manage's live list (`GET v1/inbound/engage/app-keys`, read key) and prints
+`drift app keys: …` when they differ (an older Manage without the route is reported, not counted).
 
 ### 6.2 Entitlement codes (contract §3.6)
 

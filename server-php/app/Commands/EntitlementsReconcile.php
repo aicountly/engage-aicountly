@@ -4,6 +4,7 @@ namespace App\Commands;
 
 use App\Libraries\AicS2s\ManageClient;
 use App\Libraries\CronHeartbeat;
+use App\Libraries\Licensing\ManageAppRegistry;
 use App\Libraries\Licensing\LicensingSupport as S;
 use App\Services\Licensing\EntitlementProjector;
 use App\Libraries\Licensing\CommandOptions;
@@ -37,6 +38,18 @@ class EntitlementsReconcile extends BaseCommand
 
             return EXIT_SUCCESS;
         }
+        // The app keys Manage holds a plan for must be exactly ManageAppRegistry::PLAN_KEYS (what offers may publish).
+        $keys = $client->get(ManageClient::APP_KEYS_PATH);
+        if ($keys['status'] === 404) {
+            CLI::write('  app keys: Manage does not serve ' . ManageClient::APP_KEYS_PATH . ' yet (older Manage) — not compared');
+        } elseif ($keys['status'] < 200 || $keys['status'] >= 300) {
+            CLI::write('  app keys: Manage answered ' . ($keys['status'] ?: $keys['error']));
+        } else {
+            foreach (self::appKeyDrift($keys['json']['data'] ?? null) as $d) {
+                CLI::write("  drift app keys: {$d}");
+            }
+        }
+
         $db = Database::connect();
         $holder = self::opt($params, 'holder');
         $limit = max(1, (int) (self::opt($params, 'limit') ?? 5000));
@@ -101,6 +114,29 @@ class EntitlementsReconcile extends BaseCommand
         }
 
         return $out;
+    }
+
+    /**
+     * Differences between Manage's plan app keys (GET v1/inbound/engage/app-keys → data.plan_app_keys) and
+     * ManageAppRegistry::PLAN_KEYS. Empty = in step.
+     *
+     * @return list<string>
+     */
+    public static function appKeyDrift(mixed $data): array
+    {
+        $theirs = is_array($data) && is_array($data['plan_app_keys'] ?? null) ? array_values(array_map('strval', $data['plan_app_keys'])) : null;
+        if ($theirs === null) {
+            return ['Manage did not list plan_app_keys'];
+        }
+        $d = [];
+        if (($extra = array_values(array_diff($theirs, ManageAppRegistry::PLAN_KEYS))) !== []) {
+            $d[] = 'Manage accepts ' . implode(', ', $extra) . ' but Engage does not (add to ManageAppRegistry::PLAN_KEYS)';
+        }
+        if (($missing = array_values(array_diff(ManageAppRegistry::PLAN_KEYS, $theirs))) !== []) {
+            $d[] = 'Engage accepts ' . implode(', ', $missing) . ' but Manage refuses it (pushes would be 422)';
+        }
+
+        return $d;
     }
 
     /** @return list<string> human-readable differences (empty = in step) */

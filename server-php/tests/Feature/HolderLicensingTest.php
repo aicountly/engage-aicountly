@@ -418,6 +418,13 @@ final class HolderLicensingTest extends LicensingTestCase
         $this->assertSame(422, $this->code($p));
         $this->assertStringContainsString('flowx', $this->json($p)['details']['app_keys']);
 
+        // Manage holds no plan for `manage` (its push answers 422 unknown_application): refused at publish, by name.
+        $mg = $mk('x-manage-app', ['app_keys' => ['books', 'manage']]);
+        $p = $this->asStaff($admin, 'post', "v1/offers/{$mg}/publish");
+        $this->assertSame(422, $this->code($p));
+        $this->assertStringContainsString('Manage holds no plan for: manage', $this->json($p)['details']['app_keys']);
+        $this->assertSame('draft', $this->db()->table('engage_offers')->where('id', $mg)->get()->getRowArray()['status']);
+
         $drive = $mk('x-drive', ['app_keys' => ['drive', 'docs', 'books']]);
         $this->assertSame(['docs', 'books'], $this->json($this->asStaff($admin, 'get', "v1/offers/{$drive}"))['data']['app_keys']);
         $this->assertSame(200, $this->code($this->asStaff($admin, 'post', "v1/offers/{$drive}/publish")));
@@ -585,6 +592,8 @@ final class HolderLicensingTest extends LicensingTestCase
         $out = $this->spark(\App\Commands\BasicOffers::class, ['dry-run' => null, 'create-type' => null]);
         $this->assertStringContainsString('would create books-basic', $out);
         $this->assertStringContainsString('skip flow: not a Manage app key', $out);
+        $this->assertStringContainsString('skip manage: Manage holds no plan for it', $out);
+        $this->assertStringNotContainsString('manage-basic', $out);
         $this->assertSame(0, $this->db()->table('engage_offers')->countAllResults());
 
         $this->spark(\App\Commands\BasicOffers::class, ['apply' => null, 'create-type' => null]);

@@ -497,10 +497,18 @@ class OfferService
         if (S::fromJsonArray($o['app_keys_json']) === []) {
             return ['status' => 422, 'error' => 'Name at least one app this offer licenses.', 'details' => ['app_keys' => 'Required.']];
         }
-        [, $unknown] = ManageAppRegistry::normalizeList(S::fromJsonArray($o['app_keys_json']));
+        [, $refused] = ManageAppRegistry::planKeyList(S::fromJsonArray($o['app_keys_json']));
+        $noPlan = array_values(array_filter($refused, static fn ($k) => ManageAppRegistry::normalize((string) $k) !== null));
+        $unknown = array_values(array_diff($refused, $noPlan));
         if ($unknown !== []) {
             return ['status' => 422, 'error' => 'Manage does not know the app key(s) ' . implode(', ', $unknown) . '. Use Manage\'s keys (e.g. books, inventory, billing, notes, docs).',
                 'details' => ['app_keys' => 'Unknown to Manage: ' . implode(', ', $unknown) . '.']];
+        }
+        if ($noPlan !== []) {
+            // Manage refuses an entitlement push for these (422 unknown_application): it holds no plan of its own —
+            // max_companies / max_users ride on each application's plan.
+            return ['status' => 422, 'error' => 'Manage holds no plan for ' . implode(', ', $noPlan) . ': license the applications themselves (max_companies and max_users ride on each application\'s plan).',
+                'details' => ['app_keys' => 'Manage holds no plan for: ' . implode(', ', $noPlan) . '.']];
         }
         $isDefault = in_array($o['is_default'] ?? false, [true, 't', 'true', 1, '1'], true);
         if ($isDefault && ($de = $this->defaultOfferProblem($o, $type)) !== null) {

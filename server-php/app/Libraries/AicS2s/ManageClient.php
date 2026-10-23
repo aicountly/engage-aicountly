@@ -24,6 +24,9 @@ final class ManageClient
 {
     public const ENTITLEMENTS_PATH = '/v1/inbound/engage/entitlements';
 
+    /** Manage's plan app keys (read key): {plan_app_keys:[…], aliases:{…}} — reconcile compares it with ManageAppRegistry. */
+    public const APP_KEYS_PATH = '/v1/inbound/engage/app-keys';
+
     /** @var callable(string, string, list<string>, string): array{status:int, body:string|false|null, error?:string} */
     private $transport;
 
