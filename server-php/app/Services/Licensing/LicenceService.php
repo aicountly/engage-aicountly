@@ -25,15 +25,26 @@ use Config\Services;
  *   assign seat  issued | active: within seats_total                      seat_assigned
  *   release seat any status                                               seat_released
  *   invoice ref  any status: link an invoice number                       invoice_linked
+ *   change-offer issued | active | suspended → another published offer of   plan_changed  (upgrade / downgrade)
+ *                the same product (term kept, or restarted)
+ *
+ * Holder-level licences (contract §3.1, D-L2): a licence names the holder (my.aicountly uuid of the owner), a
+ * Manage company (legacy), or both. A Basic licence (is_basic, from the product's default offer) is `superseded`
+ * while a paid licence of the same holder + product is active, and active again when it ends (revoke, expiry,
+ * suspension) — reconcileBasic(), in the same transaction as the change that caused it.
  *
  * Every write runs in one transaction: the licence row is locked (FOR UPDATE), the caller's `version` must equal
- * the stored one (optimistic lock → 409 version_conflict otherwise), the row is updated with version + 1 and the
- * event(s) are inserted. The event seq per cmp_id is assigned by a trigger. Staff writes are also audited.
+ * the stored one (optimistic lock → 409 version_conflict otherwise), the row is updated with version + 1, the
+ * event(s) are inserted, LicenceHooks runs (issue / renew / change-offer) and the subject's entitlement state is
+ * queued for Manage (EntitlementOutbox) — all of it commits together or not at all. The event seq is per cmp_id
+ * (per holder for a licence without a company), assigned by a trigger. Staff writes are also audited.
  */
 class LicenceService
 {
-    public const STATUSES = ['issued', 'active', 'suspended', 'expired', 'revoked'];
+    public const STATUSES = ['issued', 'active', 'suspended', 'expired', 'revoked', 'superseded'];
     public const LIVE = ['issued', 'active', 'suspended'];
+    /** A Basic counts as held (one per holder + product) in these statuses. */
+    public const BASIC_HELD = ['issued', 'active', 'suspended', 'superseded'];
 
     private const ALLOWED = [
         'activate'  => ['issued'],
@@ -41,12 +52,13 @@ class LicenceService
         'extend'    => ['issued', 'active', 'suspended'],
         'suspend'   => ['active'],
         'reinstate' => ['suspended'],
-        'revoke'    => ['issued', 'active', 'suspended', 'expired'],
+        'revoke'    => ['issued', 'active', 'suspended', 'expired', 'superseded'],
         'expire'    => ['issued', 'active', 'suspended'],
         'seats'     => ['issued', 'active', 'suspended'],
         'assign'    => ['issued', 'active'],
         'release'   => self::STATUSES,
         'invoice'   => self::STATUSES,
+        'change-offer' => ['issued', 'active', 'suspended'],
     ];
 
     public const STATUS_LABELS = [
@@ -55,13 +67,15 @@ class LicenceService
         'suspended' => ['label' => 'Suspended', 'tone' => 'warning'],
         'expired'   => ['label' => 'Expired', 'tone' => 'neutral'],
         'revoked'   => ['label' => 'Revoked', 'tone' => 'danger'],
+        'superseded' => ['label' => 'Superseded', 'tone' => 'neutral'],
     ];
 
     public const EVENT_LABELS = [
         'issued' => 'Issued', 'activated' => 'Activated', 'renewed' => 'Renewed', 'extended' => 'Extended', 'upgraded' => 'Upgraded',
         'suspended' => 'Suspended', 'reinstated' => 'Reinstated', 'expired' => 'Expired', 'revoked' => 'Revoked',
         'seats_changed' => 'Seats changed', 'seat_assigned' => 'Seat assigned', 'seat_released' => 'Seat released',
-        'invoice_linked' => 'Invoice linked',
+        'invoice_linked' => 'Invoice linked', 'plan_changed' => 'Plan changed', 'superseded' => 'Superseded by a paid plan',
+        'reactivated' => 'Basic plan active again',
     ];
 
     public function __construct(private ?BaseConnection $db = null)
@@ -76,7 +90,7 @@ class LicenceService
     private const SELECT = "SELECT l.*, to_jsonb(l.app_keys) AS app_keys_json, to_jsonb(l.invoice_refs) AS invoice_refs_json,
             a.name AS account_name,
             (SELECT COUNT(*) FROM engage_licence_seats s WHERE s.licence_id = l.id AND s.released_at IS NULL) AS seats_assigned
-        FROM engage_licences l JOIN engage_accounts a ON a.id = l.account_id";
+        FROM engage_licences l LEFT JOIN engage_accounts a ON a.id = l.account_id";
 
     // ------------------------------------------------------------------ views
 
@@ -131,8 +145,13 @@ class LicenceService
     {
         return self::contractView($l) + [
             'id'             => (int) $l['id'],
-            'cmp_id'         => (int) $l['cmp_id'],
-            'account'        => ['id' => (int) $l['account_id'], 'name' => $l['account_name'] ?? null],
+            'cmp_id'         => $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null,
+            'holder_uuid'    => $l['holder_uuid'] ?? null,
+            'is_basic'       => EntitlementProjector::bool($l['is_basic'] ?? false),
+            'is_addon'       => EntitlementProjector::bool($l['is_addon'] ?? false),
+            'holder_note'    => $l['holder_note'] ?? null,
+            'superseded_at'  => S::iso($l['superseded_at'] ?? null),
+            'account'        => $l['account_id'] !== null ? ['id' => (int) $l['account_id'], 'name' => $l['account_name'] ?? null] : null,
             'stored_status'  => $l['status'],
             'status_reason'  => $l['status_reason'],
             'source'         => $l['source'],
@@ -213,14 +232,21 @@ class LicenceService
                 $binds[] = (int) $q[$k];
             }
         }
+        if (! empty($q['holder_uuid']) && is_string($q['holder_uuid'])) {
+            $where[] = 'l.holder_uuid = ?';
+            $binds[] = $q['holder_uuid'];
+        }
+        if (isset($q['is_basic']) && $q['is_basic'] !== '') {
+            $where[] = filter_var($q['is_basic'], FILTER_VALIDATE_BOOLEAN) ? 'l.is_basic' : 'NOT l.is_basic';
+        }
         if (! empty($q['status']) && in_array($q['status'], self::STATUSES, true)) {
             $where[] = 'l.status = ?';
             $binds[] = (string) $q['status'];
         }
         if (! empty($q['q'])) {
-            $where[] = '(l.licence_ref ILIKE ? OR a.name ILIKE ? OR l.offer_code ILIKE ?)';
+            $where[] = '(l.licence_ref ILIKE ? OR a.name ILIKE ? OR l.offer_code ILIKE ? OR l.holder_uuid ILIKE ?)';
             $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], (string) $q['q']) . '%';
-            array_push($binds, $like, $like, $like);
+            array_push($binds, $like, $like, $like, $like);
         }
         $sql = self::SELECT . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY l.created_at DESC, l.id DESC LIMIT 500';
 
@@ -255,26 +281,64 @@ class LicenceService
 
     // ------------------------------------------------------------------ issue
 
+    /**
+     * Staff issue. The licence names the holder (holder_uuid — the my.aicountly owner, contract §3.1), a company mapped
+     * to the account (cmp_id — legacy), or both. Guards (hazards G16):
+     *   - `idempotency_key` (body, or the Idempotency-Key header): a retry with the same key and the same request
+     *     answers the licence already issued (`replayed: true`); the same key with another request → 409
+     *     idempotency_conflict.
+     *   - a second live (issued / active / suspended, term not ended) paid licence of the same product for the same
+     *     holder or company → 409 live_licence_exists, unless `is_addon: true`.
+     * Optional `quote_ref` is validated for shape and handed to LicenceHooks (coupons) — stored nowhere here.
+     */
     public function issue(array $in, array $staff): array
+    {
+        return S::strictTx($this->db(), fn () => $this->issueTx($in, $staff));
+    }
+
+    private function issueTx(array $in, array $staff): array
     {
         $e = [];
         $accountId = (int) ($in['account_id'] ?? 0);
         $cmpId = (int) (is_numeric($in['cmp_id'] ?? null) ? $in['cmp_id'] : 0);
+        $holder = trim((string) ($in['holder_uuid'] ?? ''));
         if ($accountId < 1) {
             $e['account_id'] = 'Choose the account.';
         }
-        if ($cmpId < 1) {
-            $e['cmp_id'] = 'Choose the Manage company (cmp_id).';
+        if ($cmpId < 1 && $holder === '') {
+            $e['holder_uuid'] = 'Choose the holder (the my.aicountly account owner) or a mapped Manage company (cmp_id).';
+        } elseif ($holder !== '' && ! self::validHolder($holder)) {
+            $e['holder_uuid'] = 'holder_uuid is the my.aicountly uuid (1–64 letters, digits, . _ : -).';
         }
         $code = trim((string) ($in['offer_code'] ?? ''));
         if ($code === '') {
             $e['offer_code'] = 'Choose a published offer.';
         }
+        [$idem, $idemErr] = self::idempotencyKey($in);
+        if ($idemErr !== null) {
+            $e['idempotency_key'] = $idemErr;
+        }
+        if (($qe = self::quoteRefError($in)) !== null) {
+            $e['quote_ref'] = $qe;
+        }
         if ($e !== []) {
             return self::invalid($e);
         }
-        if (! (new AccountCompanyService($this->db()))->activeMapping($accountId, $cmpId)) {
+        $isAddon = array_key_exists('is_addon', $in) && filter_var($in['is_addon'], FILTER_VALIDATE_BOOLEAN);
+        $requestHash = hash('sha256', (string) json_encode([
+            $accountId, $cmpId, $holder, $code, $in['offer_version'] ?? null, $in['starts_at'] ?? null,
+            array_key_exists('seats_total', $in) ? $in['seats_total'] : '(offer)', $in['invoice_refs'] ?? [], $in['activate'] ?? true,
+            $isAddon, $in['notes'] ?? null, $in['quote_ref'] ?? null,
+        ]));
+        if ($idem !== null && ($replay = $this->replay($idem, $requestHash)) !== null) {
+            return $replay;
+        }
+        if ($cmpId > 0 && ! (new AccountCompanyService($this->db()))->activeMapping($accountId, $cmpId)) {
             return self::invalid(['cmp_id' => "Company {$cmpId} is not mapped to this account. Map it first (Account → Manage companies)."]);
+        }
+        $holderNote = trim((string) ($in['holder_note'] ?? '')) ?: null;
+        if ($holder !== '' && $holderNote === null && ! $this->holderKnown($holder)) {
+            return self::invalid(['holder_note' => 'Engage has not heard of this holder yet (no my.aicountly sign-up received). Check the uuid with the customer and say how you verified it.']);
         }
         $offers = new OfferService($this->db());
         $offer = isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
@@ -286,6 +350,10 @@ class LicenceService
         $type = (new LicenceTypeService($this->db()))->findByCode($offer['licence_type_code']);
         if (! $type || ! in_array($type['active'], [true, 't', 'true', 1, '1'], true)) {
             return self::invalid(['offer_code' => 'The licence type of this offer is inactive.']);
+        }
+        $isBasic = EntitlementProjector::bool($offer['is_default'] ?? false);
+        if ($isBasic && $holder === '') {
+            return self::invalid(['holder_uuid' => 'The Basic plan is held by a person: give the holder_uuid.']);
         }
         $startsAt = array_key_exists('starts_at', $in) && $in['starts_at'] !== null && $in['starts_at'] !== ''
             ? S::parseInstant($in['starts_at']) : gmdate('Y-m-d H:i:s') . '+00';
@@ -312,41 +380,149 @@ class LicenceService
         $snapshot = OfferService::snapshot($offer);
         $appKeys = S::fromJsonArray($offer['app_keys_json']);
         $actor = self::staffActor($staff);
+        $holderOrNull = $holder !== '' ? $holder : null;
+        $cmpOrNull = $cmpId > 0 ? $cmpId : null;
 
         $db = $this->db();
         $db->transBegin();
         try {
+            // Serialise issues for one subject + product (duplicate guard below is then race-free).
+            $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:' . ($holderOrNull ?? 'cmp:' . $cmpId) . ':' . $offer['product_code']]);
+            if (! $isAddon && ! $isBasic && ($dup = $this->liveDuplicate($holderOrNull, $cmpOrNull, (string) $offer['product_code'])) !== null) {
+                $db->transRollback();
+
+                return ['status' => 409, 'code' => 'live_licence_exists', 'error' => "{$dup} is already live for this " . ($holderOrNull !== null ? 'holder' : 'company')
+                    . " and product. Renew or change its plan instead, or tick \"add-on\" to issue a second licence on purpose.", 'details' => ['licence_ref' => $dup]];
+            }
+            if ($isBasic && ($b = $this->heldBasic($holder, (string) $offer['product_code'])) !== null) {
+                $db->transRollback();
+
+                return ['status' => 409, 'code' => 'basic_exists', 'error' => "This holder already holds the Basic plan ({$b['licence_ref']}).", 'details' => ['licence_ref' => $b['licence_ref']]];
+            }
             $n = (int) $db->query("SELECT nextval('engage_licence_ref_seq') AS n")->getRow()->n;
             $ref = 'LIC-' . str_pad((string) $n, 6, '0', STR_PAD_LEFT);
             $now = gmdate('Y-m-d H:i:s') . '+00';
             $id = (int) $db->query(
-                'INSERT INTO engage_licences (licence_ref, cmp_id, account_id, offer_id, offer_code, offer_version, offer_snapshot, product_code,
+                'INSERT INTO engage_licences (licence_ref, cmp_id, holder_uuid, account_id, offer_id, offer_code, offer_version, offer_snapshot, product_code,
                     licence_type_code, plan_code, app_keys, seats_total, starts_at, ends_at, status, invoice_refs, source, notes, version,
-                    activated_at, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, ?, ?::text[], ?, ?, 1, ?, ?) RETURNING id',
-                [$ref, $cmpId, $accountId, (int) $offer['id'], $offer['offer_code'], (int) $offer['version'], json_encode($snapshot),
+                    activated_at, created_by, is_basic, is_addon, idempotency_key, request_hash, holder_note)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, ?, ?::text[], ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+                [$ref, $cmpOrNull, $holderOrNull, $accountId, (int) $offer['id'], $offer['offer_code'], (int) $offer['version'], json_encode($snapshot),
                     $offer['product_code'], $offer['licence_type_code'], $offer['plan_code'], S::pgArray($appKeys), $seats, $startsAt, $endsAt,
-                    $activate ? 'active' : 'issued', S::pgArray($invoiceRefs), 'staff', $notes, $activate ? $now : null, (int) $staff['id']]
+                    $activate ? 'active' : 'issued', S::pgArray($invoiceRefs), 'staff', $notes, $activate ? $now : null, (int) $staff['id'],
+                    $isBasic, $isAddon, $idem, $idem !== null ? $requestHash : null, $holderNote]
             )->getRow()->id;
             $termText = $endsAt ? ' from ' . S::displayDate($startsAt) . ' to ' . S::displayDate(self::lastDay($endsAt)) : ' from ' . S::displayDate($startsAt);
-            $this->event($id, $ref, $cmpId, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText, null, [
+            $this->event($id, $ref, $cmpOrNull, $holderOrNull, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText, null, [
                 'offer' => ['code' => $offer['offer_code'], 'version' => (int) $offer['version']],
                 'starts_at' => S::iso($startsAt), 'ends_at' => S::iso($endsAt), 'seats_total' => $seats,
                 'invoice_refs' => $invoiceRefs,
             ], 1);
             if ($activate) {
-                $this->event($id, $ref, $cmpId, 'activated', $actor, 'Licence activated', null, ['status' => ['from' => 'issued', 'to' => 'active']], 1);
+                $this->event($id, $ref, $cmpOrNull, $holderOrNull, 'activated', $actor, 'Licence activated', null, ['status' => ['from' => 'issued', 'to' => 'active']], 1);
             }
+            if ($holderOrNull !== null) {
+                $db->query("INSERT INTO engage_holders (holder_uuid, source) VALUES (?, 'staff') ON CONFLICT (holder_uuid) DO NOTHING", [$holderOrNull]);
+            }
+            $row = $db->query(self::SELECT . ' WHERE l.id = ?', [$id])->getRowArray();
+            $this->afterWrite([], $row, 'issue', $in, $actor);
             $db->transCommit();
+        } catch (LicenceHookRejected $hx) {
+            $db->transRollback();
+
+            return $hx->result();
         } catch (\Throwable $ex) {
             $db->transRollback();
+            if ($idem !== null && str_contains($ex->getMessage(), 'uq_engage_licences_idem') && ($replay = $this->replay($idem, $requestHash)) !== null) {
+                return $replay; // a concurrent request with the same key won
+            }
+            if (str_contains($ex->getMessage(), 'uq_engage_licences_basic_live')) {
+                return ['status' => 409, 'code' => 'basic_exists', 'error' => 'This holder already holds the Basic plan.'];
+            }
             log_message('error', 'Licence issue failed: ' . $ex->getMessage());
 
             return ['status' => 500, 'error' => 'Could not issue the licence.'];
         }
-        $this->audit('licence.issued', $ref, ['cmp_id' => $cmpId, 'account_id' => $accountId, 'offer_code' => $offer['offer_code'], 'offer_version' => (int) $offer['version'], 'activated' => $activate]);
+        $this->audit('licence.issued', $ref, ['cmp_id' => $cmpOrNull, 'holder_uuid' => $holderOrNull, 'account_id' => $accountId, 'offer_code' => $offer['offer_code'],
+            'offer_version' => (int) $offer['version'], 'activated' => $activate, 'is_addon' => $isAddon, 'is_basic' => $isBasic]);
 
         return ['status' => 201, 'data' => $this->staffDetail($ref)];
+    }
+
+    /** The answer for a replayed idempotency key, or null when the key is unused. */
+    private function replay(string $key, string $requestHash): ?array
+    {
+        $prev = $this->db()->query('SELECT licence_ref, request_hash FROM engage_licences WHERE idempotency_key = ?', [$key])->getRowArray();
+        if (! $prev) {
+            return null;
+        }
+        if (! hash_equals((string) $prev['request_hash'], $requestHash)) {
+            return ['status' => 409, 'code' => 'idempotency_conflict', 'error' => 'This idempotency key was already used for a different licence request.', 'details' => ['licence_ref' => $prev['licence_ref']]];
+        }
+
+        return ['status' => 200, 'data' => ($this->staffDetail($prev['licence_ref']) ?? []) + ['replayed' => true]];
+    }
+
+    /** licence_ref of a live paid licence of the product for the holder or company, else null. */
+    private function liveDuplicate(?string $holder, ?int $cmpId, string $product): ?string
+    {
+        $or = [];
+        $binds = [$product];
+        if ($holder !== null) {
+            $or[] = 'holder_uuid = ?';
+            $binds[] = $holder;
+        }
+        if ($cmpId !== null) {
+            $or[] = 'cmp_id = ?';
+            $binds[] = $cmpId;
+        }
+        $r = $this->db()->query("SELECT licence_ref FROM engage_licences WHERE product_code = ? AND NOT is_basic
+            AND status IN ('issued','active','suspended') AND (ends_at IS NULL OR ends_at > NOW()) AND (" . implode(' OR ', $or) . ') ORDER BY id LIMIT 1', $binds)->getRowArray();
+
+        return $r['licence_ref'] ?? null;
+    }
+
+    /** The holder's held Basic for a product (issued / active / suspended / superseded), else null. */
+    public function heldBasic(string $holder, string $product, bool $lock = false): ?array
+    {
+        return $this->db()->query(self::SELECT . " WHERE l.holder_uuid = ? AND l.product_code = ? AND l.is_basic
+            AND l.status IN ('issued','active','suspended','superseded') ORDER BY l.id DESC LIMIT 1" . ($lock ? ' FOR UPDATE OF l' : ''), [$holder, $product])->getRowArray() ?: null;
+    }
+
+    private function holderKnown(string $holder): bool
+    {
+        return $this->db()->table('engage_holders')->where('holder_uuid', $holder)->countAllResults() > 0
+            || $this->db()->table('engage_licences')->where('holder_uuid', $holder)->countAllResults() > 0;
+    }
+
+    public static function validHolder(string $h): bool
+    {
+        return preg_match('/\A[A-Za-z0-9._:\-]{1,64}\z/', $h) === 1;
+    }
+
+    /** @return array{0:?string, 1:?string} [key, error] */
+    private static function idempotencyKey(array $in): array
+    {
+        $k = $in['idempotency_key'] ?? null;
+        if ($k === null || $k === '') {
+            return [null, null];
+        }
+        if (! is_string($k) || ! preg_match('/\A[A-Za-z0-9_.:\-]{8,128}\z/', $k)) {
+            return [null, 'Idempotency-Key must be 8–128 characters of A-Z a-z 0-9 _ . : -'];
+        }
+
+        return [$k, null];
+    }
+
+    /** quote_ref (coupons, contract §4.1) is optional; when given it must look like a reference. */
+    private static function quoteRefError(array $in): ?string
+    {
+        $q = $in['quote_ref'] ?? null;
+        if ($q === null || $q === '') {
+            return null;
+        }
+
+        return is_string($q) && preg_match('/\A[A-Za-z0-9_.:\-]{1,64}\z/', $q) ? null : 'quote_ref must be a quote reference (1–64 letters, digits, _ . : -).';
     }
 
     // ------------------------------------------------------------------ transitions
@@ -436,6 +612,9 @@ class LicenceService
 
     public function renew(string $ref, array $in, array $staff): array
     {
+        if (($qe = self::quoteRefError($in)) !== null) {
+            return self::invalid(['quote_ref' => $qe]);
+        }
         $offers = new OfferService($this->db());
 
         return $this->mutate($ref, $in, 'renew', $staff, function (array $l) use ($offers, $in) {
@@ -483,6 +662,103 @@ class LicenceService
         });
     }
 
+    /**
+     * Upgrade / downgrade (contract §3.1): move a live licence to another published, on-sale offer of the SAME product
+     * (event plan_changed). term_mode `keep` (default) keeps ends_at; `restart` starts the new offer's term now. Seats
+     * follow the new offer unless seats_total is sent. No proration is computed (that is a commercial decision staff
+     * take with the invoice). A Basic licence is never changed this way — issuing the paid licence supersedes it — and
+     * nothing moves a licence TO a default offer: revoking the paid licence brings Basic back.
+     */
+    public function changeOffer(string $ref, array $in, array $staff): array
+    {
+        $code = trim((string) ($in['offer_code'] ?? ''));
+        $mode = (string) ($in['term_mode'] ?? 'keep');
+        $e = [];
+        if ($code === '') {
+            $e['offer_code'] = 'Choose the offer to move to.';
+        }
+        if (! in_array($mode, ['keep', 'restart'], true)) {
+            $e['term_mode'] = 'term_mode must be keep (same end date) or restart (the new term starts now).';
+        }
+        if (($qe = self::quoteRefError($in)) !== null) {
+            $e['quote_ref'] = $qe;
+        }
+        $seatsIn = array_key_exists('seats_total', $in) && $in['seats_total'] !== '';
+        if ($seatsIn && $in['seats_total'] !== null && (! is_numeric($in['seats_total']) || (int) $in['seats_total'] != $in['seats_total'] || (int) $in['seats_total'] < 0)) {
+            $e['seats_total'] = 'seats_total must be 0 or more (null = no seat limit).';
+        }
+        if ($e !== []) {
+            return self::invalid($e);
+        }
+        $offers = new OfferService($this->db());
+
+        return $this->mutate($ref, $in, 'change-offer', $staff, function (array $l) use ($offers, $code, $mode, $in, $seatsIn) {
+            if (EntitlementProjector::bool($l['is_basic'] ?? false)) {
+                return ['status' => 409, 'code' => 'basic_not_changeable', 'error' => 'This is the holder\'s Basic plan. Issue the paid licence instead — Basic is superseded automatically while it is active.'];
+            }
+            if ($code === $l['offer_code']) {
+                return self::invalid(['offer_code' => 'That is the current offer. Use Renew to add a term or take its newer version.']);
+            }
+            $offer = isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
+                ? $offers->findVersion($code, (int) $in['offer_version']) : $offers->publishedVersion($code);
+            if (! $offer || ! OfferService::isOnSale($offer)) {
+                return self::invalid(['offer_code' => "Offer {$code} has no published version on sale."]);
+            }
+            if ($offer['product_code'] !== $l['product_code']) {
+                return self::invalid(['offer_code' => "Choose an offer of the same product ({$l['product_code']}). A different product is a new licence."]);
+            }
+            if (EntitlementProjector::bool($offer['is_default'] ?? false)) {
+                return self::invalid(['offer_code' => 'That is the Basic plan. To move the holder back to Basic, revoke this licence: Basic comes back on its own.']);
+            }
+            $type = (new LicenceTypeService($this->db()))->findByCode($offer['licence_type_code']);
+            if (! $type || ! in_array($type['active'], [true, 't', 'true', 1, '1'], true)) {
+                return self::invalid(['offer_code' => 'The licence type of that offer is inactive.']);
+            }
+            $hasTerm = (int) $offer['term_months'] > 0 || (int) $offer['term_days'] > 0;
+            if ($mode === 'restart') {
+                $newEnd = $hasTerm ? S::addTerm(gmdate('Y-m-d H:i:s') . '+00', (int) $offer['term_months'], (int) $offer['term_days']) : null;
+            } else {
+                if ($l['ends_at'] === null && $hasTerm) {
+                    return self::invalid(['term_mode' => 'This licence has no end date. Choose "restart" so the new offer\'s term starts now.']);
+                }
+                $newEnd = $l['ends_at'];
+            }
+            $oldSeats = $l['seats_total'] !== null ? (int) $l['seats_total'] : null;
+            $newSeats = $seatsIn ? ($in['seats_total'] === null ? null : (int) $in['seats_total']) : ($offer['seats'] !== null ? (int) $offer['seats'] : null);
+            if ($newSeats !== null && $newSeats < (int) $l['seats_assigned']) {
+                return ['status' => 409, 'code' => 'seats_in_use', 'error' => "{$l['seats_assigned']} seats are assigned; the new plan allows {$newSeats}. Release some first or send seats_total."];
+            }
+            $old = S::json($l['offer_snapshot']);
+            $oldPrice = (int) ($old['price_paise'] ?? 0);
+            $direction = (int) $offer['price_paise'] > $oldPrice ? 'upgrade' : ((int) $offer['price_paise'] < $oldPrice ? 'downgrade' : 'change');
+            $newKeys = S::fromJsonArray($offer['app_keys_json']);
+            $changes = [
+                'offer' => [
+                    'from' => ['code' => $l['offer_code'], 'version' => (int) $l['offer_version'], 'label' => $old['label'] ?? $l['offer_code']],
+                    'to'   => ['code' => $offer['offer_code'], 'version' => (int) $offer['version'], 'label' => $offer['label']],
+                ],
+                'direction' => $direction,
+                'term_mode' => $mode,
+            ];
+            if (S::iso($newEnd) !== S::iso($l['ends_at'])) {
+                $changes['ends_at'] = ['from' => S::iso($l['ends_at']), 'to' => S::iso($newEnd)];
+            }
+            if ($newSeats !== $oldSeats) {
+                $changes['seats_total'] = ['from' => $oldSeats, 'to' => $newSeats];
+            }
+            if ($newKeys !== S::fromJsonArray($l['app_keys_json'])) {
+                $changes['app_keys'] = ['from' => S::fromJsonArray($l['app_keys_json']), 'to' => $newKeys];
+            }
+            $set = [
+                'offer_id' => (int) $offer['id'], 'offer_code' => $offer['offer_code'], 'offer_version' => (int) $offer['version'],
+                'offer_snapshot' => json_encode(OfferService::snapshot($offer)), 'plan_code' => $offer['plan_code'],
+                'licence_type_code' => $offer['licence_type_code'], 'app_keys' => $newKeys, 'seats_total' => $newSeats, 'ends_at' => $newEnd,
+            ];
+
+            return [$set, [['plan_changed', 'Plan changed from ' . ($old['label'] ?? $l['offer_code']) . ' to ' . $offer['label'], $changes, self::reason($in)]]];
+        });
+    }
+
     public function changeSeats(string $ref, array $in, array $staff): array
     {
         $v = $in['seats_total'] ?? null;
@@ -525,7 +801,7 @@ class LicenceService
             }
             $seatId = (int) $this->db()->query(
                 'INSERT INTO engage_licence_seats (licence_id, licence_ref, cmp_id, member_ref, member_label, assigned_by) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
-                [(int) $l['id'], $l['licence_ref'], (int) $l['cmp_id'], $member !== '' ? $member : null, $label !== '' ? $label : null, (int) $staff['id']]
+                [(int) $l['id'], $l['licence_ref'], $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null, $member !== '' ? $member : null, $label !== '' ? $label : null, (int) $staff['id']]
             )->getRow()->id;
 
             return [[], [['seat_assigned', 'Seat assigned' . ($label !== '' ? ' to ' . $label : ($member !== '' ? ' to ' . $member : '')), [
@@ -604,6 +880,11 @@ class LicenceService
      */
     private function mutate(string $ref, array $in, string $action, ?array $staff, callable $fn): array
     {
+        return S::strictTx($this->db(), fn () => $this->mutateTx($ref, $in, $action, $staff, $fn));
+    }
+
+    private function mutateTx(string $ref, array $in, string $action, ?array $staff, callable $fn): array
+    {
         $expected = $in['version'] ?? null;
         if (! (is_int($expected) || (is_string($expected) && ctype_digit($expected))) || (int) $expected < 1) {
             return self::invalid(['version' => 'Send the licence version you are changing (optimistic lock).']);
@@ -658,17 +939,24 @@ class LicenceService
 
                 return ['status' => 409, 'code' => 'version_conflict', 'error' => 'This licence was changed by someone else. Reload and try again.'];
             }
+            $cmp = $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null;
             foreach ($events as $ev) {
-                $this->event((int) $l['id'], $l['licence_ref'], (int) $l['cmp_id'], $ev[0], $actor, $ev[1], $ev[3] ?? null, $ev[2], $expected + 1);
+                $this->event((int) $l['id'], $l['licence_ref'], $cmp, $l['holder_uuid'], $ev[0], $actor, $ev[1], $ev[3] ?? null, $ev[2], $expected + 1);
             }
+            $after = $db->query(self::SELECT . ' WHERE l.id = ?', [(int) $l['id']])->getRowArray();
+            $this->afterWrite($l, $after, $action, $in, $actor);
             $db->transCommit();
+        } catch (LicenceHookRejected $hx) {
+            $db->transRollback();
+
+            return $hx->result();
         } catch (\Throwable $ex) {
             $db->transRollback();
             log_message('error', "Licence {$action} failed for {$ref}: " . $ex->getMessage());
 
             return ['status' => 500, 'error' => 'Could not change the licence.'];
         }
-        $meta = ['cmp_id' => (int) $l['cmp_id'], 'version' => $expected + 1, 'events' => array_map(static fn ($ev) => $ev[0], $events)];
+        $meta = ['cmp_id' => $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null, 'holder_uuid' => $l['holder_uuid'], 'version' => $expected + 1, 'events' => array_map(static fn ($ev) => $ev[0], $events)];
         if (! empty($events[0][3])) {
             $meta['reason'] = $events[0][3];
         }
@@ -677,13 +965,100 @@ class LicenceService
         return ['status' => 200, 'data' => $this->staffDetail($l['licence_ref'])];
     }
 
+    /**
+     * Side effects of a licence write, INSIDE its transaction: the holder's Basic is superseded / reactivated, the
+     * coupon hook runs (issue / renew / change-offer), and the subject's entitlement state is queued for Manage for
+     * every app key the licence covered before or covers now.
+     *
+     * @param array<string,mixed> $before the row before the change ([] for a new licence)
+     * @param array<string,mixed> $after  the row as written
+     * @param array{kind:string,id:?int,display:string} $actor
+     */
+    private function afterWrite(array $before, array $after, string $action, array $in, array $actor): void
+    {
+        $holder = $after['holder_uuid'] ?? null;
+        $keys = array_values(array_unique(array_merge($before !== [] ? EntitlementProjector::appKeysOf($before) : [], EntitlementProjector::appKeysOf($after))));
+        if ($holder !== null && $holder !== '') {
+            $keys = array_values(array_unique(array_merge($keys, $this->reconcileBasic($holder, (string) $after['product_code'], $actor))));
+        }
+        if (in_array($action, ['issue', 'renew', 'change-offer'], true)) {
+            LicenceHooks::afterLicenceWrite($this->db(), $action, $after, $in);
+        }
+        (new EntitlementOutbox($this->db()))->enqueue($holder, $after['cmp_id'] !== null ? (int) $after['cmp_id'] : null, $keys,
+            $action === 'issue' ? 'licence.issued' : 'licence.' . $action, (string) $after['licence_ref']);
+    }
+
+    /**
+     * D-L1: a holder's Basic for a product is `superseded` while a paid licence of the same holder + product is active
+     * (term not ended), and `active` again when none is. Runs in the caller's transaction. @return list<string> the
+     * Basic's app keys when it changed, else []
+     *
+     * @param array{kind:string,id:?int,display:string} $actor
+     */
+    public function reconcileBasic(string $holder, string $product, array $actor): array
+    {
+        $basic = $this->db()->query(self::SELECT . " WHERE l.holder_uuid = ? AND l.product_code = ? AND l.is_basic
+            AND l.status IN ('active','superseded') ORDER BY l.id DESC LIMIT 1 FOR UPDATE OF l", [$holder, $product])->getRowArray();
+        if (! $basic) {
+            return [];
+        }
+        $covering = $this->db()->query("SELECT licence_ref FROM engage_licences WHERE holder_uuid = ? AND product_code = ? AND NOT is_basic
+            AND status = 'active' AND (ends_at IS NULL OR ends_at > NOW()) ORDER BY id LIMIT 1", [$holder, $product])->getRowArray();
+        if ($covering && $basic['status'] === 'active') {
+            $to = 'superseded';
+            $set = "status = 'superseded', superseded_at = NOW()";
+            $summary = 'Basic plan paused: a paid plan (' . $covering['licence_ref'] . ') applies while it is active';
+        } elseif (! $covering && $basic['status'] === 'superseded') {
+            $to = 'active';
+            $set = "status = 'active', superseded_at = NULL";
+            $summary = 'Basic plan active again (no paid plan is active)';
+        } else {
+            return [];
+        }
+        $this->db()->query("UPDATE engage_licences SET {$set}, version = version + 1, updated_at = NOW() WHERE id = ?", [(int) $basic['id']]);
+        $this->event((int) $basic['id'], $basic['licence_ref'], $basic['cmp_id'] !== null ? (int) $basic['cmp_id'] : null, $holder,
+            $to === 'superseded' ? 'superseded' : 'reactivated', $actor, $summary, null,
+            ['status' => ['from' => $basic['status'], 'to' => $to]] + ($covering ? ['by_licence_ref' => $covering['licence_ref']] : []), (int) $basic['version'] + 1);
+
+        return EntitlementProjector::appKeysOf($basic);
+    }
+
+    /**
+     * Provisioning (contract §3.2): insert a holder's Basic licence from a default offer. MUST run inside the caller's
+     * transaction, after it has checked that no Basic is held (uq_engage_licences_basic_live is the backstop).
+     * Status is `superseded` straight away when a paid licence of the product is active. Returns the row.
+     */
+    public function insertBasic(string $holder, array $offer, string $actorDisplay): array
+    {
+        $db = $this->db();
+        $actor = ['kind' => 'system', 'id' => null, 'display' => $actorDisplay];
+        $now = gmdate('Y-m-d H:i:s') . '+00';
+        $endsAt = S::addTerm($now, (int) $offer['term_months'], (int) $offer['term_days']);
+        $n = (int) $db->query("SELECT nextval('engage_licence_ref_seq') AS n")->getRow()->n;
+        $ref = 'LIC-' . str_pad((string) $n, 6, '0', STR_PAD_LEFT);
+        $id = (int) $db->query(
+            "INSERT INTO engage_licences (licence_ref, cmp_id, holder_uuid, account_id, offer_id, offer_code, offer_version, offer_snapshot, product_code,
+                licence_type_code, plan_code, app_keys, seats_total, starts_at, ends_at, status, invoice_refs, source, version, activated_at, is_basic)
+             VALUES (?, NULL, ?, NULL, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, 'active', '{}', 'provisioning', 1, ?, TRUE) RETURNING id",
+            [$ref, $holder, (int) $offer['id'], $offer['offer_code'], (int) $offer['version'], json_encode(OfferService::snapshot($offer)),
+                $offer['product_code'], $offer['licence_type_code'], $offer['plan_code'], S::pgArray(S::fromJsonArray($offer['app_keys_json'])),
+                $offer['seats'] !== null ? (int) $offer['seats'] : null, $now, $endsAt, $now]
+        )->getRow()->id;
+        $this->event($id, $ref, null, $holder, 'issued', $actor, 'Basic plan: ' . $offer['label'], null,
+            ['offer' => ['code' => $offer['offer_code'], 'version' => (int) $offer['version']], 'starts_at' => S::iso($now), 'ends_at' => S::iso($endsAt)], 1);
+        $this->event($id, $ref, null, $holder, 'activated', $actor, 'Licence activated', null, ['status' => ['from' => 'issued', 'to' => 'active']], 1);
+        $this->reconcileBasic($holder, (string) $offer['product_code'], $actor);
+
+        return $db->query(self::SELECT . ' WHERE l.id = ?', [$id])->getRowArray();
+    }
+
     /** @param array{kind:string,id:?int,display:string} $actor */
-    private function event(int $licenceId, string $ref, int $cmpId, string $type, array $actor, string $summary, ?string $reason, array $changes, int $licenceVersion): void
+    private function event(int $licenceId, string $ref, ?int $cmpId, ?string $holder, string $type, array $actor, string $summary, ?string $reason, array $changes, int $licenceVersion): void
     {
         $this->db()->query(
-            'INSERT INTO engage_licence_events (event_id, licence_id, licence_ref, cmp_id, seq, type, actor_kind, actor_id, actor_display, summary, reason, changes, licence_version)
-             VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)',
-            ['lev_' . bin2hex(random_bytes(12)), $licenceId, $ref, $cmpId, $type, $actor['kind'], $actor['id'], $actor['display'], $summary, $reason,
+            'INSERT INTO engage_licence_events (event_id, licence_id, licence_ref, cmp_id, holder_uuid, seq, type, actor_kind, actor_id, actor_display, summary, reason, changes, licence_version)
+             VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)',
+            ['lev_' . bin2hex(random_bytes(12)), $licenceId, $ref, $cmpId, $holder, $type, $actor['kind'], $actor['id'], $actor['display'], $summary, $reason,
                 json_encode((object) $changes), $licenceVersion]
         );
     }

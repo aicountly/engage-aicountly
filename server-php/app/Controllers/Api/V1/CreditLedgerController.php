@@ -54,6 +54,13 @@ class CreditLedgerController extends BaseApiController
         return $row ? $this->ok($row) : $this->fail('Ledger entry not found.', 404);
     }
 
+    /** Never taken from the request on create. */
+    private const SERVER_FIELDS = ['status', 'approved_by', 'approved_at', 'approval_id', 'created_by', 'creator_kind', 'created_at'];
+
+    /** Only super_admin | sales_manager may change these on an existing entry. */
+    private const MONEY_FIELDS = ['status', 'approval_id', 'amount', 'points_amount', 'direction', 'currency', 'points_unit',
+        'party_type', 'party_reference'];
+
     public function create()
     {
         $data = $this->input();
@@ -63,6 +70,9 @@ class CreditLedgerController extends BaseApiController
         if (empty($data['direction']) || ! in_array($data['direction'], ['credit', 'debit'], true)) {
             return $this->fail('direction must be credit or debit.', 400);
         }
+        // Status, approval and authorship are decided by CreditService (a large amount waits for approval); they could be
+        // posted directly before, skipping the approval.
+        $data = array_diff_key($data, array_flip(self::SERVER_FIELDS));
         $row = Services::creditService()->post($data);
         $this->audit('credit_entry_create', ['subject_kind' => 'credit_ledger', 'subject_id' => $row['id'] ?? null]);
         return $this->ok($row, 201);
@@ -77,7 +87,21 @@ class CreditLedgerController extends BaseApiController
 
     public function update($id = null)
     {
-        $data = $this->input();
+        $row = $this->m->find((int) $id);
+        if (! $row) {
+            return $this->fail('Credit entry not found.', 404);
+        }
+        $data = array_diff_key($this->input(), array_flip(['created_by', 'creator_kind', 'created_at', 'approved_by', 'approved_at']));
+        if (! $this->userHasRole(['super_admin', 'sales_manager'])) {
+            // A ledger entry's money and state change only through an approver; others may edit the description.
+            $data = array_diff_key($data, array_flip(self::MONEY_FIELDS));
+        } elseif (isset($data['status']) && $data['status'] !== ($row['status'] ?? null) && $data['status'] === 'posted') {
+            $data['approved_by'] = $this->user()['id'] ?? null;
+            $data['approved_at'] = date('Y-m-d H:i:s');
+        }
+        if ($data === []) {
+            return $this->ok($row);
+        }
         $this->m->update((int) $id, $data);
         $this->audit('credit_entry_update', ['subject_kind' => 'credit_ledger', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));

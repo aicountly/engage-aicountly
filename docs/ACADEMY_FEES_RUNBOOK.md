@@ -19,7 +19,7 @@ not built yet.
 
 ## 1. Products
 
-Migration `2026-10-23-000110_AddAcademyProducts` (it runs on deploy with `php spark migrate`) and `ProductsSeeder`
+Migration `2026-10-24-000010_AddAcademyProducts` (it runs on deploy with `php spark migrate`) and `ProductsSeeder`
 (fresh installs only) add the products below:
 
 | code | name | category | use |
@@ -30,6 +30,12 @@ Migration `2026-10-23-000110_AddAcademyProducts` (it runs on deploy with `php sp
 
 The migration is idempotent. If a row already exists, only its name and category are corrected; its id, sort
 order, description and `is_active` stay as they are.
+
+`edge` and `aspire` are also **Manage registry keys** (Licensing: `ManageAppRegistry`, offers' `app_keys`, entitlement
+codes `edge.max_active_learners` / `aspire.max_workshops_per_month`). It is one product row per code, shared by both
+uses: licensing offers and entitlements keep working on the code, and course leads and fee payments name the same
+code. Only the row's category becomes `Academy` (it was `learning`); nothing in Engage reads the category except the
+revenue filter below. `academy` is a course-only code, not a Manage app key.
 
 **Matching.** Every lead intake links a free-text interest to a product by **code or display name**. The match
 ignores case and extra spaces, and a code match wins over a name match (`ProductsModel::resolve`):
@@ -121,7 +127,9 @@ The fields (`CommissionService::confirmPayment`, route role `super_admin,sales_m
 | --- | --- | --- |
 | `amount` | yes | INR, at most 2 decimals, > 0, as a string or a number: `"50000.00"`, `"50000"` or `50000`. **No commas.** |
 | `payment_ref` | yes | 3–96 characters from `A–Z a–z 0–9 _ . : / -`. Use the **gateway payment id** exactly as the dashboard shows it: Razorpay `pay_…` (not the link id `plink_…` or the order id), Cashfree `cf_payment_id`. With the lead, it is the natural key: sending it again with the same amount → `200 {"duplicate": true}`; with a different amount → `409`. |
-| `product_code` | no | `edge` / `aspire` (a name such as "Aicountly Edge" is normalised). **Empty → the lead's `interested_product`.** Commission plans match on this code. |
+| `product_code` | no | `edge` / `aspire` (a name such as "Aicountly Edge" is normalised). **Empty → the quote's product (with `quote_ref`), else the lead's `interested_product`.** Commission plans match on this code. |
+| `net_amount` | no | The fee **before GST** (taxable value), at most `amount`. When given, seller commission is calculated on it instead of the amount paid (`basis_kind = net_before_gst`). Use it whenever the fee includes GST. |
+| `quote_ref` | no | An Engage quote (`QTE-…`, coupons). Commission is then on that quote's net before GST; `net_amount` is ignored. Not used for Academy fees at launch. |
 | `paid_at` | no | A date or timestamp, not more than 1 day ahead. Default: now. |
 | `currency` | no | Only `INR` is accepted. |
 | `notes` | no | Free text, shown in the lead activity. |
@@ -234,7 +242,7 @@ it earns commission.
 ## 5. Known gaps at launch
 
 - Fees and GST are not modelled in Engage. The amount is what was collected. Commission is calculated on that
-  amount (including GST, if any was collected).
+  amount unless `net_amount` (the fee before GST) is given — give it whenever GST was charged.
 - There is no partial refund (see Refunds).
 - `PUT /api/v1/leads/{id}` can change `interested_product`, but it does not relink `interested_product_id`.
   Prefer choosing the product when you confirm the payment.

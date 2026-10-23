@@ -64,6 +64,9 @@ $routes->get('/health', static function () {
             'reach_outcomes'      => \Config\Services::reachOutcomes()->status(),
             'finance_payouts'     => \Config\Services::financePayouts()->status(),
             'manage_inbound'      => \App\Libraries\AicS2s\AicS2sConfig::forClient('manage')->status(),
+            'myaicountly_inbound' => \App\Libraries\AicS2s\AicS2sConfig::forClient('myaicountly')->status(),
+            'manage_outbound'     => \Config\Services::entitlementOutbox()->client()->status(),
+            'entitlement_outbox'  => \Config\Services::entitlementOutbox()->status(),
             'finance_inbound_key' => strlen(trim((string) env('ENGAGE_INBOUND_FINANCE_KEY', ''))) >= 32 ? 'ok' : 'ENGAGE_INBOUND_FINANCE_KEY missing or shorter than 32 characters — Finance payout status updates get 503',
         ],
     ]);
@@ -135,7 +138,12 @@ $routes->group('v1', static function ($routes) {
     // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
     // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
     // ENGAGE_INBOUND_MANAGE_* key are set. Read keys may only GET; no write route exists in Phase A.
-    $routes->group('manage', ['filter' => 'aic-s2s:manage'], static function ($routes) {
+    // Coupons (docs/COUPONS.md §7): Manage keys of scope `quote` only, POST on exactly these two paths. Registered
+    // before the group so its POST catch-all does not take them; the group accepts read / issue keys only, so a quote
+    // key gets 403 route_not_allowed_for_key anywhere else.
+    $routes->post('manage/coupons/preview',  'Inbound\\ManageCouponsController::preview', ['filter' => 'aic-s2s:manage,quote']);
+    $routes->post('manage/upgrade-requests', 'Inbound\\ManageCouponsController::upgradeRequest', ['filter' => 'aic-s2s:manage,quote']);
+    $routes->group('manage', ['filter' => 'aic-s2s:manage,read,issue'], static function ($routes) {
         $M = 'Inbound\\ManageLicensingController::';
         $routes->get('companies/(:segment)/licences',                    $M . 'licences/$1');
         $routes->get('companies/(:segment)/licences/(:segment)',         $M . 'licence/$1/$2');
@@ -145,6 +153,11 @@ $routes->group('v1', static function ($routes) {
         $routes->get('licence-types',                                    $M . 'licenceTypes');
         $routes->match(['POST', 'PUT', 'PATCH', 'DELETE'], '(:any)',     $M . 'noRoute');
     });
+
+    // my.aicountly (server side) → Engage: Basic provisioning after sign-up (contract §3.2, docs/LICENSING.md §5b).
+    // AIC-S2S v1, client myaicountly, key scope issue only (503 inbound_not_configured until
+    // ENGAGE_INBOUND_MYAICOUNTLY_* is set).
+    $routes->post('provisioning/accounts', 'Inbound\\ProvisioningController::accounts', ['filter' => 'aic-s2s:myaicountly,issue']);
 
     // Internal Reach ingest — validated by X-Portal-Token header.
     $routes->group('internal', ['filter' => 'internal-token'], static function ($routes) {
@@ -175,8 +188,13 @@ $routes->group('v1', static function ($routes) {
         $routes->get('status/health',       'Api\\V1\\HealthController::index');
 
         // Catalogs.
-        $routes->resource('products',        ['controller' => 'Api\\V1\\ProductsController']);
-        $routes->resource('plans',           ['controller' => 'Api\\V1\\PlansController']);
+        // Products and plans are the licensing catalogue (offers reference them): every role reads, only super_admin |
+        // sales_manager write (any signed-in role, kyc_reviewer included, could rename or deactivate them before).
+        $catalogueWrite = 'role:super_admin,sales_manager';
+        $routes->resource('products', ['controller' => 'Api\\V1\\ProductsController', 'only' => ['index', 'show']]);
+        $routes->resource('products', ['controller' => 'Api\\V1\\ProductsController', 'only' => ['create', 'update', 'delete'], 'filter' => $catalogueWrite]);
+        $routes->resource('plans',    ['controller' => 'Api\\V1\\PlansController', 'only' => ['index', 'show']]);
+        $routes->resource('plans',    ['controller' => 'Api\\V1\\PlansController', 'only' => ['create', 'update', 'delete'], 'filter' => $catalogueWrite]);
         $routes->resource('lead-sources',    ['controller' => 'Api\\V1\\LeadSourcesController']);
         $routes->resource('pipeline-stages', ['controller' => 'Api\\V1\\PipelineController']);
         $routes->get('pipeline/summary', 'Api\\V1\\PipelineController::summary');
@@ -258,6 +276,7 @@ $routes->group('v1', static function ($routes) {
         $routes->get('licence-types',                         $L . 'LicenceTypesController::index');
         $routes->post('licence-types',                        $L . 'LicenceTypesController::create', $licAdmin);
         $routes->put('licence-types/(:num)',                  $L . 'LicenceTypesController::update/$1', $licAdmin);
+        $routes->get('entitlement-codes',                     $L . 'EntitlementCodesController::index');
         $routes->get('offers',                                $L . 'OffersController::index');
         $routes->get('offers/(:num)',                         $L . 'OffersController::show/$1');
         $routes->post('offers',                               $L . 'OffersController::create', $licAdmin);
@@ -266,6 +285,11 @@ $routes->group('v1', static function ($routes) {
         $routes->post('offers/(:num)/publish',                $L . 'OffersController::publish/$1', $licAdmin);
         $routes->post('offers/(:num)/retire',                 $L . 'OffersController::retire/$1', $licAdmin);
         $routes->post('offers/(:num)/new-version',            $L . 'OffersController::newVersion/$1', $licAdmin);
+        $routes->post('offers/(:num)/default',                $L . 'OffersController::setDefault/$1', $licAdmin);
+        $routes->get('holders',                               $L . 'HoldersController::index');
+        $routes->get('holders/(:segment)',                    $L . 'HoldersController::show/$1');
+        $routes->get('entitlements/outbox',                   $L . 'EntitlementsController::outbox');
+        $routes->post('entitlements/outbox/(:num)/requeue',   $L . 'EntitlementsController::requeue/$1', $licAdmin);
         $routes->get('account-companies',                     $L . 'AccountCompaniesController::index');
         $routes->post('account-companies',                    $L . 'AccountCompaniesController::create', $licAdmin);
         $routes->post('account-companies/(:num)/unlink',      $L . 'AccountCompaniesController::unlink/$1', $licAdmin);
@@ -282,6 +306,32 @@ $routes->group('v1', static function ($routes) {
         $routes->post('licences/(:segment)/seat-assignments', $L . 'LicencesController::assignSeat/$1', $licAdmin);
         $routes->post('licences/(:segment)/seat-assignments/(:num)/release', $L . 'LicencesController::releaseSeat/$1/$2', $licAdmin);
         $routes->post('licences/(:segment)/invoice-refs',     $L . 'LicencesController::invoiceRef/$1', $licAdmin);
+        $routes->post('licences/(:segment)/change-offer',     $L . 'LicencesController::changeOffer/$1', $licAdmin);
+
+        // Coupons and quotes (docs/COUPONS.md). View / export: super_admin | sales_manager | seller_manager;
+        // create / edit / activate / pause / retire / generate / quote / release / reverse: super_admin | sales_manager.
+        $couponView  = ['filter' => 'role:super_admin,sales_manager,seller_manager'];
+        $couponAdmin = ['filter' => 'role:super_admin,sales_manager'];
+        $C = 'Api\\V1\\Coupons\\CouponsController::';
+        $routes->get('coupons',                               $C . 'index', $couponView);
+        $routes->post('coupons',                              $C . 'create', $couponAdmin);
+        $routes->get('coupons/(:num)',                        $C . 'show/$1', $couponView);
+        $routes->put('coupons/(:num)',                        $C . 'update/$1', $couponAdmin);
+        $routes->delete('coupons/(:num)',                     $C . 'delete/$1', $couponAdmin);
+        $routes->post('coupons/(:num)/activate',              $C . 'activate/$1', $couponAdmin);
+        $routes->post('coupons/(:num)/pause',                 $C . 'pause/$1', $couponAdmin);
+        $routes->post('coupons/(:num)/retire',                $C . 'retire/$1', $couponAdmin);
+        $routes->get('coupons/(:num)/codes',                  $C . 'codes/$1', $couponView);
+        $routes->post('coupons/(:num)/codes',                 $C . 'addCodes/$1', $couponAdmin);
+        $routes->get('coupons/(:num)/codes.csv',              $C . 'exportCodes/$1', $couponView);
+        $routes->post('coupons/(:num)/codes/(:num)/void',     $C . 'voidCode/$1/$2', $couponAdmin);
+        $routes->get('coupon-redemptions',                    $C . 'redemptions', $couponView);
+        $routes->post('coupon-redemptions/(:num)/release',    $C . 'release/$1', $couponAdmin);
+        $routes->post('coupon-redemptions/(:num)/reverse',    $C . 'reverse/$1', $couponAdmin);
+        $routes->get('coupon-report',                         $C . 'report', $couponView);
+        $routes->get('quotes',                                $C . 'quotes', $couponView);
+        $routes->post('quotes',                               $C . 'createQuote', $couponAdmin);
+        $routes->get('quotes/(:segment)',                     $C . 'quote/$1', $couponView);
 
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);
@@ -304,8 +354,11 @@ $routes->group('v1', static function ($routes) {
         $routes->delete('proposals/(:num)/lines/(:num)', 'Api\\V1\\ProposalsController::removeLine/$1/$2');
         $routes->resource('proposals', ['controller' => 'Api\\V1\\ProposalsController']);
 
-        $routes->post('discount-requests/(:num)/approve', 'Api\\V1\\DiscountRequestsController::approve/$1');
-        $routes->post('discount-requests/(:num)/reject',  'Api\\V1\\DiscountRequestsController::reject/$1');
+        // Approving / rejecting a discount or an approval request: super_admin | sales_manager only (it used to be any
+        // signed-in role — docs/COUPONS.md §2).
+        $decide = ['filter' => 'role:super_admin,sales_manager'];
+        $routes->post('discount-requests/(:num)/approve', 'Api\\V1\\DiscountRequestsController::approve/$1', $decide);
+        $routes->post('discount-requests/(:num)/reject',  'Api\\V1\\DiscountRequestsController::reject/$1', $decide);
         $routes->resource('discount-requests', ['controller' => 'Api\\V1\\DiscountRequestsController']);
 
         $routes->resource('follow-ups', ['controller' => 'Api\\V1\\FollowUpsController']);
@@ -334,9 +387,9 @@ $routes->group('v1', static function ($routes) {
         $routes->get('bot/reports-local',     'Api\\V1\\BotReportsController::localReports');
 
         // Approvals.
-        $routes->post('approvals/(:num)/approve', 'Api\\V1\\ApprovalsController::approve/$1');
-        $routes->post('approvals/(:num)/reject',  'Api\\V1\\ApprovalsController::reject/$1');
-        $routes->post('approvals/(:num)/execute', 'Api\\V1\\ApprovalsController::execute/$1');
+        $routes->post('approvals/(:num)/approve', 'Api\\V1\\ApprovalsController::approve/$1', $decide);
+        $routes->post('approvals/(:num)/reject',  'Api\\V1\\ApprovalsController::reject/$1', $decide);
+        $routes->post('approvals/(:num)/execute', 'Api\\V1\\ApprovalsController::execute/$1', $decide);
         $routes->resource('approvals', ['controller' => 'Api\\V1\\ApprovalsController']);
     });
 });

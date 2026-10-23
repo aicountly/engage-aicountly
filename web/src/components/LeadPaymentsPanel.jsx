@@ -13,7 +13,7 @@ export default function LeadPaymentsPanel({ lead }) {
   const { hasRole } = useAuth()
   const canConfirm = hasRole(COMMISSION_ADMIN)
   const canAttribute = hasRole(ATTRIBUTION_ADMIN)
-  const [form, setForm] = useState({ amount: '', payment_ref: '', paid_at: '', product_code: '', notes: '' })
+  const [form, setForm] = useState({ amount: '', payment_ref: '', paid_at: '', notes: '', quote_ref: '', net_amount: '', product_code: '' })
   const [error, setError] = useState(null)
   const [note, setNote] = useState(null)
   const q = useQuery({ queryKey: ['lead-payments', lead.id], queryFn: () => api.get(`/v1/leads/${lead.id}/payments`).then((r) => r.data?.data) })
@@ -25,7 +25,7 @@ export default function LeadPaymentsPanel({ lead }) {
   const refresh = () => { qc.invalidateQueries({ queryKey: ['lead-payments', lead.id] }); qc.invalidateQueries({ queryKey: ['lead', String(lead.id)] }) }
   const confirm = useMutation({
     mutationFn: (body) => api.post(`/v1/leads/${lead.id}/payments`, body).then((r) => r.data?.data),
-    onSuccess: (d) => { setError(null); setForm({ amount: '', payment_ref: '', paid_at: '', product_code: '', notes: '' }); setNote((d?.accrual?.notes || []).join(' ') || (d?.duplicate ? 'This payment was already recorded.' : null)); refresh() },
+    onSuccess: (d) => { setError(null); setForm({ amount: '', payment_ref: '', paid_at: '', notes: '', quote_ref: '', net_amount: '', product_code: '' }); setNote((d?.accrual?.notes || []).join(' ') || (d?.duplicate ? 'This payment was already recorded.' : null)); refresh() },
     onError: (e) => setError(apiError(e)),
   })
   const refund = useMutation({
@@ -66,7 +66,7 @@ export default function LeadPaymentsPanel({ lead }) {
               <tr key={p.id}>
                 <td>{p.sequence_no}</td>
                 <td className="font-mono text-xs">{p.payment_ref}</td>
-                <td>{inr(p.amount)}</td>
+                <td>{inr(p.amount)}{p.basis_kind === 'net_before_gst' ? <div className="text-[10px] text-neutral-500">basis ₹{(p.basis_paise / 100).toFixed(2)} net{p.quote_ref ? ` · ${p.quote_ref}` : ''}</div> : null}</td>
                 <td>{formatDate(p.paid_at)}</td>
                 <td><StatusBadge status={p.status} /></td>
                 <td className="text-xs">{e ? <>{inr(e.amount)} <StatusBadge status={e.status} /></> : (p.commission_note || 'Evaluated when the lead converts')}</td>
@@ -88,6 +88,9 @@ export default function LeadPaymentsPanel({ lead }) {
             {(productsQ.data || []).map((p) => <option key={p.code} value={p.code}>{p.name} ({p.code})</option>)}
           </select>
           <input className="engage-input" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          <input className="engage-input font-mono" placeholder="Quote ref (QTE-…) — commission on its net" value={form.quote_ref} onChange={(e) => setForm({ ...form, quote_ref: e.target.value })} />
+          <input className="engage-input" placeholder="or net before GST (INR), e.g. 8000.00" disabled={!!form.quote_ref} value={form.net_amount} onChange={(e) => setForm({ ...form, net_amount: e.target.value })} />
+          <div className="col-span-2 text-xs text-neutral-500">Commission is computed on the net invoiced after any discount and before GST — from the quote, or the net you type; otherwise on the amount paid.</div>
           <button className="engage-btn-primary col-span-2" disabled={confirm.isPending || !form.amount || !form.payment_ref}
             onClick={() => confirm.mutate(Object.fromEntries(Object.entries(form).filter(([, v]) => v !== '')))}>Payment confirmed</button>
         </div>

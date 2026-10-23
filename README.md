@@ -20,6 +20,10 @@ Engage integrates with:
 | `reach.aicountly.org` | Lead outcomes (stage changes, payments) sent back to Reach via outbox | `REACH_API_BASE_URL`, `REACH_OUTCOME_TOKEN` |
 | `finance.aicountly.org` | Weekly seller payout DRAFT batches out; payout status (approved / on hold / paid + UTR / failed …) back — see [docs/SELLER_PROGRAM.md § 6](docs/SELLER_PROGRAM.md) | `FINANCE_API_BASE_URL`, `FINANCE_OUTBOUND_KEY`, `ENGAGE_INBOUND_FINANCE_KEY` |
 | `manage.aicountly.com` | Licensing read API for Manage's server (`/api/v1/manage/*`: licences, seats, activity, catalogue, licence types; AIC-S2S v1 HMAC, read-only, 503 until configured) — see [docs/LICENSING.md](docs/LICENSING.md) | `ENGAGE_S2S_ENVIRONMENT`, `ENGAGE_INBOUND_MANAGE_KEY_IDS`, `ENGAGE_INBOUND_MANAGE_SECRET_<KEYID>` |
+| `manage.aicountly.com` | Entitlement push: every licence change queues the holder's full plan state per app; `engage:entitlements-push` (every minute) POSTs it to `/api/v1/inbound/engage/entitlements` (AIC-S2S v1, client `engage`); daily report-only drift check `engage:entitlements-reconcile` — see [docs/LICENSING.md § 6](docs/LICENSING.md) | `MANAGE_API_BASE_URL`, `ENGAGE_OUTBOUND_MANAGE_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_SECRET`, `ENGAGE_S2S_ENVIRONMENT` |
+| `my.aicountly.com` | Basic provisioning after sign-up: `POST /api/v1/provisioning/accounts` (AIC-S2S v1, client `myaicountly`, scope `issue`) issues every product's published Basic (default) offer to the new holder — see [docs/LICENSING.md § 5b](docs/LICENSING.md) | `ENGAGE_S2S_ENVIRONMENT`, `ENGAGE_INBOUND_MYAICOUNTLY_KEY_IDS`, `ENGAGE_INBOUND_MYAICOUNTLY_SECRET_<KEYID>`, `ENGAGE_INBOUND_MYAICOUNTLY_SCOPE_<KEYID>=issue` |
+| `manage.aicountly.com` | Coupon preview and "Request upgrade" for Manage's server (`POST /api/v1/manage/coupons/preview`, `POST /api/v1/manage/upgrade-requests`; AIC-S2S v1, a key of scope `quote` only, rate limited per holder) — see [docs/COUPONS.md](docs/COUPONS.md) | `ENGAGE_INBOUND_MANAGE_SCOPE_<KEYID>=quote`, `ENGAGE_COUPON_PREVIEW_LIMIT`, `ENGAGE_COUPON_PREVIEW_WINDOW_SECONDS`, `ENGAGE_UPGRADE_REQUEST_LIMIT`, `ENGAGE_UPGRADE_REQUEST_WINDOW_SECONDS` |
+| `finance.aicountly.org` | Discount coupons: staff quote in Engage (GST on the price after discount) → Finance invoice line with list / discount / code → licence issued with `quote_ref` (redemption committed); seller commission on the net before GST — see [docs/COUPONS.md](docs/COUPONS.md) | — (staff runbook; no new wire) |
 | `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` (default `console_providers`: seller emails go through Console's email providers for `app_code=engage`, `CONSOLE_API_TOKEN` with `email.credentials`; `ENGAGE_SMTP_*` is the last resort — [docs/SELLER_PROGRAM.md § 10](docs/SELLER_PROGRAM.md)) |
 
 ## Repository layout
@@ -250,12 +254,12 @@ env database.tests.database=engage_test database.tests.username=postgres \
 
 - No marketing, blog, or social modules.
 - No sandbox domain logic.
-- No calls to `my.aicountly.com`.
+- No calls to `my.aicountly.com` (my.aicountly calls Engage for Basic provisioning, not the other way round).
 - No partner-facing UI in Engage — partners use `partner.aicountly.com`.
 - No partner data storage in Engage — Partner Master screens proxy to the
   Partner Portal's admin API; see "Partner Master" below.
-- No connection to Manage unless `.env` `MANAGE_API_*` is configured; the
-  integration layer is a service placeholder only.
+- No outbound connection to Manage unless `MANAGE_API_BASE_URL` and
+  `ENGAGE_OUTBOUND_MANAGE_*` are set (the entitlement push; changes stay queued until then).
 
 ## Portal modules
 
@@ -427,8 +431,9 @@ audited and mirrored to Console.
   `academy` / `edge` / `aspire`; fees are collected through Aicountly Finance's gateways and confirmed on the
   lead (`POST /api/v1/leads/{id}/payments`), which feeds revenue, seller commission and the Reach outcome.
   Revenue per product: `GET /api/v1/lead-payments/by-product?category=Academy`.
-- **Manage (placeholder)**: not called unless `MANAGE_API_*` is set. Service
-  layer left as an extension seam.
+- **Manage**: Engage pushes licence entitlement states to Manage (outbox +
+  `engage:entitlements-push`) once `MANAGE_API_BASE_URL` / `ENGAGE_OUTBOUND_MANAGE_*` are set; see
+  [docs/LICENSING.md § 6](docs/LICENSING.md).
 - **Licensing** ([docs/LICENSING.md](docs/LICENSING.md)): staff-only catalogue (licence types,
   versioned offers), account ↔ Manage company mapping and licences with an append-only activity
   timeline (sidebar **Licensing**). Manage's server reads them over AIC-S2S v1 (`/api/v1/manage/*`);

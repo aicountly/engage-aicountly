@@ -78,8 +78,20 @@ class AuthController extends BaseApiController
         ]);
     }
 
+    /**
+     * Sign out: Engage tokens are stateless JWTs (12 h), so the user's tokens issued up to now are revoked
+     * (engage_users.tokens_revoked_at, checked by JwtFilter and refresh) — a copied token no longer works after logout.
+     */
     public function logout()
     {
+        $u = $this->user();
+        if ($u && (int) ($u['id'] ?? 0) > 0) {
+            try {
+                (new UsersModel())->update((int) $u['id'], ['tokens_revoked_at' => date('Y-m-d H:i:s')]);
+            } catch (Throwable $e) {
+                log_message('error', 'Logout revocation failed: ' . $e->getMessage());
+            }
+        }
         $this->audit('logout');
         return $this->ok(['message' => 'Logged out.']);
     }

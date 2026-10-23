@@ -6,7 +6,13 @@ import DataTable from '../components/DataTable.jsx'
 import FilterBar from '../components/FilterBar.jsx'
 import { StatusBadge } from '../components/Badges.jsx'
 import Drawer from '../components/Drawer.jsx'
-import { formatDate, formatMoney, titleCase } from '../lib/format.js'
+import { formatDate, formatMoney } from '../lib/format.js'
+import { useAuth } from '../lib/auth.jsx'
+import { DECISION_ROLES } from '../lib/coupons.js'
+
+// The table has discount_percent / discount_amount (migration 2026-07-03-000034); the screen used to read
+// discount_type / amount, which do not exist.
+const discountText = (r) => (Number(r.discount_percent) > 0 ? `${Number(r.discount_percent)}%` : formatMoney(r.discount_amount, r.currency))
 
 export default function DiscountRequests() {
   const qc = useQueryClient()
@@ -14,6 +20,9 @@ export default function DiscountRequests() {
   const [current, setCurrent] = useState(null)
   const [reason, setReason] = useState('')
   const [msg, setMsg] = useState(null)
+  // Approve / reject: super_admin | sales_manager (the API enforces the same; Routes.php).
+  const { hasRole } = useAuth()
+  const canDecide = hasRole(DECISION_ROLES)
 
   const q = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString()
 
@@ -52,8 +61,7 @@ export default function DiscountRequests() {
         columns={[
           { key: 'id', header: '#', nowrap: true },
           { key: 'proposal_id', header: 'Proposal' },
-          { key: 'discount_type', header: 'Type', render: (r) => titleCase(r.discount_type) },
-          { key: 'amount', header: 'Amount', align: 'right', render: (r) => r.discount_type === 'percent' ? `${r.amount}%` : formatMoney(r.amount, r.currency) },
+          { key: 'discount', header: 'Discount', align: 'right', render: (r) => discountText(r) },
           { key: 'requested_by', header: 'Requested by' },
           { key: 'status', header: 'Status', render: (r) => <StatusBadge status={r.status} /> },
           { key: 'created_at', header: 'When', render: (r) => formatDate(r.created_at, { withTime: true }) },
@@ -66,17 +74,20 @@ export default function DiscountRequests() {
         <Drawer open title={`Discount #${current.id}`} onClose={() => setCurrent(null)}>
           <div className="text-sm space-y-1">
             <div><span className="text-xs text-neutral-500">Proposal:</span> #{current.proposal_id}</div>
-            <div><span className="text-xs text-neutral-500">Amount:</span> {current.discount_type === 'percent' ? `${current.amount}%` : formatMoney(current.amount, current.currency)}</div>
-            <div><span className="text-xs text-neutral-500">Reason:</span> {current.reason || '—'}</div>
+            <div><span className="text-xs text-neutral-500">Discount:</span> {discountText(current)}</div>
+            <div><span className="text-xs text-neutral-500">Justification:</span> {current.justification || '—'}</div>
             <StatusBadge status={current.status} />
           </div>
-          {current.status === 'pending' ? (
+          {current.status === 'pending' && !canDecide ? (
+            <div className="mt-4 text-xs text-neutral-500">Only an administrator or a sales manager can approve or reject a discount.</div>
+          ) : null}
+          {current.status === 'pending' && canDecide ? (
             <div className="mt-4 space-y-2">
               <label className="engage-label">Decision note</label>
               <textarea className="engage-input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
               <div className="flex gap-2 justify-end pt-2">
-                <button className="engage-btn-danger" disabled={mutate.isPending} onClick={() => mutate.mutate({ id: current.id, action: 'reject', payload: { reason } })}>Reject</button>
-                <button className="engage-btn-primary" disabled={mutate.isPending} onClick={() => mutate.mutate({ id: current.id, action: 'approve', payload: { reason } })}>Approve</button>
+                <button className="engage-btn-danger" disabled={mutate.isPending} onClick={() => mutate.mutate({ id: current.id, action: 'reject', payload: { notes: reason } })}>Reject</button>
+                <button className="engage-btn-primary" disabled={mutate.isPending} onClick={() => mutate.mutate({ id: current.id, action: 'approve', payload: { notes: reason } })}>Approve</button>
               </div>
             </div>
           ) : null}

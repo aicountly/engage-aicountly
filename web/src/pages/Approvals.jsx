@@ -7,6 +7,8 @@ import Drawer from '../components/Drawer.jsx'
 import FilterBar from '../components/FilterBar.jsx'
 import { ApprovalBadge } from '../components/Badges.jsx'
 import { formatDate, titleCase } from '../lib/format.js'
+import { useAuth } from '../lib/auth.jsx'
+import { DECISION_ROLES } from '../lib/coupons.js'
 
 export default function Approvals() {
   const qc = useQueryClient()
@@ -14,6 +16,9 @@ export default function Approvals() {
   const [current, setCurrent] = useState(null)
   const [reason, setReason] = useState('')
   const [msg, setMsg] = useState(null)
+  // Approve / reject / execute: super_admin | sales_manager (the API enforces the same; Routes.php).
+  const { hasRole } = useAuth()
+  const canDecide = hasRole(DECISION_ROLES)
 
   const q = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString()
 
@@ -85,7 +90,10 @@ export default function Approvals() {
               </div>
             ) : null}
           </div>
-          {current.status === 'pending' ? (
+          {!canDecide && ['pending', 'approved'].includes(current.status) ? (
+            <div className="mt-4 text-xs text-neutral-500">Only an administrator or a sales manager can decide or execute this request.</div>
+          ) : null}
+          {canDecide && current.status === 'pending' ? (
             <div className="mt-4 space-y-2">
               <label className="engage-label">Decision note</label>
               <textarea className="engage-input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
@@ -94,7 +102,7 @@ export default function Approvals() {
                 <button className="engage-btn-primary" disabled={mutate.isPending} onClick={() => mutate.mutate({ id: current.id, action: 'approve', payload: { reason } })}>Approve</button>
               </div>
             </div>
-          ) : current.status === 'approved' ? (
+          ) : canDecide && current.status === 'approved' ? (
             <div className="mt-4 flex justify-end">
               <button className="engage-btn-primary" disabled={mutate.isPending} onClick={() => mutate.mutate({ id: current.id, action: 'execute' })}>Execute now</button>
             </div>

@@ -10,7 +10,7 @@ use Config\Services;
  *   GET  v1/commission-entries ?seller_id= &status= &lead_id=
  *   POST v1/commission-entries/{id}/reverse {reason}               (super_admin | sales_manager)
  *   GET  v1/leads/{id}/payments
- *   POST v1/leads/{id}/payments {amount "1234.50", payment_ref, paid_at?, product_code?, notes?}   "payment confirmed"
+ *   POST v1/leads/{id}/payments {amount "1234.50", payment_ref, paid_at?, product_code?, net_amount?, quote_ref?, notes?}   "payment confirmed"
  *   POST v1/lead-payments/{id}/refund {reason}                      reverses accrued / approved entries
  *   GET  v1/lead-payments/by-product ?category= &product_code=a,b &from= &to=   revenue per product (super_admin | sales_manager)
  *   POST v1/leads/{id}/seller {seller_code|null}                    staff (re)attribution

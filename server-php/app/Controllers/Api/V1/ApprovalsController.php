@@ -38,13 +38,32 @@ class ApprovalsController extends BaseApiController
     {
         $data = $this->input();
         if (empty($data['kind'])) return $this->fail('kind is required.', 400);
+        // The requester is the signed-in user (it could be posted as anyone else before).
+        unset($data['requested_by'], $data['requester_kind']);
         $id = Services::approvalService()->request($data);
         return $this->ok($this->m->find((int) $id), 201);
     }
 
     public function update($id = null)
     {
-        $this->m->update((int) $id, $this->input());
+        $data = $this->input();
+        if (! $this->userHasRole(['super_admin', 'sales_manager'])) {
+            // Decisions go through approve / reject / execute (role-gated in Routes.php), never by editing the row.
+            $data = array_diff_key($data, array_flip(['status', 'decided_by', 'decided_at', 'decision_notes', 'console_approval_id',
+                'console_status', 'production_confirmation', 'executed_at', 'execution_result', 'requested_by', 'requester_kind']));
+            $row = $this->m->find((int) $id);
+            if (! $row) {
+                return $this->fail('Approval request not found.', 404);
+            }
+            // What was approved is what gets executed: once decided, the request (payload, kind, …) is frozen.
+            if ($data !== [] && ($row['status'] ?? 'pending') !== 'pending') {
+                return $this->fail('This request was already decided and can no longer be edited.', 409);
+            }
+        }
+        if ($data === []) {
+            return $this->ok($this->m->find((int) $id));
+        }
+        $this->m->update((int) $id, $data);
         $this->audit('approval_update', ['subject_kind' => 'approval_request', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));
     }

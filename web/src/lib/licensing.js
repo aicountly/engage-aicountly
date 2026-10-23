@@ -74,3 +74,11 @@ export function parseJsonField(text, label, { expect = 'object' } = {}) {
   if (expect === 'object' && (v === null || typeof v !== 'object' || Array.isArray(v))) throw new Error(`${label} must be a JSON object { … }.`)
   return v
 }
+
+/** One Idempotency-Key per issue attempt (server: 8–128 of A-Z a-z 0-9 _ . : -). */
+export function newIdempotencyKey() {
+  const id = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+  return `issue-${id}`
+}
+
+export const OUTBOX_TONES = { pending: 'info', delivered: 'success', rejected: 'danger', dead: 'danger', skipped: 'neutral' }

@@ -16,6 +16,13 @@ class RenameProductBrandCase extends Migration
         'books' => 'Books', 'auditor' => 'Auditor', 'fr' => 'FR', 'secretarial' => 'Secretarial', 'calendar' => 'Calendar',
         'contacts' => 'Contacts', 'vault' => 'Vault', 'chat' => 'Chat', 'docs' => 'Docs', 'hrms' => 'HRMS',
         'ourpeople' => 'OurPeople', 'flow' => 'Flow', 'console' => 'Console',
+        // Manage catalogue apps added to ProductsSeeder in the 2026-10 fleet alignment.
+        'inventory' => 'Inventory', 'billing' => 'Billing', 'notes' => 'Notes', 'manage' => 'Manage', 'pos' => 'POS',
+        'sales' => 'Sales', 'purchases' => 'Purchase', 'insights' => 'Insights', 'buddy' => 'AI Pulse', 'remote' => 'Remote',
+        'advisor' => 'Advisor', 'appointments' => 'Appointments', 'contracts' => 'Contracts', 'pay' => 'Pay', 'crm' => 'CRM',
+        'helpdesk' => 'Helpdesk', 'receptionist' => 'Lobby', 'valuations' => 'Valuations', 'email' => 'Email',
+        'messaging' => 'Messaging', 'voice' => 'Voice', 'edge' => 'Edge', 'aspire' => 'Aspire', 'integrate' => 'Integrate',
+        'benefits' => 'Benefits', 'capital' => 'Capital', 'apis' => 'APIs', 'community' => 'Community',
     ];
 
     public function up(): void

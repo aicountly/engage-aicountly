@@ -9,7 +9,7 @@ use App\Services\Seller\SellerMailer;
 use Config\Database;
 use Tests\Support\DatabaseTestCase;
 
-/** Brand case "Aicountly": product display names (2026-10-23-000111), stored descriptions (000112) and seller-facing copy. */
+/** Brand case "Aicountly": product display names (2026-10-24-000011), stored descriptions (2026-10-24-000012) and seller-facing copy. */
 final class ProductBrandCaseTest extends DatabaseTestCase
 {
     protected $seed = ProductsSeeder::class;
@@ -34,7 +34,7 @@ final class ProductBrandCaseTest extends DatabaseTestCase
     public function testStoredDescriptionsUseTheMixedCaseBrand(): void
     {
         $db = Database::connect('tests');
-        // Lead sources come from migration 000091 (old text) and are corrected by 000112 in the same run.
+        // Lead sources come from migration 000091 (old text) and are corrected by 2026-10-24-000012 in the same run.
         $this->assertSame('Lead registered by an Aicountly seller on seller.aicountly.com.',
             $db->table('engage_lead_sources')->where('code', 'seller')->get()->getRow()->description);
 

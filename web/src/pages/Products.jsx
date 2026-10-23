@@ -1,9 +1,16 @@
 import GenericList from '../components/GenericList.jsx'
+import { useAuth } from '../lib/auth.jsx'
+import { LICENSING_ADMIN } from '../lib/licensing.js'
 import { formatDate } from '../lib/format.js'
 
 export default function Products() {
+  // The API lets only super_admin / sales_manager write the catalogue (other roles get 403).
+  const { hasRole } = useAuth()
+  const canWrite = hasRole(LICENSING_ADMIN)
   return (
     <GenericList
+      canCreate={canWrite}
+      canEdit={canWrite}
       title="Products"
       subtitle="Aicountly product catalogue used across leads, proposals and pricing."
       resource="products"

@@ -307,6 +307,12 @@ class CommissionService
             'refund_reason'=> $p['refund_reason'] ?? null,
             'commission_evaluated_at' => Clock::iso($p['commission_evaluated_at'] ?? null),
             'commission_note' => $p['commission_note'] ?? null,
+            // Commission basis (D-C1: net invoiced after discount, before GST). basis_kind net_before_gst | payment_amount.
+            'quote_ref'      => $p['quote_ref'] ?? null,
+            'list_paise'     => isset($p['list_paise']) ? (int) $p['list_paise'] : null,
+            'discount_paise' => isset($p['discount_paise']) ? (int) $p['discount_paise'] : null,
+            'basis_paise'    => isset($p['basis_paise']) ? (int) $p['basis_paise'] : null,
+            'basis_kind'     => $p['basis_kind'] ?? null,
         ];
     }
 
@@ -421,13 +427,20 @@ class CommissionService
                 $paidTs = $t;
             }
         }
-        $product = trim((string) ($in['product_code'] ?? '')) ?: ($lead['interested_product'] ?? null);
+        $product = trim((string) ($in['product_code'] ?? '')) ?: null;
+        if (($in['currency'] ?? 'INR') !== 'INR') {
+            $e['currency'] = 'Only INR is supported.';
+        }
+        // Commission basis = the net invoiced after discount and before GST (D-C1, docs/COUPONS.md §8): from the quote
+        // (its committed coupon redemption) when quote_ref is given, else the typed net_amount (taxable value), else —
+        // as before — the amount paid.
+        [$basis, $be] = $this->basisFor($in, $paise);
+        $e += $be;
+        $product ??= $basis['product_code'] ?? null;
+        $product ??= $lead['interested_product'] ?? null;
         // "Edge" / "Aicountly Edge" → `edge`, so a plan's product_scope (exact codes) covers it; unknown text is kept as sent.
         if ($product !== null && ($known = (new \App\Models\ProductsModel())->resolve($product))) {
             $product = (string) $known['code'];
-        }
-        if (($in['currency'] ?? 'INR') !== 'INR') {
-            $e['currency'] = 'Only INR is supported.';
         }
         if ($e !== []) {
             return ['status' => 422, 'error' => 'Please correct the payment.', 'details' => $e];
@@ -447,9 +460,11 @@ class CommissionService
         $db->query('SELECT id FROM engage_leads WHERE id = ? FOR UPDATE', [$leadId]);
         $seq = (int) $db->query('SELECT COUNT(*) AS n FROM engage_lead_payments WHERE lead_id = ?', [$leadId])->getRow()->n + 1;
         $db->query(
-            'INSERT INTO engage_lead_payments (lead_id, payment_ref, sequence_no, amount, product_code, paid_at, notes, confirmed_by)
-             VALUES (?, ?, ?, CAST(? AS NUMERIC), ?, ?, ?, ?) ON CONFLICT (lead_id, payment_ref) DO NOTHING',
-            [$leadId, $ref, $seq, Money::format($paise), $product, Clock::at($paidTs), trim((string) ($in['notes'] ?? '')) ?: null, (int) $staff['id']]
+            'INSERT INTO engage_lead_payments (lead_id, payment_ref, sequence_no, amount, product_code, paid_at, notes, confirmed_by,
+                quote_ref, list_paise, discount_paise, basis_paise, basis_kind)
+             VALUES (?, ?, ?, CAST(? AS NUMERIC), ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (lead_id, payment_ref) DO NOTHING',
+            [$leadId, $ref, $seq, Money::format($paise), $product, Clock::at($paidTs), trim((string) ($in['notes'] ?? '')) ?: null, (int) $staff['id'],
+                $basis['quote_ref'], $basis['list_paise'], $basis['discount_paise'], $basis['basis_paise'], $basis['basis_kind']]
         );
         $db->transComplete();
         $payment = $db->table('engage_lead_payments')->where('lead_id', $leadId)->where('payment_ref', $ref)->get()->getRowArray();
@@ -507,7 +522,7 @@ class CommissionService
             }
             $calc = null;
             if ($note === null) {
-                $basis = Money::toPaise((string) $pay['amount']);
+                $basis = isset($pay['basis_paise']) && $pay['basis_paise'] !== null ? (int) $pay['basis_paise'] : Money::toPaise((string) $pay['amount']);
                 $calc = CommissionRules::calculate($plan['rules'], (int) $pay['sequence_no'], $basis);
                 if ($calc === null || $calc['amount_paise'] <= 0) {
                     $note = "Plan {$plan['plan_code']} v{$plan['version']} pays nothing on payment #{$pay['sequence_no']}.";
@@ -526,13 +541,15 @@ class CommissionService
             }
             $db->query(
                 "INSERT INTO engage_commission_entries (seller_id, lead_id, payment_id, plan_id, plan_code, plan_version, rule_type, product_code,
-                        basis_amount, rate_percent, amount, calculation, hold_until)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS NUMERIC), CAST(? AS NUMERIC), CAST(? AS NUMERIC), CAST(? AS JSONB), NOW() + make_interval(days => ?))
+                        basis_amount, rate_percent, amount, calculation, hold_until, basis_kind)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS NUMERIC), CAST(? AS NUMERIC), CAST(? AS NUMERIC), CAST(? AS JSONB), NOW() + make_interval(days => ?), ?)
                  ON CONFLICT (payment_id) DO NOTHING",
                 [(int) $seller['id'], $leadId, (int) $pay['id'], $plan['id'], $plan['plan_code'], $plan['version'], $plan['rules']['type'],
                     $pay['product_code'] ?? $lead['interested_product'], Money::format($basis),
                     $calc['rate_e4'] !== null ? Money::formatPercentE4($calc['rate_e4']) : null, Money::format($calc['amount_paise']),
-                    json_encode(['explain' => $calc['explain'], 'payment_sequence' => (int) $pay['sequence_no'], 'rules' => $plan['rules']]), (int) $plan['hold_days']]
+                    json_encode(['explain' => $calc['explain'], 'payment_sequence' => (int) $pay['sequence_no'], 'rules' => $plan['rules'],
+                        'basis_kind' => $pay['basis_kind'] ?? 'payment_amount', 'quote_ref' => $pay['quote_ref'] ?? null]), (int) $plan['hold_days'],
+                    $pay['basis_kind'] ?? 'payment_amount']
             );
             if ($db->affectedRows() === 1) {
                 $accrued++;
@@ -549,6 +566,46 @@ class CommissionService
         }
 
         return ['accrued' => $accrued, 'notes' => $notes];
+    }
+
+    /**
+     * Commission basis of a payment being confirmed (D-C1: net after discount, before GST — never the list price).
+     *
+     *   quote_ref     → the quote's taxable value (its committed coupon redemption's when it has one); product from the quote
+     *   net_amount    → that amount ("1234.50", the invoice taxable value), at most the amount paid
+     *   neither       → the amount paid (behaviour before coupons; basis_kind payment_amount)
+     *
+     * @return array{0: array{quote_ref:?string, list_paise:?int, discount_paise:?int, basis_paise:int, basis_kind:string, product_code:?string}, 1: array<string,string>}
+     */
+    private function basisFor(array $in, int $amountPaise): array
+    {
+        $out = ['quote_ref' => null, 'list_paise' => null, 'discount_paise' => null, 'basis_paise' => max(1, $amountPaise), 'basis_kind' => 'payment_amount', 'product_code' => null];
+        $quoteRef = strtoupper(trim((string) ($in['quote_ref'] ?? '')));
+        if ($quoteRef !== '') {
+            $q = $this->db()->table('engage_quotes')->where('quote_ref', $quoteRef)->get()->getRowArray();
+            if (! $q) {
+                return [$out, ['quote_ref' => 'No quote has this quote_ref.']];
+            }
+            $r = $this->db()->query("SELECT * FROM engage_coupon_redemptions WHERE quote_ref = ? AND state = 'committed'", [$quoteRef])->getRowArray();
+            $src = $r ?: $q;
+
+            return [['quote_ref' => $quoteRef, 'list_paise' => (int) $src['list_paise'], 'discount_paise' => (int) $src['discount_paise'],
+                'basis_paise' => max(1, (int) $src['taxable_paise']), 'basis_kind' => 'net_before_gst', 'product_code' => $q['product_code']], []];
+        }
+        if (isset($in['net_amount']) && $in['net_amount'] !== '' && $in['net_amount'] !== null) {
+            try {
+                $net = Money::toPaise($in['net_amount']);
+            } catch (\InvalidArgumentException) {
+                $net = 0;
+            }
+            if ($net <= 0 || ($amountPaise > 0 && $net > $amountPaise)) {
+                return [$out, ['net_amount' => 'The net (taxable) amount after discount, before GST: more than 0 and at most the amount paid.']];
+            }
+
+            return [['basis_paise' => $net, 'basis_kind' => 'net_before_gst'] + $out, []];
+        }
+
+        return [$out, []];
     }
 
     /** @return array<string,mixed> */
@@ -612,6 +669,7 @@ class CommissionService
             'rule_type'       => $e['rule_type'],
             'product_code'    => $e['product_code'],
             'basis_amount'    => Money::format(Money::toPaise((string) $e['basis_amount'])),
+            'basis_kind'      => $e['basis_kind'] ?? null,
             'rate_percent'    => $e['rate_percent'] !== null ? (string) $e['rate_percent'] : null,
             'amount'          => Money::format(Money::toPaise((string) $e['amount'])),
             'currency'        => $e['currency'],

@@ -9,11 +9,11 @@ use Config\Services;
 
 /**
  * `php spark engage:licences-expire` — issued / active / suspended licences whose term has ended become `expired`
- * (one `expired` event each, actor system). Not scheduled by the deploy (licensing is dormant until used); when
- * licences exist, add hourly:
- *   23 * * * * cd /path/to/api && php spark engage:licences-expire >> writable/logs/licences_expire.log 2>&1
- * Reads already show an ended licence as expired before this runs. Reports to Console's Cron Job Monitor as
- * engage.licences_expire (inert without CONSOLE_CRON_MONITOR_KEY).
+ * (one `expired` event each, actor system). In the same transaction the holder's Basic is reactivated (D-L1: a paid
+ * plan that ends falls back to Basic) and the new entitlement state is queued for Manage. Scheduled hourly by
+ * bin/ops/jobs.txt (licences-expire). Reads already show an ended licence as expired before this runs. Never
+ * restricts anything in Manage (no 45-day clock). Reports to Console's Cron Job Monitor as engage.licences_expire
+ * (inert without CONSOLE_CRON_MONITOR_KEY).
  */
 class LicencesExpire extends BaseCommand
 {
