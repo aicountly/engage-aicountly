@@ -20,7 +20,7 @@ Engage integrates with:
 | `reach.aicountly.org` | Lead outcomes (stage changes, payments) sent back to Reach via outbox | `REACH_API_BASE_URL`, `REACH_OUTCOME_TOKEN` |
 | `finance.aicountly.org` | Weekly seller payout DRAFT batches out; payout status (approved / on hold / paid + UTR / failed …) back — see [docs/SELLER_PROGRAM.md § 6](docs/SELLER_PROGRAM.md) | `FINANCE_API_BASE_URL`, `FINANCE_OUTBOUND_KEY`, `ENGAGE_INBOUND_FINANCE_KEY` |
 | `manage.aicountly.com` | Licensing read API for Manage's server (`/api/v1/manage/*`: licences, seats, activity, catalogue, licence types; AIC-S2S v1 HMAC, read-only, 503 until configured) — see [docs/LICENSING.md](docs/LICENSING.md) | `ENGAGE_S2S_ENVIRONMENT`, `ENGAGE_INBOUND_MANAGE_KEY_IDS`, `ENGAGE_INBOUND_MANAGE_SECRET_<KEYID>` |
-| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` |
+| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` (default `console_providers`: seller emails go through Console's email providers for `app_code=engage`, `CONSOLE_API_TOKEN` with `email.credentials`; `ENGAGE_SMTP_*` is the last resort — [docs/SELLER_PROGRAM.md § 10](docs/SELLER_PROGRAM.md)) |
 
 ## Repository layout
 

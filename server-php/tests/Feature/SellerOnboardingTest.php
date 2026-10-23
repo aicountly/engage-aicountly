@@ -105,16 +105,21 @@ final class SellerOnboardingTest extends SellerTestCase
 
     public function testApprovalEmailsTheLinkWhenAMailerIsConfigured(): void
     {
-        $this->mailer->fakeChannel = 'console';
+        $this->mailer->fakeChannel = 'console_providers';
         $s = $this->approvedSeller();
         $act = $s['approve']['data']['activation'];
         $this->assertTrue($act['email_sent']);
         $this->assertNull($act['link'], 'an emailed link is not also shown to staff');
         $this->assertSame('seller_activation', $this->mailer->sent[0]['trigger']);
+        $this->assertFalse($this->mailer->sent[0]['resend'], 'first activation email: primary provider first');
+
+        $r = $this->asStaff($this->staff(['seller_manager'], 'seller-mgr@aicountly.org'), 'post', "v1/sellers/{$s['seller_id']}/resend-activation");
+        $this->assertTrue($this->json($r)['data']['activation']['email_sent']);
+        $this->assertTrue($this->mailer->sent[1]['resend'], 'staff resend: fallback provider first');
 
         $this->mailer->succeed = false;
         $r = $this->asStaff($this->staff(['seller_manager'], 'seller-mgr@aicountly.org'), 'post', "v1/sellers/{$s['seller_id']}/resend-activation");
-        $this->assertFalse($this->json($r)['data']['activation']['email_sent'], 'Console refused: say so');
+        $this->assertFalse($this->json($r)['data']['activation']['email_sent'], 'no provider accepted: say so');
         $this->assertNotNull($this->json($r)['data']['activation']['link']);
     }
 

@@ -20,7 +20,8 @@
             "Config\\": "app/Config/"
         },
         "exclude-from-classmap": [
-            "**/Database/Migrations/**"
+            "**/Database/Migrations/**",
+            "**/Libraries/EmailTransport/**"
         ]
     },
     "autoload-dev": {
