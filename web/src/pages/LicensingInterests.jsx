@@ -6,7 +6,7 @@ export default function LicensingInterests() {
   return (
     <GenericList
       title="Licensing interests"
-      subtitle="Prospects interested in AICOUNTLY product licenses."
+      subtitle="Prospects interested in Aicountly product licenses."
       resource="licensing-interests"
       columns={[
         { key: 'lead_id', header: 'Lead #' },

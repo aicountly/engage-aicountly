@@ -839,7 +839,7 @@ class SellerPayoutService implements SellerPayoutGateway
             . '<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2937;max-width:760px;margin:24px auto;padding:0 16px;font-size:14px}'
             . 'h1{font-size:20px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb}'
             . '.r{text-align:right}.muted{color:#6b7280}.tot td{font-weight:600}.box{border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:12px 0}</style></head><body>'
-            . '<h1>AICOUNTLY seller payout statement</h1>' . $issuer
+            . '<h1>Aicountly seller payout statement</h1>' . $issuer
             . '<div class="box"><table>'
             . '<tr><th>Payout</th><td>' . $h($p['payout_ref']) . '</td><th>Batch</th><td>' . $h($p['batch_ref']) . '</td></tr>'
             . '<tr><th>Period</th><td>' . $date($p['period_start']) . ' – ' . $date($p['period_end']) . '</td><th>Status</th><td>' . $h($statusLabel) . '</td></tr>'
@@ -857,7 +857,7 @@ class SellerPayoutService implements SellerPayoutGateway
             . '<tr><td>Paid on</td><td class="r">' . $date($p['paid_at']) . '</td></tr>'
             . ($p['reason'] ? '<tr><td>Note</td><td class="r">' . $h($p['reason']) . '</td></tr>' : '')
             . '</tbody></table>'
-            . '<p class="muted">TDS, GST and net amounts are computed by AICOUNTLY Finance and shown as "Pending" until Finance confirms them. '
+            . '<p class="muted">TDS, GST and net amounts are computed by Aicountly Finance and shown as "Pending" until Finance confirms them. '
             . 'This statement is not a TDS certificate (Form 16A). Generated ' . $h(gmdate('j M Y H:i')) . ' UTC.</p>'
             . '</body></html>';
     }

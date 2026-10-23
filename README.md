@@ -1,6 +1,6 @@
 # engage-aicountly
 
-Internal AICOUNTLY `.org` portal for **sales, leads, subscriptions, licensing,
+Internal Aicountly `.org` portal for **sales, leads, subscriptions, licensing,
 renewals, proposal follow-ups, credit management, and sales bot automation**.
 
 - Domain: `engage.aicountly.org`
@@ -24,7 +24,7 @@ Engage integrates with:
 | `my.aicountly.com` | Basic provisioning after sign-up: `POST /api/v1/provisioning/accounts` (AIC-S2S v1, client `myaicountly`, scope `issue`) issues every product's published Basic (default) offer to the new holder — see [docs/LICENSING.md § 5b](docs/LICENSING.md) | `ENGAGE_S2S_ENVIRONMENT`, `ENGAGE_INBOUND_MYAICOUNTLY_KEY_IDS`, `ENGAGE_INBOUND_MYAICOUNTLY_SECRET_<KEYID>`, `ENGAGE_INBOUND_MYAICOUNTLY_SCOPE_<KEYID>=issue` |
 | `manage.aicountly.com` | Coupon preview and "Request upgrade" for Manage's server (`POST /api/v1/manage/coupons/preview`, `POST /api/v1/manage/upgrade-requests`; AIC-S2S v1, a key of scope `quote` only, rate limited per holder) — see [docs/COUPONS.md](docs/COUPONS.md) | `ENGAGE_INBOUND_MANAGE_SCOPE_<KEYID>=quote`, `ENGAGE_COUPON_PREVIEW_LIMIT`, `ENGAGE_COUPON_PREVIEW_WINDOW_SECONDS`, `ENGAGE_UPGRADE_REQUEST_LIMIT`, `ENGAGE_UPGRADE_REQUEST_WINDOW_SECONDS` |
 | `finance.aicountly.org` | Discount coupons: staff quote in Engage (GST on the price after discount) → Finance invoice line with list / discount / code → licence issued with `quote_ref` (redemption committed); seller commission on the net before GST — see [docs/COUPONS.md](docs/COUPONS.md) | — (staff runbook; no new wire) |
-| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` |
+| `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` (default `console_providers`: seller emails go through Console's email providers for `app_code=engage`, `CONSOLE_API_TOKEN` with `email.credentials`; `ENGAGE_SMTP_*` is the last resort — [docs/SELLER_PROGRAM.md § 10](docs/SELLER_PROGRAM.md)) |
 
 ## Repository layout
 
@@ -113,7 +113,7 @@ Deploy flow (mirrors books):
 - `web/dist/` → `public_html/` (preserves `api/`)
 - `server-php/` → `public_html/api/` via rsync with `scripts/cpanel-rsync-api.filters` (`P .env` — protect server `.env` from `--delete`)
 - `scripts/cpanel-post-deploy-api.sh` runs migrate + one-time seeders; fails if `.env` is missing; **does not modify `.env` content**
-- **Scheduled jobs:** `api/bin/ops/post-deploy-jobs.sh` (the AICOUNTLY ops kit, identical to console-react-app
+- **Scheduled jobs:** `api/bin/ops/post-deploy-jobs.sh` (the Aicountly ops kit, identical to console-react-app
   `ops/estate/kit/bin/ops/`) writes `CONSOLE_CRON_MONITOR_KEY` (repository secret, sent over SSH on STDIN) into `api/.env`
   — the only line of `.env` a deploy writes; Console's production refuses the shared `CONSOLE_SERVICE_KEY` for
   heartbeats — and installs `server-php/bin/ops/jobs.txt` into the deploy user's crontab (block `aicountly-engage jobs`,
@@ -303,7 +303,7 @@ screens don't know the difference — they still call `/api/v1/partners` on
 Engage.
 
 ```
-ENGAGE.AICOUNTLY.ORG                        PARTNER.AICOUNTLY.COM
+engage.aicountly.org                        partner.aicountly.com
   Partners → Partner master (React UI)        owns the Partner Master
         |                                            ^
         | superadmin JWT (unchanged)                 |
@@ -315,7 +315,7 @@ ENGAGE.AICOUNTLY.ORG                        PARTNER.AICOUNTLY.COM
   engage_audit_logs                                  (table: partners)
   (still records who did what)                              |
                                                               v
-                                                     PARTNER.AICOUNTLY.COM
+                                                     partner.aicountly.com
                                                        partner sign-in
 ```
 
@@ -427,6 +427,10 @@ audited and mirrored to Console.
 - **LLM (placeholder)**: `LlmClient` uses deterministic templates when
   `llm_enabled` is off. Configure `ENGAGE_LLM_*` and enable it to route to a
   real provider (integration point is stubbed but wired).
+- **Aicountly Academy fees** ([docs/ACADEMY_FEES_RUNBOOK.md](docs/ACADEMY_FEES_RUNBOOK.md)): products
+  `academy` / `edge` / `aspire`; fees are collected through Aicountly Finance's gateways and confirmed on the
+  lead (`POST /api/v1/leads/{id}/payments`), which feeds revenue, seller commission and the Reach outcome.
+  Revenue per product: `GET /api/v1/lead-payments/by-product?category=Academy`.
 - **Manage**: Engage pushes licence entitlement states to Manage (outbox +
   `engage:entitlements-push`) once `MANAGE_API_BASE_URL` / `ENGAGE_OUTBOUND_MANAGE_*` are set; see
   [docs/LICENSING.md § 6](docs/LICENSING.md).
@@ -469,7 +473,7 @@ Every migration file uses `BIGSERIAL`, foreign keys where appropriate, and
 
 ## Frontend UI
 
-Green/white AICOUNTLY admin look shared with QA/Smoke/Console/Flow:
+Green/white Aicountly admin look shared with QA/Smoke/Console/Flow:
 
 - Fixed sidebar grouped by domain (Overview, Sales, Licensing & subscriptions,
   Engagement, Credits, Sales bot, Approvals & governance, Integrations, Admin)

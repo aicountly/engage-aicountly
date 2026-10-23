@@ -13,14 +13,19 @@ export default function LeadPaymentsPanel({ lead }) {
   const { hasRole } = useAuth()
   const canConfirm = hasRole(COMMISSION_ADMIN)
   const canAttribute = hasRole(ATTRIBUTION_ADMIN)
-  const [form, setForm] = useState({ amount: '', payment_ref: '', paid_at: '', notes: '', quote_ref: '', net_amount: '' })
+  const [form, setForm] = useState({ amount: '', payment_ref: '', paid_at: '', notes: '', quote_ref: '', net_amount: '', product_code: '' })
   const [error, setError] = useState(null)
   const [note, setNote] = useState(null)
   const q = useQuery({ queryKey: ['lead-payments', lead.id], queryFn: () => api.get(`/v1/leads/${lead.id}/payments`).then((r) => r.data?.data) })
+  const productsQ = useQuery({
+    queryKey: ['products'],
+    queryFn: () => api.get('/v1/products').then((r) => r.data?.data?.rows || r.data?.data?.items || r.data?.data || []),
+    enabled: canConfirm,
+  })
   const refresh = () => { qc.invalidateQueries({ queryKey: ['lead-payments', lead.id] }); qc.invalidateQueries({ queryKey: ['lead', String(lead.id)] }) }
   const confirm = useMutation({
     mutationFn: (body) => api.post(`/v1/leads/${lead.id}/payments`, body).then((r) => r.data?.data),
-    onSuccess: (d) => { setError(null); setForm({ amount: '', payment_ref: '', paid_at: '', notes: '', quote_ref: '', net_amount: '' }); setNote((d?.accrual?.notes || []).join(' ') || (d?.duplicate ? 'This payment was already recorded.' : null)); refresh() },
+    onSuccess: (d) => { setError(null); setForm({ amount: '', payment_ref: '', paid_at: '', notes: '', quote_ref: '', net_amount: '', product_code: '' }); setNote((d?.accrual?.notes || []).join(' ') || (d?.duplicate ? 'This payment was already recorded.' : null)); refresh() },
     onError: (e) => setError(apiError(e)),
   })
   const refund = useMutation({
@@ -77,6 +82,11 @@ export default function LeadPaymentsPanel({ lead }) {
           <input className="engage-input" placeholder="Amount (INR) e.g. 11800.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
           <input className="engage-input" placeholder="Invoice / receipt / gateway id" value={form.payment_ref} onChange={(e) => setForm({ ...form, payment_ref: e.target.value })} />
           <input className="engage-input" type="date" value={form.paid_at} onChange={(e) => setForm({ ...form, paid_at: e.target.value })} />
+          {/* Empty = the lead's interested product. Commission plans match on this code (e.g. edge / aspire). */}
+          <select className="engage-input" value={form.product_code} onChange={(e) => setForm({ ...form, product_code: e.target.value })}>
+            <option value="">Product: {lead.interested_product || 'lead has none'}</option>
+            {(productsQ.data || []).map((p) => <option key={p.code} value={p.code}>{p.name} ({p.code})</option>)}
+          </select>
           <input className="engage-input" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <input className="engage-input font-mono" placeholder="Quote ref (QTE-…) — commission on its net" value={form.quote_ref} onChange={(e) => setForm({ ...form, quote_ref: e.target.value })} />
           <input className="engage-input" placeholder="or net before GST (INR), e.g. 8000.00" disabled={!!form.quote_ref} value={form.net_amount} onChange={(e) => setForm({ ...form, net_amount: e.target.value })} />

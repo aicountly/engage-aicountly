@@ -31,7 +31,7 @@ export default function Dashboard() {
     <>
       <PageHeader
         title="Engage dashboard"
-        subtitle="Sales, licensing, credit, bot activity and approvals across AICOUNTLY."
+        subtitle="Sales, licensing, credit, bot activity and approvals across Aicountly."
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">

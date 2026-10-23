@@ -2,7 +2,7 @@
 <?php
 
 /**
- * AICOUNTLY Engage Portal — CodeIgniter 4.6 CLI (spark).
+ * Aicountly Engage Portal — CodeIgniter 4.6 CLI (spark).
  * Layout: project root = api/ on cPanel (no public/ subfolder).
  */
 

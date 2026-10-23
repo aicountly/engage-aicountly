@@ -104,10 +104,7 @@ class SellerLeadService
         $errors = self::validate($in);
         // `interest` is free text from the portal; a product code / name in it links the product.
         $interest = trim((string) ($in['interest'] ?? $in['interested_product'] ?? ''));
-        $product = null;
-        if ($interest !== '') {
-            $product = (new ProductsModel())->groupStart()->where('LOWER(code)', strtolower($interest))->orWhere('LOWER(name)', strtolower($interest))->groupEnd()->first();
-        }
+        $product = (new ProductsModel())->resolve($interest);
         if ($errors !== []) {
             return ['status' => 422, 'code' => 'validation_failed', 'error' => 'Please correct the highlighted fields.', 'details' => $errors];
         }
@@ -241,7 +238,7 @@ class SellerLeadService
 
     private static function protectedAnswer(): array
     {
-        return ['status' => 409, 'code' => 'lead_protected', 'error' => 'This contact is already registered with AICOUNTLY.'];
+        return ['status' => 409, 'code' => 'lead_protected', 'error' => 'This contact is already registered with Aicountly.'];
     }
 
     /** IST calendar date of a timestamp (YYYY-MM-DD by default). */

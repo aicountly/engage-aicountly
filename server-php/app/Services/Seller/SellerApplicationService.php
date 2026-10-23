@@ -22,7 +22,7 @@ use Config\Services;
  */
 class SellerApplicationService
 {
-    public const RECEIVED_MESSAGE = 'Thank you. Your request to become an AICOUNTLY seller has been received; our team will contact you.';
+    public const RECEIVED_MESSAGE = 'Thank you. Your request to become an Aicountly seller has been received; our team will contact you.';
 
     public function __construct(private ?SellerAccountService $accounts = null, private ?SellerMailer $mailer = null)
     {

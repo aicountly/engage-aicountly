@@ -47,7 +47,7 @@ export default function SellerApplications() {
 
   return (
     <>
-      <PageHeader title="Seller applications" subtitle="Requests to become an AICOUNTLY seller (seller.aicountly.com). Each one is also an Engage lead." />
+      <PageHeader title="Seller applications" subtitle="Requests to become an Aicountly seller (seller.aicountly.com). Each one is also an Engage lead." />
       {error ? <div className="mb-4 rounded-md bg-red-50 border border-red-200 text-red-800 text-sm px-3 py-2">{error}</div> : null}
       {warnings.map((w) => <div key={w} className="mb-4 rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-sm px-3 py-2">{w}</div>)}
       <OneTimeLink delivery={delivery} onDismiss={() => setDelivery(null)} />

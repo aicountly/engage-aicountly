@@ -36,7 +36,7 @@ export default function Login() {
         <div className="flex items-center gap-3 justify-center mb-6">
           <div className="h-11 w-11 rounded-xl bg-aicountly-600 flex items-center justify-center text-white font-bold shadow-sm">EN</div>
           <div className="text-left">
-            <div className="text-lg font-semibold text-neutral-900 leading-tight">AICOUNTLY</div>
+            <div className="text-lg font-semibold text-neutral-900 leading-tight">Aicountly</div>
             <div className="text-sm text-aicountly-700 font-medium leading-tight">Engage portal</div>
           </div>
         </div>

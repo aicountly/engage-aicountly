@@ -60,8 +60,13 @@ class ReachIntakeService
         $mobile = trim((string) ($payload['mobile'] ?? ''));
         [$existing, $matchedOn] = $leads->findDuplicate($email, $mobile !== '' ? $mobile : (string) ($payload['whatsapp'] ?? ''));
 
-        $productCode = (string) ($payload['interested_product'] ?? '');
-        $product = $productCode ? (new ProductsModel())->where('code', $productCode)->first() : null;
+        // A product code or display name ("edge", "Aicountly Edge") links the product and stores its code;
+        // anything else is kept as sent, unlinked.
+        $productCode = trim((string) ($payload['interested_product'] ?? ''));
+        $product = (new ProductsModel())->resolve($productCode);
+        if ($product) {
+            $productCode = (string) $product['code'];
+        }
         $touch = self::touch($payload, $meta, $campKey ?: $campName);
         $reachLeadId = self::intOrNull($meta['reach_lead_id'] ?? $payload['reach_lead_id'] ?? null);
         $ref = (string) ($payload['ref'] ?? $meta['ref'] ?? $payload['seller_code'] ?? $meta['seller_code'] ?? '');

@@ -29,7 +29,7 @@ class SettingsSeeder extends Seeder
             [
                 'key'         => 'theme_brand_colour',
                 'value_json'  => json_encode('#16a34a'),
-                'description' => 'AICOUNTLY green-white primary colour reference.',
+                'description' => 'Aicountly green-white primary colour reference.',
             ],
             [
                 'key'         => 'lead_score_thresholds',

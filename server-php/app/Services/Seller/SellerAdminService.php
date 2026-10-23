@@ -110,7 +110,7 @@ class SellerAdminService
      *
      * @return array{email_sent:bool, channel:?string, reason:?string, expires_at:string, link:?string, message:string}
      */
-    public function deliverLink(array $seller, string $purpose, ?int $staffId): array
+    public function deliverLink(array $seller, string $purpose, ?int $staffId, bool $resend = false): array
     {
         $t = $this->accounts->issueToken((int) $seller['id'], $purpose, $staffId, '', false,
             $purpose === 'password_reset' ? SellerAccountService::STAFF_RESET_SECONDS : null);
@@ -119,7 +119,7 @@ class SellerAdminService
             ? ['name' => $seller['name'], 'seller_code' => $seller['seller_code'], 'activation_url' => $url, 'expires_at' => $t['expires_at']]
             : ['name' => $seller['name'], 'reset_url' => $url, 'expires_at' => $t['expires_at']];
         $mail = $this->mailer->send($purpose === 'activation' ? 'seller_activation' : 'seller_password_reset',
-            (string) $seller['email'], (string) $seller['name'], $vars, "seller-{$purpose}-{$t['id']}");
+            (string) $seller['email'], (string) $seller['name'], $vars, "seller-{$purpose}-{$t['id']}", ['resend' => $resend]);
         $this->accounts->setTokenDelivery($t['id'], $mail['sent'] ? 'email:' . $mail['channel'] : 'shown_to_staff');
         $what = $purpose === 'activation' ? 'activation' : 'password reset';
 
@@ -188,7 +188,8 @@ class SellerAdminService
         if ($s['status'] !== 'onboarding' || ! empty($s['password_hash'])) {
             return ['status' => 409, 'error' => 'Only a seller who has not set a password yet can be sent an activation link. Use reset password instead.'];
         }
-        $d = $this->deliverLink($s, 'activation', (int) $staff['id']);
+        // A resend: the first copy may not have arrived, so the fallback provider is tried first.
+        $d = $this->deliverLink($s, 'activation', (int) $staff['id'], true);
         $this->audit('seller.activation_resent', $s, ['email_sent' => $d['email_sent']]);
 
         return ['status' => 200, 'data' => ['seller' => self::staffView($s), 'activation' => $d]];

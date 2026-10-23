@@ -254,6 +254,7 @@ $routes->group('v1', static function ($routes) {
         $routes->get('leads/(:num)/payments',                $S . 'CommissionEntriesController::payments/$1');
         $routes->post('leads/(:num)/payments',               $S . 'CommissionEntriesController::confirmPayment/$1', $commission);
         $routes->post('lead-payments/(:num)/refund',         $S . 'CommissionEntriesController::refund/$1', $commission);
+        $routes->get('lead-payments/by-product',             $S . 'CommissionEntriesController::revenueByProduct', $commission);
         $routes->post('leads/(:num)/seller',                 $S . 'CommissionEntriesController::attribute/$1', ['filter' => 'role:super_admin,sales_manager,seller_manager']);
         $routes->get('status/reach-outcomes',                $S . 'CommissionEntriesController::outboxStatus');
 

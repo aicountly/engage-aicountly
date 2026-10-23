@@ -50,7 +50,7 @@ final class ManageReadApiTest extends LicensingTestCase
         }
         $this->assertSame($l['licence_ref'], $x['licence_ref']);
         $this->assertSame(['code' => 'active', 'label' => 'Active', 'tone' => 'success'], $x['status']);
-        $this->assertSame(['code' => 'books', 'label' => 'AICOUNTLY Books'], $x['product']);
+        $this->assertSame(['code' => 'books', 'label' => 'Aicountly Books'], $x['product']);
         $this->assertSame('standard', $x['licence_type']['code']);
         $this->assertNull($x['plan']);
         $this->assertSame(['total' => 3, 'assigned' => 0], $x['seats']);
@@ -141,7 +141,7 @@ final class ManageReadApiTest extends LicensingTestCase
         $this->assertSame(['suspended', 'activated'], array_column(array_column($b['data'], 'type'), 'code'));
         $this->assertSame([3, 2], array_column($b['data'], 'seq'));
         $e = $b['data'][0];
-        $this->assertSame(['kind' => 'staff', 'display' => 'AICOUNTLY team'], $e['actor']);
+        $this->assertSame(['kind' => 'staff', 'display' => 'Aicountly team'], $e['actor']);
         $this->assertSame('Licence suspended', $e['summary']);
         $this->assertArrayNotHasKey('reason', $e);
         $this->assertStringNotContainsString('chargeback', (string) json_encode($b));

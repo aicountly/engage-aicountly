@@ -6,7 +6,7 @@ export default function SubscriptionInquiries() {
   return (
     <GenericList
       title="Subscription inquiries"
-      subtitle="Buyers asking about ongoing AICOUNTLY subscriptions."
+      subtitle="Buyers asking about ongoing Aicountly subscriptions."
       resource="subscription-inquiries"
       columns={[
         { key: 'lead_id', header: 'Lead #' },

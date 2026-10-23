@@ -70,7 +70,7 @@ class AccountController extends BaseSellerPortalController
             }
         }
         if (array_key_exists('email', $in) && strcasecmp(trim((string) $in['email']), (string) $s['email']) !== 0) {
-            $e['email'] = 'Contact AICOUNTLY to change your email address.';
+            $e['email'] = 'Contact Aicountly to change your email address.';
         }
         if ($e !== []) {
             return $this->failCode(422, 'validation_failed', 'Please correct the highlighted fields.', $e);

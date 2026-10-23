@@ -1,6 +1,6 @@
 # Seller programme (seller.aicountly.com ⇄ Engage)
 
-Resellers, associates and business facilitators sell AICOUNTLY through **seller.aicountly.com**. That portal
+Resellers, associates and business facilitators sell Aicountly through **seller.aicountly.com**. That portal
 (repo `aicountly/seller-aicountly`) is a React SPA plus a thin PHP BFF with **no database**: every seller
 account, credential, KYC record, lead attribution and commission entry lives here, in Engage.
 
@@ -107,7 +107,7 @@ Required before any payout; sign-in and lead registration work meanwhile.
   - already registered by this seller → 409 `duplicate_lead` ("You registered this lead on …; protected until …");
   - protected for another seller, an existing customer (converted / won) or a lead already in the pipeline
     (created or worked on within the window) → 409 `lead_protected` "This contact is already registered with
-    AICOUNTLY." (never says who holds it);
+    Aicountly." (never says who holds it);
   - an older, unprotected, not-converted lead is **claimed** (history and owner kept).
   Every attempt is logged in `engage_seller_lead_registrations`.
 - **Referral links:** `https://www.aicountly.com/?ref=SLR-000123`, `https://my.aicountly.com/?ref=…`. Reach carries
@@ -322,9 +322,11 @@ Errors: `{ok: false, error, code, details?}`; codes per ENGAGE_SELLER_API.md (`p
 | `ENGAGE_SELLER_DOCS_PATH` | Directory for encrypted KYC files, outside the web root. |
 | `SELLER_PORTAL_BASE_URL` | Base of activation / reset links (default https://seller.aicountly.com). |
 | `SELLER_REFERRAL_WEBSITE_URL`, `SELLER_REFERRAL_APP_URL` | Referral link bases. |
-| `ENGAGE_SELLER_MAILER` | `console` \| `smtp` \| empty (none). |
-| `ENGAGE_SELLER_NOTIFY_PRODUCT` | Console product for seller mail (default `engage`). |
-| `ENGAGE_SMTP_HOST/_PORT/_USER/_PASS/_CRYPTO`, `ENGAGE_MAIL_FROM(_NAME)` | SMTP mailer. |
+| `ENGAGE_SELLER_MAILER` | `console_providers` (default; empty and `console` mean the same) \| `smtp` \| `off` \| `console_notify` (deprecated opt-in). |
+| `CONSOLE_API_URL` (or `CONSOLE_API_BASE_URL`), `CONSOLE_API_TOKEN` | Console email providers for `app_code=engage` (capability `email.credentials`). |
+| `EMAIL_PROVIDER_CACHE_DIR` | Encrypted provider cache (default `writable/cache/email-providers`). |
+| `ENGAGE_SMTP_HOST/_PORT/_USER/_PASS/_CRYPTO`, `ENGAGE_MAIL_FROM`, `ENGAGE_MAIL_FROM_NAME` (default "Aicountly Sellers"), `ENGAGE_MAIL_REPLY_TO` | SMTP mailer, and the last resort when Console gives no provider. From-name / reply-to also apply to Console providers. |
+| `ENGAGE_SELLER_NOTIFY_PRODUCT` | Deprecated `console_notify` mode only (default `engage`). |
 | `REACH_API_BASE_URL`, `REACH_OUTCOME_TOKEN` | Reach outcomes (token = Reach's `REACH_INBOUND_ENGAGE_TOKEN`, ≥ 32). |
 | `FINANCE_API_BASE_URL`, `FINANCE_OUTBOUND_KEY` | Payout batches to Finance (`https://finance.aicountly.org/api`; key = Finance's `FINANCE_INBOUND_ENGAGE_KEY`, ≥ 32). Unset → runs fail closed. |
 | `ENGAGE_INBOUND_FINANCE_KEY` | Finance → Engage payout status (`X-Finance-Key`, ≥ 32, same value in Finance). Unset → 503. |
@@ -333,12 +335,29 @@ Errors: `{ok: false, error, code, details?}`; codes per ENGAGE_SELLER_API.md (`p
 Settings (Settings screen, `engage_settings`): `seller_login_otp_enabled` (false), `seller_lead_protection_days` (90),
 `commission_default_hold_days` (15), `seller_payout_min_threshold` ("500.00", minimum weekly payout; below rolls over).
 
-**Console mail:** sellers are not Console users, so Console must (a) give Engage's `CONSOLE_API_TOKEN` the
-`notify.send` + `notify.direct` capabilities for the product, (b) accept direct recipients for that product
-(`NotificationSendController::DIRECT_RECIPIENT_PRODUCTS` does not list `engage` today), and (c) have active templates
-`seller_activation` (vars name, seller_code, activation_url, expires_at), `seller_password_reset` (name, reset_url,
-expires_at), `seller_login_otp` (name, code, expires_minutes). Until then Console answers `sent: false` and Engage says
-so (links shown once to staff). SMTP is the alternative.
+**Seller mail through Console's email providers** (`Services/Seller/SellerMailer.php`, `Libraries/Email/*`, copied from
+Reach): Engage asks Console which providers to use —
+`GET {CONSOLE_API_URL}/portal/email/providers?app_code=engage`, `Authorization: Bearer {CONSOLE_API_TOKEN}` (the caller
+already holds `email.credentials`, Console migration 071) → `data {ttl_seconds, providers: [{code, type: http_api|smtp,
+priority, config, secret}]}`; the first is the primary. Engage composes the mail itself (subject and text in
+`SellerMailer::compose`) and sends it with Console's transports (`Libraries/EmailTransport/*`, Console's files copied
+verbatim — re-copy, never edit).
+
+- Order: primary, then each fallback, until one **accepts**; a staff "resend activation" tries the fallbacks first.
+  `sent` is true only on a provider's acceptance; `engage_seller_tokens.delivery` records `email:console_providers`.
+- One `send()` sends at most one copy. Every request issues a new token, so a retried sign-in code is a new code, as
+  before.
+- Cache: the list is cached encrypted (AES-256-GCM, key derived from `CONSOLE_API_TOKEN`, file mode 0600) for
+  `ttl_seconds`; while Console is unreachable a stale list is used for up to 15 minutes, with a 60-second back-off;
+  a 401 / 403 deletes the cache.
+- Last resort: when Console gives no provider (not configured, key refused, unreachable with no usable cache, or an
+  empty list) `ENGAGE_SMTP_*` is used if set; otherwise nothing is sent and links are shown once to staff. When
+  Console's providers were tried and none accepted, nothing else is tried.
+- Secrets are never logged or returned: `/health` (`seller_mailer`) shows provider codes only, e.g.
+  "ok (Console providers: email via itwalk_api, fallback aicountly_smtp)".
+
+The old Console **notify** mode (`ENGAGE_SELLER_MAILER=console_notify`) is deprecated: Engage's Console caller has no
+`notify.send` / `notify.direct` and Console delivers notify to staff only, so it cannot reach sellers.
 
 ## 11. Cron
 
@@ -375,7 +394,7 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
 2. In `api/.env`: `SELLER_PORTAL_KEY` (same as the BFF), `ENGAGE_DATA_KEY` (generate and **back up**),
    `ENGAGE_SELLER_DOCS_PATH` (create the directory outside `public_html`, writable by PHP only),
    `REACH_API_BASE_URL` + `REACH_OUTCOME_TOKEN` (same as Reach's `REACH_INBOUND_ENGAGE_TOKEN`), and a seller mailer
-   (`ENGAGE_SELLER_MAILER=smtp` + `ENGAGE_SMTP_*`, or `console` once Console is set up as in § 10). `php check-env.php`.
+   (default `console_providers` with Console's email providers for `engage`, § 10; or `ENGAGE_SELLER_MAILER=smtp` + `ENGAGE_SMTP_*`). `php check-env.php`.
 3. Add the five cron lines; register the Console cron monitors.
 4. In Console → Roles & Access assign sales_manager / seller_manager / kyc_reviewer.
 5. Engage → Sellers → Agreement: publish the seller agreement (approved sellers cannot finish activation without it).

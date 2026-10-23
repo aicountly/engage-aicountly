@@ -5,7 +5,7 @@ namespace Tests\Unit;
 use App\Services\Seller\SellerMailer;
 use CodeIgniter\Test\CIUnitTestCase;
 
-/** The mailer reports "sent" only when Console said sent:true. */
+/** The deprecated Console notify mode (explicit opt-in) reports "sent" only when Console said sent:true. */
 final class SellerMailerTest extends CIUnitTestCase
 {
     private array $set = [];
@@ -40,12 +40,16 @@ final class SellerMailerTest extends CIUnitTestCase
         $this->assertSame(['sent' => false, 'channel' => null, 'reason' => 'not_configured'], $m->send('seller_activation', 'a@b.co', 'A', [], 'k-12345678'));
         $this->assertFalse($called);
         $this->env('ENGAGE_SELLER_MAILER', 'console');
-        $this->assertFalse($m->isConfigured(), 'console needs CONSOLE_API_URL + CONSOLE_API_TOKEN');
+        $this->assertFalse($m->isConfigured(), 'Console providers need CONSOLE_API_URL + CONSOLE_API_TOKEN (or ENGAGE_SMTP_*)');
+        $this->env('ENGAGE_SELLER_MAILER', 'off');
+        $this->env('CONSOLE_API_URL', 'https://console.test/api');
+        $this->env('CONSOLE_API_TOKEN', 'console-token');
+        $this->assertFalse($m->isConfigured(), 'off sends nothing');
     }
 
-    public function testConsoleChannel(): void
+    public function testDeprecatedConsoleNotifyChannelIsOptInOnly(): void
     {
-        $this->env('ENGAGE_SELLER_MAILER', 'console');
+        $this->env('ENGAGE_SELLER_MAILER', 'console_notify');
         $this->env('CONSOLE_API_URL', 'https://console.test/api');
         $this->env('CONSOLE_API_TOKEN', 'console-token');
         $seen = null;

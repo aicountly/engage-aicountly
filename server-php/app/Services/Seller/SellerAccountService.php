@@ -176,7 +176,7 @@ class SellerAccountService
     public function writeBlock(array $s, bool $agreementExempt = false): ?array
     {
         if ($s['status'] === 'suspended') {
-            return ['status' => 403, 'code' => 'seller_suspended', 'error' => 'Your seller account is suspended, so changes are not possible. Contact AICOUNTLY.'];
+            return ['status' => 403, 'code' => 'seller_suspended', 'error' => 'Your seller account is suspended, so changes are not possible. Contact Aicountly.'];
         }
         if ($s['status'] === 'terminated') {
             return ['status' => 403, 'code' => 'seller_terminated', 'error' => 'Your seller account has been closed.'];

@@ -181,7 +181,7 @@ class SellerKycService
         }
 
         return ['status' => 409, 'code' => 'kyc_locked', 'error' => $seller['kyc_status'] === 'kyc_verified'
-            ? 'Your KYC is verified. Contact AICOUNTLY to change it.' : 'Your KYC is under review and cannot be changed now.'];
+            ? 'Your KYC is verified. Contact Aicountly to change it.' : 'Your KYC is under review and cannot be changed now.'];
     }
 
     /**
@@ -388,7 +388,7 @@ class SellerKycService
         $db = $this->accounts->db();
         $count = (int) $db->query('SELECT COUNT(*) AS n FROM engage_seller_kyc_documents WHERE seller_id = ?', [(int) $seller['id']])->getRow()->n;
         if ($count >= self::MAX_DOCUMENTS) {
-            return ['status' => 409, 'code' => 'document_limit', 'error' => 'Too many documents uploaded. Contact AICOUNTLY.'];
+            return ['status' => 409, 'code' => 'document_limit', 'error' => 'Too many documents uploaded. Contact Aicountly.'];
         }
 
         $stored = bin2hex(random_bytes(16)) . '.bin';

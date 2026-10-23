@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\Libraries\AicS2s;
 
 /**
- * AIC-S2S v1 request signing (commerce contract v1 §0.1) — the same scheme on every AICOUNTLY server-to-server hop.
+ * AIC-S2S v1 request signing (commerce contract v1 §0.1) — the same scheme on every Aicountly server-to-server hop.
  *
  *   canonical = METHOD "\n" PATH "\n" CANONICAL_QUERY "\n" TIMESTAMP "\n" NONCE "\n" hex(sha256(raw body or ""))
  *   X-AIC-Signature: v1=<hex HMAC-SHA256(secret, canonical)>

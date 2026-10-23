@@ -169,9 +169,9 @@ class LicenceService
     public static function contractEvent(array $e): array
     {
         $actor = match ($e['actor_kind']) {
-            'staff' => 'AICOUNTLY team',
+            'staff' => 'Aicountly team',
             'order' => 'Online order',
-            default => 'AICOUNTLY',
+            default => 'Aicountly',
         };
 
         return [

@@ -53,7 +53,7 @@ final class ProductsSeederTest extends DatabaseTestCase
             $this->assertSame(1, $db->table('engage_products')->where('code', $legacy)->countAllResults(), "legacy {$legacy} kept");
         }
         $this->assertSame(0, $db->table('engage_offers')->countAllResults(), 'no offers or prices are seeded');
-        $this->assertSame([], array_values(array_filter(array_column($db->table('engage_products')->get()->getResultArray(), 'code'), static fn ($c) => ! in_array($c, [...ManageAppRegistry::CATALOG_KEYS, 'ourpeople', 'flow', 'console', 'other'], true) && ! str_starts_with((string) $c, 'test'))),
-            'nothing outside the catalogue and the legacy codes');
+        $this->assertSame([], array_values(array_filter(array_column($db->table('engage_products')->get()->getResultArray(), 'code'), static fn ($c) => ! in_array($c, [...ManageAppRegistry::CATALOG_KEYS, 'ourpeople', 'flow', 'console', 'other', 'academy'], true) && ! str_starts_with((string) $c, 'test'))),
+            'nothing outside the catalogue, the legacy codes and the Academy umbrella course');
     }
 }

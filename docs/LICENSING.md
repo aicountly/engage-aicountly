@@ -1,11 +1,11 @@
 # Licensing — catalogue, holder licences, Basic plan, Manage read API and entitlement push
 
-Engage is where AICOUNTLY's sellable catalogue lives and where every licence is issued. It stays **staff-only**:
+Engage is where Aicountly's sellable catalogue lives and where every licence is issued. It stays **staff-only**:
 customers never sign in to Engage. They see their licences in **manage.aicountly.com**, whose *server* reads them
 from Engage over a signed server-to-server API (AIC-S2S v1). Manage's browser never calls Engage.
 
 Binding documents: `commerce-plan-2026-10-18.md` (Phase A, Engage part), `commerce-contract-v1-draft.md`
-(§0 conventions, §4 read API) and the AICOUNTLY rectification contracts v1 (23 Oct 2026, §3 "Plans & entitlements")
+(§0 conventions, §4 read API) and the Aicountly rectification contracts v1 (23 Oct 2026, §3 "Plans & entitlements")
 with founder decisions **D-L1** (no trials; every signed-up user holds the free **Basic** plan of every app; a paid
 plan replaces Basic for that app) and **D-L2** (licences apply to the USER — the workspace owner — not to one company).
 
@@ -162,7 +162,9 @@ application in Manage's catalogue as a product, code = Manage registry key (`Man
 manage, books, hrms, auditor, fr, secretarial, vault, chat, calendar, docs, notes, pos, billing, inventory, sales,
 purchases, insights, buddy, contacts, remote, advisor, appointments, contracts, pay, crm, helpdesk, receptionist,
 valuations, email, messaging, voice, edge, aspire, integrate, benefits, capital, apis, community) — idempotent, no price,
-no offer; existing rows and the legacy codes (ourpeople, flow, console, other) are never touched. Offers' `app_keys` are
+no offer; existing rows and the legacy codes (ourpeople, flow, console, other) are never touched. `edge` and `aspire` are
+also Aicountly Academy course products (category `Academy`, one row each; docs/ACADEMY_FEES_RUNBOOK.md), and `academy`
+is a course-only product that is not a Manage key (offers cannot name it as an app key). Offers' `app_keys` are
 validated against the same mirror (drive → docs, pulse → buddy, lobby → receptionist, connect → chat). Manage
 stores no plan for `app_key: manage` (its push answers 422), so publishing an offer that names `manage` is refused and
 `engage:basic-offers` skips the `manage` product (see §6.1).
@@ -193,7 +195,7 @@ issued_at, updated_at, version}`. `status.tone` ∈ success | info | warning | d
 
 - **Scope:** every company query is filtered by `cmp_id`. Another company's licence answers exactly like a missing
   one (**404 `not_found`**); a company with no licences gets **an empty list**, never 404.
-- **Not exposed to Manage:** internal reasons, staff names (actor shows "AICOUNTLY team"), notes, account, price
+- **Not exposed to Manage:** internal reasons, staff names (actor shows "Aicountly team"), notes, account, price
   snapshot, `order_ref`.
 - **Envelope (§0.2):** `{"success":true,"data":…,"page":{"next_cursor":…,"limit":25},"request_id":"…"}` (`page` on
   lists only, no totals); errors `{"success":false,"error":{"code","message","details","retryable"},"request_id"}`.

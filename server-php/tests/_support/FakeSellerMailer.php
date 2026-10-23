@@ -10,7 +10,7 @@ class FakeSellerMailer extends SellerMailer
     public ?string $fakeChannel = null;
     public bool $succeed = true;
 
-    /** @var list<array{trigger:string, email:string, vars:array}> */
+    /** @var list<array{trigger:string, email:string, vars:array, resend:bool}> */
     public array $sent = [];
 
     public function channel(): ?string
@@ -18,7 +18,7 @@ class FakeSellerMailer extends SellerMailer
         return $this->fakeChannel;
     }
 
-    public function send(string $trigger, string $email, string $name, array $vars, string $idempotencyKey): array
+    public function send(string $trigger, string $email, string $name, array $vars, string $idempotencyKey, array $opts = []): array
     {
         if ($this->fakeChannel === null) {
             return ['sent' => false, 'channel' => null, 'reason' => 'not_configured'];
@@ -26,7 +26,7 @@ class FakeSellerMailer extends SellerMailer
         if (! $this->succeed) {
             return ['sent' => false, 'channel' => $this->fakeChannel, 'reason' => 'template_inactive_or_gateway'];
         }
-        $this->sent[] = ['trigger' => $trigger, 'email' => $email, 'vars' => $vars];
+        $this->sent[] = ['trigger' => $trigger, 'email' => $email, 'vars' => $vars, 'resend' => ! empty($opts['resend'])];
 
         return ['sent' => true, 'channel' => $this->fakeChannel, 'reason' => null];
     }
