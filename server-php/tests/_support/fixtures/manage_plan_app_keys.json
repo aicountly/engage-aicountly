@@ -1,0 +1,17 @@
+{
+  "about": "The application keys Manage holds a plan for (CompanyAppRegistry::planKeys(), served to Engage at GET v1/inbound/engage/app-keys). This file is byte-identical in manage-aicountly (server-php/tests/fixtures/manage_plan_app_keys.json) and engage-aicountly (server-php/tests/_support/fixtures/manage_plan_app_keys.json); each repository's test pins its own list to it. Change both in the same change.",
+  "plan_app_keys": [
+    "books", "inventory", "sales", "purchases", "billing", "pos", "pay", "contacts",
+    "insights", "capital", "valuations", "benefits", "contracts",
+    "hrms", "calendar", "appointments", "notes", "docs", "vault", "chat", "crm", "helpdesk",
+    "remote", "messaging", "voice", "email", "receptionist",
+    "fr", "secretarial", "advisor",
+    "edge", "aspire", "integrate", "apis", "buddy",
+    "auditor", "community"
+  ],
+  "no_plan": ["manage"],
+  "aliases": {
+    "drive": "docs", "connect": "chat", "pulse": "buddy", "lobby": "receptionist", "purchase": "purchases",
+    "smartbooks": "books", "smart-books": "books", "ourpeople": "hrms"
+  }
+}

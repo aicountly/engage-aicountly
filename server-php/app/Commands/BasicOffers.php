@@ -75,9 +75,11 @@ class BasicOffers extends BaseCommand
 
         $created = 0;
         foreach ($db->query('SELECT code, name FROM engage_products ORDER BY code')->getResultArray() as $p) {
-            $app = ManageAppRegistry::normalize($p['code']);
+            $app = ManageAppRegistry::planKey($p['code']);
             if ($app === null) {
-                CLI::write("  skip {$p['code']}: not a Manage app key");
+                CLI::write(ManageAppRegistry::normalize($p['code']) !== null
+                    ? "  skip {$p['code']}: Manage holds no plan for it (max_companies / max_users ride on each application's plan)"
+                    : "  skip {$p['code']}: not a Manage app key");
 
                 continue;
             }

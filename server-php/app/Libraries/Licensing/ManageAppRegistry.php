@@ -16,7 +16,11 @@ namespace App\Libraries\Licensing;
  * normalise to `docs`), Connect as `chat`, Pulse as `buddy`, Lobby as `receptionist`, Purchase as `purchases`.
  *
  * Manage stores a plan for every key here except `manage` itself (Manage answers 422 unknown_application to a push
- * for app_key manage: max_companies / max_users ride on each application's plan).
+ * for app_key manage: max_companies / max_users ride on each application's plan). PLAN_KEYS / planKey() are exactly
+ * the keys Manage accepts for a plan (CompanyAppRegistry::planKeys(), served at GET v1/inbound/engage/app-keys):
+ * offers publish, engage:basic-offers drafts and the entitlement outbox queue only those. The list is pinned to the
+ * same JSON file in both repositories (tests/fixtures/manage_plan_app_keys.json here, server-php/tests/fixtures/
+ * plan_app_keys.json in manage-aicountly) and checked live by engage:entitlements-reconcile.
  */
 final class ManageAppRegistry
 {
@@ -44,6 +48,20 @@ final class ManageAppRegistry
         'aspire', 'integrate', 'benefits', 'capital', 'apis', 'community',
     ];
 
+    /**
+     * @var list<string> Keys Manage holds a plan for (CompanyAppRegistry::hasPlan): APP_KEYS + PLAN_ONLY_KEYS
+     * (auditor, community). Never `manage`.
+     */
+    public const PLAN_KEYS = [
+        'books', 'inventory', 'sales', 'purchases', 'billing', 'pos', 'pay', 'contacts',
+        'insights', 'capital', 'valuations', 'benefits', 'contracts',
+        'hrms', 'calendar', 'appointments', 'notes', 'docs', 'vault', 'chat', 'crm', 'helpdesk',
+        'remote', 'messaging', 'voice', 'email', 'receptionist',
+        'fr', 'secretarial', 'advisor',
+        'edge', 'aspire', 'integrate', 'apis', 'buddy',
+        'auditor', 'community',
+    ];
+
     /** @var array<string,string> Manage CompanyAppRegistry::ALIASES. */
     public const ALIASES = [
         'drive'       => 'docs',
@@ -67,6 +85,37 @@ final class ManageAppRegistry
 
         return in_array($key, self::APP_KEYS, true) || in_array($key, self::COMPANY_LEVEL_KEYS, true)
             || in_array($key, self::CATALOG_ONLY_KEYS, true) ? $key : null;
+    }
+
+    /** Manage's key for $key when Manage holds a plan for it (aliases folded), else null — `manage` is null. */
+    public static function planKey(?string $key): ?string
+    {
+        $n = self::normalize($key);
+
+        return $n !== null && in_array($n, self::PLAN_KEYS, true) ? $n : null;
+    }
+
+    /**
+     * Like normalizeList() but against PLAN_KEYS: keys Manage would refuse in an entitlement push (`manage`, unknown
+     * keys) are returned apart.
+     *
+     * @param list<string> $keys
+     * @return array{0: list<string>, 1: list<string>} [plan keys, refused]
+     */
+    public static function planKeyList(array $keys): array
+    {
+        $ok = [];
+        $bad = [];
+        foreach ($keys as $k) {
+            $n = self::planKey((string) $k);
+            if ($n === null) {
+                $bad[] = (string) $k;
+            } elseif (! in_array($n, $ok, true)) {
+                $ok[] = $n;
+            }
+        }
+
+        return [$ok, $bad];
     }
 
     /**

@@ -38,6 +38,32 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         }
     }
 
+    public function testPlanKeysAreExactlyWhatManageAccepts(): void
+    {
+        // Byte-identical to manage-aicountly server-php/tests/fixtures/manage_plan_app_keys.json, which Manage's
+        // plan_app_keys_contract_test pins CompanyAppRegistry::planKeys() to (and GET v1/inbound/engage/app-keys serves).
+        $shared = json_decode((string) file_get_contents(dirname(__DIR__) . '/_support/fixtures/manage_plan_app_keys.json'), true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame($shared['plan_app_keys'], ManageAppRegistry::PLAN_KEYS);
+        $this->assertSame($shared['aliases'], ManageAppRegistry::ALIASES);
+        $this->assertSame(['manage'], $shared['no_plan']);
+        $this->assertSame([], array_values(array_diff(ManageAppRegistry::all(), ManageAppRegistry::PLAN_KEYS, $shared['no_plan'])), 'every known key has a plan, except manage');
+        foreach (ManageAppRegistry::PLAN_KEYS as $k) {
+            $this->assertSame($k, ManageAppRegistry::planKey($k), $k);
+        }
+        $this->assertSame('docs', ManageAppRegistry::planKey('Drive'));
+        $this->assertNull(ManageAppRegistry::planKey('manage'), 'Manage refuses a push for manage');
+        $this->assertSame('manage', ManageAppRegistry::normalize('manage'), 'still a known (catalogued) key');
+        $this->assertSame([['books', 'docs'], ['manage', 'flow']], ManageAppRegistry::planKeyList(['books', 'manage', 'drive', 'flow', 'docs']));
+    }
+
+    public function testReconcileReportsAppKeyDriftAgainstManage(): void
+    {
+        $this->assertSame([], \App\Commands\EntitlementsReconcile::appKeyDrift(['plan_app_keys' => ManageAppRegistry::PLAN_KEYS]));
+        $d = \App\Commands\EntitlementsReconcile::appKeyDrift(['plan_app_keys' => array_merge(array_diff(ManageAppRegistry::PLAN_KEYS, ['crm']), ['rocket'])]);
+        $this->assertSame(['Manage accepts rocket but Engage does not (add to ManageAppRegistry::PLAN_KEYS)', 'Engage accepts crm but Manage refuses it (pushes would be 422)'], $d);
+        $this->assertSame(['Manage did not list plan_app_keys'], \App\Commands\EntitlementsReconcile::appKeyDrift(null));
+    }
+
     public function testAliasesFoldOntoManageKeys(): void
     {
         foreach (['drive' => 'docs', 'pulse' => 'buddy', 'lobby' => 'receptionist', 'connect' => 'chat', 'purchase' => 'purchases', 'ourpeople' => 'hrms'] as $alias => $key) {
