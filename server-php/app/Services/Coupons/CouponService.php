@@ -80,6 +80,7 @@ class CouponService
             'stored_status'              => $c['status'],
             'created_by'                 => $c['created_by'] !== null ? (int) $c['created_by'] : null,
             'created_by_email'           => $c['created_by_email'] ?? null,
+            'edited_by'                  => self::editors($c),
             'approved_by'                => $c['approved_by'] !== null ? (int) $c['approved_by'] : null,
             'approved_by_email'          => $c['approved_by_email'] ?? null,
             'approved_at'                => S::iso($c['approved_at']),
@@ -91,6 +92,23 @@ class CouponService
             'stats'                      => $stats + ['codes' => 0, 'codes_available' => 0, 'reserved' => 0, 'committed' => 0,
                 'discount_committed_paise' => 0, 'net_committed_paise' => 0],
         ];
+    }
+
+    /**
+     * Staff ids that edited the draft (engage_coupons.edited_by, a Postgres BIGINT[] read as "{1,2}"). Empty before the
+     * 2026-10-24 migration ran.
+     *
+     * @return list<int>
+     */
+    public static function editors(array $c): array
+    {
+        $raw = $c['edited_by'] ?? null;
+        if (is_array($raw)) {
+            return array_values(array_map('intval', $raw));
+        }
+        $raw = trim((string) $raw, '{} ');
+
+        return $raw === '' ? [] : array_values(array_map('intval', explode(',', $raw)));
     }
 
     private const SELECT = 'SELECT c.*, s.seller_code, cu.email AS created_by_email, au.email AS approved_by_email
@@ -514,11 +532,14 @@ class CouponService
         $this->db()->query(
             'UPDATE engage_coupons SET code_kind = ?, label = ?, description = ?, discount_type = ?, percent_bp = ?, flat_paise = ?,
                 max_discount_paise = ?, min_order_paise = ?, applies_to = ?::jsonb, new_or_renewal = ?, valid_from = ?, valid_to = ?,
-                max_redemptions_total = ?, max_redemptions_per_holder = ?, seller_id = ?, campaign_ref = ?, version = version + 1, updated_at = NOW()
+                max_redemptions_total = ?, max_redemptions_per_holder = ?, seller_id = ?, campaign_ref = ?,
+                edited_by = CASE WHEN CAST(? AS BIGINT) = ANY(edited_by) THEN edited_by ELSE array_append(edited_by, CAST(? AS BIGINT)) END,
+                version = version + 1, updated_at = NOW()
              WHERE id = ? AND version = ? AND status = ?',
             [$f['code_kind'], $f['label'], $f['description'], $f['discount_type'], $f['percent_bp'], $f['flat_paise'], $f['max_discount_paise'],
                 $f['min_order_paise'], json_encode($f['applies_to']), $f['new_or_renewal'], $f['valid_from'], $f['valid_to'],
-                $f['max_redemptions_total'], $f['max_redemptions_per_holder'], $f['seller_id'], $f['campaign_ref'], $id, (int) $c['version'], 'draft']
+                $f['max_redemptions_total'], $f['max_redemptions_per_holder'], $f['seller_id'], $f['campaign_ref'], (int) $staff['id'], (int) $staff['id'],
+                $id, (int) $c['version'], 'draft']
         );
         if ($this->db()->affectedRows() !== 1) {
             return self::conflict('version_conflict', 'This coupon was changed by someone else. Reload and try again.');
@@ -563,8 +584,14 @@ class CouponService
         }
         if ($c['status'] === 'draft') {
             $roles = (array) ($staff['roles'] ?? []);
-            if ((int) $c['created_by'] === (int) $staff['id'] && ! in_array('super_admin', $roles, true)) {
-                return self::conflict('four_eyes', 'You created this coupon — another sales manager or an administrator must approve (activate) it.');
+            if (! in_array('super_admin', $roles, true)) {
+                if ((int) $c['created_by'] === (int) $staff['id']) {
+                    return self::conflict('four_eyes', 'You created this coupon — another sales manager or an administrator must approve (activate) it.');
+                }
+                // Editing a colleague's draft and then approving it yourself is the same as approving your own rule.
+                if (in_array((int) $staff['id'], self::editors($c), true)) {
+                    return self::conflict('four_eyes', 'You edited this coupon — another sales manager or an administrator must approve (activate) it.');
+                }
             }
             $codes = (int) $this->db()->table('engage_coupon_codes')->where('coupon_id', $id)->where('status', 'available')->countAllResults();
             if ($codes === 0) {
@@ -758,7 +785,15 @@ class CouponService
             $b->where('batch_ref', $q['batch_ref']);
         }
         $rows = $b->orderBy('id')->get()->getResultArray();
-        $esc = static fn ($v) => '"' . str_replace('"', '""', (string) $v) . '"';
+        // Quote every cell and neutralise spreadsheet formulas (a label typed as "=HYPERLINK(…)" must stay text).
+        $esc = static function ($v): string {
+            $v = (string) $v;
+            if ($v !== '' && strpbrk($v[0], "=+-@\t\r") !== false) {
+                $v = "'" . $v;
+            }
+
+            return '"' . str_replace('"', '""', $v) . '"';
+        };
         $validTo = $c['valid_to'] !== null ? S::displayDate(gmdate('Y-m-d H:i:s', strtotime((string) $c['valid_to']) - 1) . '+00') : '';
         $offer = $c['discount_type'] === 'percent'
             ? rtrim(rtrim(number_format(((int) $c['percent_bp']) / 100, 2, '.', ''), '0'), '.') . '% off'

@@ -188,8 +188,13 @@ $routes->group('v1', static function ($routes) {
         $routes->get('status/health',       'Api\\V1\\HealthController::index');
 
         // Catalogs.
-        $routes->resource('products',        ['controller' => 'Api\\V1\\ProductsController']);
-        $routes->resource('plans',           ['controller' => 'Api\\V1\\PlansController']);
+        // Products and plans are the licensing catalogue (offers reference them): every role reads, only super_admin |
+        // sales_manager write (any signed-in role, kyc_reviewer included, could rename or deactivate them before).
+        $catalogueWrite = 'role:super_admin,sales_manager';
+        $routes->resource('products', ['controller' => 'Api\\V1\\ProductsController', 'only' => ['index', 'show']]);
+        $routes->resource('products', ['controller' => 'Api\\V1\\ProductsController', 'only' => ['create', 'update', 'delete'], 'filter' => $catalogueWrite]);
+        $routes->resource('plans',    ['controller' => 'Api\\V1\\PlansController', 'only' => ['index', 'show']]);
+        $routes->resource('plans',    ['controller' => 'Api\\V1\\PlansController', 'only' => ['create', 'update', 'delete'], 'filter' => $catalogueWrite]);
         $routes->resource('lead-sources',    ['controller' => 'Api\\V1\\LeadSourcesController']);
         $routes->resource('pipeline-stages', ['controller' => 'Api\\V1\\PipelineController']);
         $routes->get('pipeline/summary', 'Api\\V1\\PipelineController::summary');

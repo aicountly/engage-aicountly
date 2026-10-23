@@ -6,3 +6,19 @@
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule . /index.html [L]
 </IfModule>
+
+# --- Security headers (security audit, Oct 2026) ------------------------------
+# Framing only by this site, no MIME sniffing, no full referrer to other origins, no
+# powerful browser features, HSTS on HTTPS. The CSP only pins framing / base / plugins
+# so the Vite bundle keeps working unchanged.
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+  Header always set Content-Security-Policy "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+  Header always set Strict-Transport-Security "max-age=31536000" env=HTTPS
+</IfModule>
+
+# Never serve dotfiles (.env, .git …) from the document root; .well-known stays reachable.
+RedirectMatch 404 /\.(?!well-known)
