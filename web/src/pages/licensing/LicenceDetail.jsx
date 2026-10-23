@@ -115,7 +115,7 @@ export default function LicenceDetail() {
           <div className="engage-card">
             <div className="text-sm font-semibold mb-3">Activity</div>
             <LicenceTimeline events={l.events} />
-            <div className="text-xs text-neutral-500 mt-3">Manage shows the same timeline to the customer, without internal reasons and with “AICOUNTLY team” instead of staff names.</div>
+            <div className="text-xs text-neutral-500 mt-3">Manage shows the same timeline to the customer, without internal reasons and with “Aicountly team” instead of staff names.</div>
           </div>
         </div>
       </div>

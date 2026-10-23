@@ -5,7 +5,7 @@ export default function Products() {
   return (
     <GenericList
       title="Products"
-      subtitle="AICOUNTLY product catalogue used across leads, proposals and pricing."
+      subtitle="Aicountly product catalogue used across leads, proposals and pricing."
       resource="products"
       columns={[
         { key: 'code', header: 'Code' },

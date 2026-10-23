@@ -1,6 +1,6 @@
 # Seller programme (seller.aicountly.com ⇄ Engage)
 
-Resellers, associates and business facilitators sell AICOUNTLY through **seller.aicountly.com**. That portal
+Resellers, associates and business facilitators sell Aicountly through **seller.aicountly.com**. That portal
 (repo `aicountly/seller-aicountly`) is a React SPA plus a thin PHP BFF with **no database**: every seller
 account, credential, KYC record, lead attribution and commission entry lives here, in Engage.
 
@@ -107,7 +107,7 @@ Required before any payout; sign-in and lead registration work meanwhile.
   - already registered by this seller → 409 `duplicate_lead` ("You registered this lead on …; protected until …");
   - protected for another seller, an existing customer (converted / won) or a lead already in the pipeline
     (created or worked on within the window) → 409 `lead_protected` "This contact is already registered with
-    AICOUNTLY." (never says who holds it);
+    Aicountly." (never says who holds it);
   - an older, unprotected, not-converted lead is **claimed** (history and owner kept).
   Every attempt is logged in `engage_seller_lead_registrations`.
 - **Referral links:** `https://www.aicountly.com/?ref=SLR-000123`, `https://my.aicountly.com/?ref=…`. Reach carries

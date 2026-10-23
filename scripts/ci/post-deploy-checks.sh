@@ -38,7 +38,7 @@ check json "Engage API (${env_name})" "${base}/api/health" \
   '.status == "ready"'
 
 # The SPA: the build just deployed, or (no deploy) the Engage portal page at all.
-check page "Engage SPA (${env_name})" "${base}/" "${EXPECTED_ENTRY:-<title>AICOUNTLY Engage Portal</title>}"
+check page "Engage SPA (${env_name})" "${base}/" "${EXPECTED_ENTRY:-<title>Aicountly Engage Portal</title>}"
 
 if [ "$failed" -ne 0 ]; then
   echo "${failed} post-deploy check(s) failed on ${base}" >&2

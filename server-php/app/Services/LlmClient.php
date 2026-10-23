@@ -61,9 +61,9 @@ class LlmClient
     private function template(string $kind, array $ctx): string
     {
         $name    = (string) ($ctx['lead_name']     ?? 'there');
-        $product = (string) ($ctx['product_name']  ?? 'AICOUNTLY');
+        $product = (string) ($ctx['product_name']  ?? 'Aicountly');
         $company = (string) ($ctx['organization']  ?? '');
-        $owner   = (string) ($ctx['owner_name']    ?? 'AICOUNTLY Sales');
+        $owner   = (string) ($ctx['owner_name']    ?? 'Aicountly Sales');
         $stage   = (string) ($ctx['stage']         ?? '');
 
         switch ($kind) {
@@ -80,7 +80,7 @@ class LlmClient
             case 'stale_lead_nudge':
                 return "Hi {$name}, checking in on {$product}. Are you still evaluating this internally, or should we pause and reconnect next quarter?";
             default:
-                return "Hi {$name}, this is {$owner} from AICOUNTLY — reaching out about {$product}.";
+                return "Hi {$name}, this is {$owner} from Aicountly — reaching out about {$product}.";
         }
     }
 }

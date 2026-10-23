@@ -1,6 +1,6 @@
 # engage-aicountly
 
-Internal AICOUNTLY `.org` portal for **sales, leads, subscriptions, licensing,
+Internal Aicountly `.org` portal for **sales, leads, subscriptions, licensing,
 renewals, proposal follow-ups, credit management, and sales bot automation**.
 
 - Domain: `engage.aicountly.org`
@@ -109,7 +109,7 @@ Deploy flow (mirrors books):
 - `web/dist/` → `public_html/` (preserves `api/`)
 - `server-php/` → `public_html/api/` via rsync with `scripts/cpanel-rsync-api.filters` (`P .env` — protect server `.env` from `--delete`)
 - `scripts/cpanel-post-deploy-api.sh` runs migrate + one-time seeders; fails if `.env` is missing; **does not modify `.env` content**
-- **Scheduled jobs:** `api/bin/ops/post-deploy-jobs.sh` (the AICOUNTLY ops kit, identical to console-react-app
+- **Scheduled jobs:** `api/bin/ops/post-deploy-jobs.sh` (the Aicountly ops kit, identical to console-react-app
   `ops/estate/kit/bin/ops/`) writes `CONSOLE_CRON_MONITOR_KEY` (repository secret, sent over SSH on STDIN) into `api/.env`
   — the only line of `.env` a deploy writes; Console's production refuses the shared `CONSOLE_SERVICE_KEY` for
   heartbeats — and installs `server-php/bin/ops/jobs.txt` into the deploy user's crontab (block `aicountly-engage jobs`,
@@ -299,7 +299,7 @@ screens don't know the difference — they still call `/api/v1/partners` on
 Engage.
 
 ```
-ENGAGE.AICOUNTLY.ORG                        PARTNER.AICOUNTLY.COM
+engage.aicountly.org                        partner.aicountly.com
   Partners → Partner master (React UI)        owns the Partner Master
         |                                            ^
         | superadmin JWT (unchanged)                 |
@@ -311,7 +311,7 @@ ENGAGE.AICOUNTLY.ORG                        PARTNER.AICOUNTLY.COM
   engage_audit_logs                                  (table: partners)
   (still records who did what)                              |
                                                               v
-                                                     PARTNER.AICOUNTLY.COM
+                                                     partner.aicountly.com
                                                        partner sign-in
 ```
 
@@ -468,7 +468,7 @@ Every migration file uses `BIGSERIAL`, foreign keys where appropriate, and
 
 ## Frontend UI
 
-Green/white AICOUNTLY admin look shared with QA/Smoke/Console/Flow:
+Green/white Aicountly admin look shared with QA/Smoke/Console/Flow:
 
 - Fixed sidebar grouped by domain (Overview, Sales, Licensing & subscriptions,
   Engagement, Credits, Sales bot, Approvals & governance, Integrations, Admin)

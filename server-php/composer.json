@@ -1,6 +1,6 @@
 {
     "name": "aicountly/engage-api",
-    "description": "AICOUNTLY Engage Portal API (CodeIgniter 4.6 + PostgreSQL). Internal sales/CRM portal with local Sales Bot and Console/Worker/Reach integrations.",
+    "description": "Aicountly Engage Portal API (CodeIgniter 4.6 + PostgreSQL). Internal sales/CRM portal with local Sales Bot and Console/Worker/Reach integrations.",
     "type": "project",
     "license": "proprietary",
     "require": {

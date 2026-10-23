@@ -1,6 +1,6 @@
 # Licensing (Phase A) — catalogue, licences and the Manage read API
 
-Engage is where AICOUNTLY's sellable catalogue lives and where every licence is issued. It stays **staff-only**:
+Engage is where Aicountly's sellable catalogue lives and where every licence is issued. It stays **staff-only**:
 customers never sign in to Engage. They see their licences in **manage.aicountly.com**, whose *server* reads them
 from Engage over a signed server-to-server API (AIC-S2S v1). Manage's browser never calls Engage.
 
@@ -139,7 +139,7 @@ issued_at, updated_at, version}`. `status.tone` ∈ success | info | warning | d
 
 - **Scope:** every company query is filtered by `cmp_id`. Another company's licence answers exactly like a missing
   one (**404 `not_found`**); a company with no licences gets **an empty list**, never 404.
-- **Not exposed to Manage:** internal reasons, staff names (actor shows "AICOUNTLY team"), notes, account, price
+- **Not exposed to Manage:** internal reasons, staff names (actor shows "Aicountly team"), notes, account, price
   snapshot, `order_ref`.
 - **Envelope (§0.2):** `{"success":true,"data":…,"page":{"next_cursor":…,"limit":25},"request_id":"…"}` (`page` on
   lists only, no totals); errors `{"success":false,"error":{"code","message","details","retryable"},"request_id"}`.
@@ -229,7 +229,7 @@ Rotation: add the new id to `KEY_IDS` with its secret, switch Manage to it, then
 
 Payment is still collected and invoiced outside Engage (commerce plan §6 "Manual sales runbook").
 
-1. **Payment and invoice** — collect payment (Pay link or bank transfer) and issue the GST invoice from AICOUNTLY's
+1. **Payment and invoice** — collect payment (Pay link or bank transfer) and issue the GST invoice from Aicountly's
    Smart Books company as today. Note the invoice number.
 2. **Catalogue (once per offer)** — a super_admin or sales_manager creates the licence type
    (Licensing → Licence types) and the offer (Licensing → Offers → New offer: product, type, label, price in ₹, price

@@ -243,7 +243,7 @@ class SalesBotService
         $draft = Services::llmClient()->draftMessage($kind, [
             'lead_name'    => $lead['name']         ?? '',
             'organization' => $lead['organization'] ?? '',
-            'product_name' => $product['name']      ?? 'AICOUNTLY',
+            'product_name' => $product['name']      ?? 'Aicountly',
             'stage'        => $lead['stage']        ?? 'new',
         ]);
 
@@ -252,7 +252,7 @@ class SalesBotService
             'lead_id'      => (int) $lead['id'],
             'channel'      => $channel,
             'to_address'   => $channel === 'email' ? ($lead['email'] ?? null) : ($lead['whatsapp'] ?? $lead['mobile'] ?? null),
-            'subject'      => $channel === 'email' ? ('Following up — ' . ($product['name'] ?? 'AICOUNTLY')) : null,
+            'subject'      => $channel === 'email' ? ('Following up — ' . ($product['name'] ?? 'Aicountly')) : null,
             'body'         => $draft['draft'],
             'status'       => 'draft',
             'creator_kind' => 'bot',
@@ -304,7 +304,7 @@ class SalesBotService
         $draft = Services::llmClient()->draftMessage('proposal_summary', [
             'lead_name'    => $lead['name']         ?? '',
             'organization' => $lead['organization'] ?? '',
-            'product_name' => $product['name']      ?? 'AICOUNTLY',
+            'product_name' => $product['name']      ?? 'Aicountly',
             'stage'        => $lead['stage']        ?? '',
         ]);
 

@@ -32,7 +32,7 @@ export default function SellerAgreements() {
       <PageHeader
         title="Seller agreement"
         subtitle="Publishing a new version asks every seller to accept it before further changes in the portal."
-        actions={canEdit ? <button className="engage-btn-primary" onClick={() => setDraft({ version_label: '', title: 'AICOUNTLY Seller Agreement', body: '' })}>+ New version</button> : null}
+        actions={canEdit ? <button className="engage-btn-primary" onClick={() => setDraft({ version_label: '', title: 'Aicountly Seller Agreement', body: '' })}>+ New version</button> : null}
       />
       {error ? <div className="mb-4 rounded-md bg-red-50 border border-red-200 text-red-800 text-sm px-3 py-2">{error}</div> : null}
       {(q.data || []).length === 0 ? <div className="engage-card text-sm text-neutral-500">No agreement yet. Sellers cannot finish activation until one is published.</div> : null}

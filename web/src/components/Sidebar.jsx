@@ -129,7 +129,7 @@ export default function Sidebar({ open, onClose }) {
         <div className="flex items-center gap-3 px-5 py-4 border-b border-neutral-200">
           <div className="h-9 w-9 rounded-lg bg-aicountly-600 flex items-center justify-center text-white font-bold text-sm">EN</div>
           <div>
-            <div className="text-sm font-semibold text-neutral-900">AICOUNTLY</div>
+            <div className="text-sm font-semibold text-neutral-900">Aicountly</div>
             <div className="text-xs text-aicountly-700 -mt-0.5 font-medium">Engage portal</div>
           </div>
         </div>

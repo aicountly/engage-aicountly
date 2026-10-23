@@ -10,7 +10,7 @@ declare(strict_types=1);
 $root = __DIR__;
 chdir($root);
 
-echo "=== AICOUNTLY Engage API environment check ===\n";
+echo "=== Aicountly Engage API environment check ===\n";
 echo 'PHP: ' . PHP_VERSION . ' (' . PHP_SAPI . ")\n";
 echo 'pdo_pgsql: ' . (extension_loaded('pdo_pgsql') ? 'yes' : 'NO — enable in cPanel MultiPHP') . "\n";
 echo '.env file: ' . (is_file($root . '/.env') ? 'yes (' . filesize($root . '/.env') . ' bytes)' : 'MISSING') . "\n";

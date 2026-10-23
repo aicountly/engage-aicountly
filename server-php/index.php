@@ -1,7 +1,7 @@
 <?php
 
 /**
- * AICOUNTLY Engage Portal — CodeIgniter 4.6 front controller.
+ * Aicountly Engage Portal — CodeIgniter 4.6 front controller.
  * Deployed to cPanel public_html/api/index.php.
  */
 

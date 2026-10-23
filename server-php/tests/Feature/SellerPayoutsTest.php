@@ -635,7 +635,7 @@ final class SellerPayoutsTest extends SellerTestCase
         $this->assertSame('paid', $this->json($this->portal('get', 'commissions', [], $s['session']))['data']['items'][0]['status']);
         $this->assertSame('1200.00', $this->json($this->portal('get', 'dashboard', [], $s['session']))['data']['paid_total']);
 
-        $this->setEnv('PAYOUT_ISSUER_NAME', 'AICOUNTLY <Pvt> Ltd');
+        $this->setEnv('PAYOUT_ISSUER_NAME', 'Aicountly Interactive Services <Private> Limited');
         $st = $this->portal('get', 'payouts/' . $ref . '/statement', [], $s['session']);
         $this->assertSame(200, $this->code($st));
         $this->assertStringStartsWith('text/html', $st->response()->getHeaderLine('Content-Type'));
@@ -644,7 +644,7 @@ final class SellerPayoutsTest extends SellerTestCase
         $this->assertStringContainsString('HDFCN52026101400012', $html);
         $this->assertStringContainsString('₹1176.00', $html);
         $this->assertStringContainsString('section 194H', $html);
-        $this->assertStringContainsString('AICOUNTLY &lt;Pvt&gt; Ltd', $html);
+        $this->assertStringContainsString('Aicountly Interactive Services &lt;Private&gt; Limited', $html);
         $this->assertStringNotContainsString('<script', $html);
         $this->assertStringNotContainsString(self::PAN, $html);
 

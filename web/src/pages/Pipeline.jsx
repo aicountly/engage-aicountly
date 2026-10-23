@@ -33,7 +33,7 @@ export default function Pipeline() {
     <>
       <PageHeader
         title="Sales pipeline"
-        subtitle="Kanban view of all leads across the AICOUNTLY sales pipeline."
+        subtitle="Kanban view of all leads across the Aicountly sales pipeline."
       />
       <KanbanBoard
         columns={stagesQ.data || []}

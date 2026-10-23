@@ -11,7 +11,7 @@ namespace App\Libraries;
  *
  * Monitor: engage.console_audit_deliver (`php spark engage:console-audit-deliver`, every 5 minutes: ok after a delivery run).
  *
- * The AICOUNTLY ops kit's protocol (bin/ops/heartbeat-lib.php), which this product does not vendor:
+ * The Aicountly ops kit's protocol (bin/ops/heartbeat-lib.php), which this product does not vendor:
  *   - the key is CONSOLE_CRON_MONITOR_KEY, else CONSOLE_SERVICE_KEY (the values Console's CRON_MONITOR_KEY /
  *     CRON_MONITOR_KEY_HASH, or its CONSOLE_SERVICE_KEY, accept); the base is CONSOLE_API_BASE, else CONSOLE_API_URL,
  *     else https://console.aicountly.org/api;

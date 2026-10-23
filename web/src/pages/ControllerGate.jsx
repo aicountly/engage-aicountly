@@ -6,7 +6,7 @@ import {
 } from '../lib/auth.jsx'
 
 const CONSOLE_URL = (import.meta.env.VITE_CONSOLE_URL || 'https://console.aicountly.org').replace(/\/$/, '')
-const APP_NAME = import.meta.env.VITE_APP_NAME || 'AICOUNTLY Engage Portal'
+const APP_NAME = import.meta.env.VITE_APP_NAME || 'Aicountly Engage Portal'
 
 function consoleLoginUrl() {
   const returnUrl = encodeURIComponent(window.location.origin + '/')
