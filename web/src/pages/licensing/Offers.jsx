@@ -10,7 +10,7 @@ import { LICENSING_ADMIN, formatDateIN, formatPaise, paiseToRupees, parseJsonFie
 const EMPTY = {
   offer_code: '', product_code: '', licence_type_code: '', plan_code: '', label: '', description: '',
   price: '', price_basis: '', gst_rate: '', sac: '', term_months: 0, term_days: 0, seats: '', app_keys: '',
-  entitlementsText: '[]', displayText: '{}', valid_from: '', valid_to: '',
+  entitlementsText: '[]', displayText: '{}', valid_from: '', valid_to: '', is_default: false,
 }
 
 const dateOnly = (iso) => (iso ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(iso)) : '')
@@ -52,7 +52,7 @@ export default function Offers() {
         seats: d.seats === '' ? null : Number(d.seats), app_keys: d.app_keys,
         entitlements: parseJsonField(d.entitlementsText, 'Entitlements', { expect: 'array' }),
         display: parseJsonField(d.displayText, 'Display'),
-        valid_from: d.valid_from || null, valid_to: d.valid_to || null,
+        valid_from: d.valid_from || null, valid_to: d.valid_to || null, is_default: !!d.is_default,
       }
       return (d.id ? api.put(`/v1/offers/${d.id}`, body) : api.post('/v1/offers', { ...body, offer_code: d.offer_code })).then((r) => r.data?.data)
     },
@@ -60,7 +60,7 @@ export default function Offers() {
     onError: (e) => setError(describeError(e)),
   })
   const act = useMutation({
-    mutationFn: ({ id, action }) => (action === 'discard' ? api.delete(`/v1/offers/${id}`) : api.post(`/v1/offers/${id}/${action}`)).then((r) => r.data?.data),
+    mutationFn: ({ id, action, body }) => (action === 'discard' ? api.delete(`/v1/offers/${id}`) : api.post(`/v1/offers/${id}/${action}`, body)).then((r) => r.data?.data),
     onSuccess: (data, vars) => { setError(null); invalidate(); if (vars.action === 'new-version') edit(data) },
     onError: (e) => setError(describeError(e)),
   })
@@ -70,6 +70,7 @@ export default function Offers() {
     price_basis: o.price_basis, gst_rate: o.gst_rate, sac: o.sac || '', term_months: o.term_months, term_days: o.term_days,
     seats: o.seats ?? '', app_keys: (o.app_keys || []).join(', '), entitlementsText: JSON.stringify(o.entitlements || [], null, 2),
     displayText: JSON.stringify(o.display || {}, null, 2), valid_from: dateOnly(o.valid_from), valid_to: dateOnly(o.valid_to),
+    is_default: !!o.is_default,
   })
   const set = (k) => (e) => setDraft({ ...draft, [k]: e.target.value })
 
@@ -103,6 +104,7 @@ export default function Offers() {
                       <span className="font-semibold">{o.label}</span>
                       <span className="font-mono text-xs">v{o.version}</span>
                       <OfferStatusBadge status={o.status} />
+                      {o.is_default ? <span className="engage-pill bg-aicountly-50 text-aicountly-800 border-aicountly-200">Basic (default)</span> : null}
                     </div>
                     {canEdit ? (
                       <div className="flex gap-2">
@@ -112,6 +114,14 @@ export default function Offers() {
                           <button className="engage-btn-primary text-xs" onClick={() => { if (window.confirm(`Publish ${code} v${o.version}? It becomes immutable and goes on sale${versions.some((x) => x.status === 'published') ? '; the current published version is retired' : ''}.`)) act.mutate({ id: o.id, action: 'publish' }) }}>Publish</button>
                         </> : null}
                         {o.status !== 'draft' && !versions.some((x) => x.status === 'draft') ? <button className="engage-btn-secondary text-xs" onClick={() => act.mutate({ id: o.id, action: 'new-version' })}>New version</button> : null}
+                        {o.status !== 'retired' ? (
+                          <button className="engage-btn-secondary text-xs" onClick={() => {
+                            const msg = o.is_default
+                              ? `Stop ${code} being the Basic (default) plan of ${o.product.label}? New sign-ups will not get it; existing Basic licences stay.`
+                              : `Make ${code} the Basic (default) plan of ${o.product.label}? Every signed-up user gets it automatically once published. It must be free, open-ended and of a complimentary licence type.`
+                            if (window.confirm(msg)) act.mutate({ id: o.id, action: 'default', body: { is_default: !o.is_default } })
+                          }}>{o.is_default ? 'Unset Basic' : 'Make Basic'}</button>
+                        ) : null}
                         {o.status === 'published' ? <button className="engage-btn-danger text-xs" onClick={() => { if (window.confirm('Retire this version? Existing licences keep it; it can no longer be issued.')) act.mutate({ id: o.id, action: 'retire' }) }}>Retire</button> : null}
                       </div>
                     ) : null}
@@ -170,7 +180,8 @@ export default function Offers() {
             <div><div className="engage-label">Seats (empty = no limit)</div><input className="engage-input" type="number" min={1} value={draft.seats} onChange={set('seats')} /></div>
             <div><div className="engage-label">App keys (comma separated)</div><input className="engage-input font-mono" placeholder="defaults to the product" value={draft.app_keys} onChange={set('app_keys')} /></div>
           </div>
-          <div className="text-xs text-neutral-500 -mt-2">Term 0 months + 0 days = no end date.</div>
+          <div className="text-xs text-neutral-500 -mt-2">Term 0 months + 0 days = no end date. App keys are Manage's keys (books, inventory, billing, notes, docs …); publishing refuses a key Manage does not know. A priced offer needs a SAC of the form 99xxxx.</div>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!draft.is_default} onChange={(e) => setDraft({ ...draft, is_default: e.target.checked })} /> Basic (default) plan of this product — free, no end date, complimentary type; every signed-up user gets it (one published per product)</label>
           <div className="grid grid-cols-2 gap-3">
             <div><div className="engage-label">On sale from (optional)</div><input className="engage-input" type="date" value={draft.valid_from} onChange={set('valid_from')} /></div>
             <div><div className="engage-label">On sale until (optional)</div><input className="engage-input" type="date" value={draft.valid_to} onChange={set('valid_to')} /></div>

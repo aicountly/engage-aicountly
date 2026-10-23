@@ -13,6 +13,7 @@ use Config\Services;
  *   PUT    v1/offers/{id}                  draft only (published versions are immutable)
  *   DELETE v1/offers/{id}                  discard a draft
  *   POST   v1/offers/{id}/publish | retire | new-version
+ *   POST   v1/offers/{id}/default  {is_default: bool}   the product's Basic (draft or published; one published per product)
  */
 class OffersController extends LicensingBaseController
 {
@@ -58,5 +59,15 @@ class OffersController extends LicensingBaseController
     public function newVersion($id = null)
     {
         return $this->result(Services::offers()->newVersion((int) $id, $this->user()));
+    }
+
+    public function setDefault($id = null)
+    {
+        $in = $this->input();
+        if (! array_key_exists('is_default', $in)) {
+            return $this->fail('Send is_default (true or false).', 422, ['is_default' => 'Required.']);
+        }
+
+        return $this->result(Services::offers()->setDefault((int) $id, filter_var($in['is_default'], FILTER_VALIDATE_BOOLEAN), $this->user()));
     }
 }

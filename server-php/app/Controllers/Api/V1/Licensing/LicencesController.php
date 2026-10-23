@@ -9,7 +9,8 @@ use Config\Services;
  * Staff: licences (read: every signed-in role; write: super_admin | sales_manager). Every write carries the
  * licence `version` it changes (optimistic lock; 409 version_conflict when stale).
  *   GET  v1/licences ?account_id=&cmp_id=&status=&q=          GET v1/licences/{ref}  (with events + seat assignments)
- *   POST v1/licences {account_id, cmp_id, offer_code, offer_version?, starts_at?, activate?, seats_total?, invoice_refs?, notes?}
+ *   POST v1/licences {account_id, holder_uuid? | cmp_id?, offer_code, offer_version?, starts_at?, activate?, seats_total?, invoice_refs?,
+ *                     notes?, is_addon?, holder_note?, quote_ref?}   Idempotency-Key header (or idempotency_key) replays a retry
  *   POST v1/licences/{ref}/activate | suspend | reinstate | revoke   {version, reason (suspend/reinstate/revoke)}
  *   POST v1/licences/{ref}/renew   {version, offer_version?, invoice_refs?, reason?}
  *   POST v1/licences/{ref}/extend  {version, ends_at, reason}
@@ -17,6 +18,7 @@ use Config\Services;
  *   POST v1/licences/{ref}/seat-assignments {version, member_ref?, member_label?}
  *   POST v1/licences/{ref}/seat-assignments/{id}/release {version}
  *   POST v1/licences/{ref}/invoice-refs {version, invoice_ref}
+ *   POST v1/licences/{ref}/change-offer {version, offer_code, offer_version?, term_mode? keep|restart, seats_total?, reason?, quote_ref?}
  */
 class LicencesController extends LicensingBaseController
 {
@@ -36,7 +38,18 @@ class LicencesController extends LicensingBaseController
 
     public function create()
     {
-        return $this->result(Services::licences()->issue($this->input(), $this->user()));
+        $in = $this->input();
+        $header = trim($this->request->getHeaderLine('Idempotency-Key'));
+        if ($header !== '' && empty($in['idempotency_key'])) {
+            $in['idempotency_key'] = $header;
+        }
+
+        return $this->result(Services::licences()->issue($in, $this->user()));
+    }
+
+    public function changeOffer($ref = null)
+    {
+        return $this->result(Services::licences()->changeOffer((string) $ref, $this->input(), $this->user()));
     }
 
     public function activate($ref = null)

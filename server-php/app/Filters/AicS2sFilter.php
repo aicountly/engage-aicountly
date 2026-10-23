@@ -12,8 +12,10 @@ use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
 
 /**
- * Inbound AIC-S2S v1 (commerce contract v1 §0.1–0.4) for one calling service. Reusable: the route argument names
- * the client — `['filter' => 'aic-s2s:manage']`; configuration is AicS2sConfig (env).
+ * Inbound AIC-S2S v1 (commerce contract v1 §0.1–0.4) for one calling service. Reusable: the first route argument
+ * names the client — `['filter' => 'aic-s2s:manage']`; configuration is AicS2sConfig (env). Further arguments name
+ * the key scopes the route accepts — `'aic-s2s:myaicountly,issue'` — so a key of another scope gets 403
+ * route_not_allowed_for_key even when its method would match. No scope argument = any scope whose methods match.
  *
  * Checks, in order (first failure answers, contract §0.2 error envelope):
  *   503 inbound_not_configured   no environment / no live key for this client (dormant by default)
@@ -23,8 +25,10 @@ use Config\Database;
  *   401 timestamp_stale          |now − X-AIC-Timestamp| > 300 s
  *   401 signature_invalid        HMAC mismatch (constant-time compare) or malformed nonce
  *   401 nonce_replayed           nonce already used by this key id in the last 600 s
- *   403 route_not_allowed_for_key  read key on a non-GET route, issue key on a non-POST route
- *   429 rate_limited (+ Retry-After)  120 req/min per read key, 30/min per issue key
+ *   403 route_not_allowed_for_key  read key on a non-GET route, issue key on a non-POST route, or a scope the
+ *                                  route does not accept
+ *   429 rate_limited (+ Retry-After)  120 req/min per read key, 30/min per issue key (or the client's
+ *                                  ENGAGE_INBOUND_<CLIENT>_RATE_PER_MINUTE)
  *   503 database_unavailable     the nonce / rate tables could not be reached
  * On success $request->aicS2s = {client, key_id, scope, actor, request_id, environment}.
  * X-AIC-Actor is recorded for audit only — it never authorises anything.
@@ -33,11 +37,13 @@ class AicS2sFilter implements FilterInterface
 {
     public const MAX_SKEW_SECONDS = 300;
     public const NONCE_TTL_SECONDS = 600;
-    public const RATE_LIMITS = ['read' => 120, 'issue' => 30];
+    public const RATE_LIMITS = AicS2sConfig::DEFAULT_RATE_LIMITS;
 
     public function before(RequestInterface $request, $arguments = null)
     {
-        $client = strtolower((string) (($arguments ?? [])[0] ?? 'manage'));
+        $args = array_values(array_map(static fn ($a) => strtolower(trim((string) $a)), (array) ($arguments ?? [])));
+        $client = $args[0] ?? 'manage';
+        $routeScopes = array_values(array_filter(array_slice($args, 1), static fn ($a) => $a !== ''));
         $rid = AicS2sResponse::requestId($request->getHeaderLine('X-AIC-Request-Id'));
         $res = service('response');
         $err = static fn (int $s, string $code, string $msg, bool $retry = false, array $d = []) => AicS2sResponse::error($res, $s, $code, $msg, $rid, $retry, $d);
@@ -84,8 +90,8 @@ class AicS2sFilter implements FilterInterface
             return $err(401, 'signature_invalid', 'The request signature is not valid.');
         }
 
-        $allowed = $key['scope'] === 'read' ? ['GET', 'HEAD'] : ['POST'];
-        $scopeOk = in_array($method, $allowed, true);
+        $scopeOk = in_array($method, AicS2sConfig::methodsFor($key['scope']), true)
+            && ($routeScopes === [] || in_array($key['scope'], $routeScopes, true));
 
         try {
             $db = Database::connect();
@@ -113,7 +119,7 @@ class AicS2sFilter implements FilterInterface
 
             return $err(503, 'database_unavailable', 'Engage is temporarily unavailable.', true);
         }
-        $limit = self::RATE_LIMITS[$key['scope']];
+        $limit = $cfg->rateLimit($key['scope']);
         if ($hits > $limit) {
             $retryAfter = 60 - (time() % 60);
 

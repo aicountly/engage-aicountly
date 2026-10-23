@@ -55,6 +55,7 @@ const Offers = lazy(() => import('./pages/licensing/Offers.jsx'))
 const CompanyMappings = lazy(() => import('./pages/licensing/CompanyMappings.jsx'))
 const Licences = lazy(() => import('./pages/licensing/Licences.jsx'))
 const LicenceDetail = lazy(() => import('./pages/licensing/LicenceDetail.jsx'))
+const ManageSync = lazy(() => import('./pages/licensing/ManageSync.jsx'))
 const lazyPage = (el) => <Suspense fallback={<div className="text-sm text-neutral-500">Loading…</div>}>{el}</Suspense>
 
 export default function App() {
@@ -112,6 +113,7 @@ export default function App() {
         <Route path="/company-mappings" element={lazyPage(<CompanyMappings />)} />
         <Route path="/licences" element={lazyPage(<Licences />)} />
         <Route path="/licences/:ref" element={lazyPage(<LicenceDetail />)} />
+        <Route path="/manage-sync" element={lazyPage(<ManageSync />)} />
 
         <Route path="/follow-ups" element={<FollowUps />} />
         <Route path="/communication-drafts" element={<Communications />} />

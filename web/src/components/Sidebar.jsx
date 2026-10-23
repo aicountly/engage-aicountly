@@ -58,6 +58,7 @@ const groups = [
       { to: '/offers', label: 'Offers' },
       { to: '/licence-types', label: 'Licence types' },
       { to: '/company-mappings', label: 'Account ↔ company' },
+      { to: '/manage-sync', label: 'Manage sync' },
     ],
   },
   {
