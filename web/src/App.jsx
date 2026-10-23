@@ -55,6 +55,12 @@ const Offers = lazy(() => import('./pages/licensing/Offers.jsx'))
 const CompanyMappings = lazy(() => import('./pages/licensing/CompanyMappings.jsx'))
 const Licences = lazy(() => import('./pages/licensing/Licences.jsx'))
 const LicenceDetail = lazy(() => import('./pages/licensing/LicenceDetail.jsx'))
+const ManageSync = lazy(() => import('./pages/licensing/ManageSync.jsx'))
+// Coupons and quotes (docs/COUPONS.md).
+const Coupons = lazy(() => import('./pages/coupons/Coupons.jsx'))
+const CouponDetail = lazy(() => import('./pages/coupons/CouponDetail.jsx'))
+const Quotes = lazy(() => import('./pages/coupons/Quotes.jsx'))
+const CouponReport = lazy(() => import('./pages/coupons/CouponReport.jsx'))
 const lazyPage = (el) => <Suspense fallback={<div className="text-sm text-neutral-500">Loading…</div>}>{el}</Suspense>
 
 export default function App() {
@@ -98,6 +104,10 @@ export default function App() {
         <Route path="/seller-payouts" element={<Payouts />} />
         <Route path="/lead-sources" element={<LeadSources />} />
         <Route path="/campaigns" element={<Campaigns />} />
+        <Route path="/coupons" element={lazyPage(<Coupons />)} />
+        <Route path="/coupons/:id" element={lazyPage(<CouponDetail />)} />
+        <Route path="/quotes" element={lazyPage(<Quotes />)} />
+        <Route path="/coupon-report" element={lazyPage(<CouponReport />)} />
 
         <Route path="/products" element={<Products />} />
         <Route path="/plans" element={<Plans />} />
@@ -112,6 +122,7 @@ export default function App() {
         <Route path="/company-mappings" element={lazyPage(<CompanyMappings />)} />
         <Route path="/licences" element={lazyPage(<Licences />)} />
         <Route path="/licences/:ref" element={lazyPage(<LicenceDetail />)} />
+        <Route path="/manage-sync" element={lazyPage(<ManageSync />)} />
 
         <Route path="/follow-ups" element={<FollowUps />} />
         <Route path="/communication-drafts" element={<Communications />} />

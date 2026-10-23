@@ -112,8 +112,13 @@ class ManageReadService
         return $this->page($rows, $limit, [LicenceService::class, 'contractEvent']);
     }
 
-    /** Published offers on sale now. Type-agnostic: every label and display field is data. @return list<array<string,mixed>> */
-    public function catalogue(int $cmpId): array
+    /**
+     * Published offers on sale now. Type-agnostic: every label and display field is data. $cmpId is optional (the
+     * catalogue does not vary by company yet); each item carries is_default — the product's Basic plan (§3.1/§3.4).
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function catalogue(?int $cmpId = null): array
     {
         return array_map(static function (array $o): array {
             $v = OfferService::view($o);
@@ -138,6 +143,7 @@ class ManageReadService
                 'term'         => ['months' => $v['term_months'], 'days' => $v['term_days'], 'cycle' => $cycle],
                 'seats'        => $v['seats'],
                 'app_keys'     => $v['app_keys'],
+                'is_default'   => $v['is_default'],
                 'entitlements' => $v['entitlements'],
                 'attributes'   => $attributes,
                 'display'      => $v['display'],

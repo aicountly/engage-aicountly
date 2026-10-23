@@ -20,7 +20,7 @@ use Config\Services;
  *   GET v1/manage/companies/{cmp_id}/licences/{licence_ref}
  *   GET v1/manage/companies/{cmp_id}/licences/{licence_ref}/seats
  *   GET v1/manage/companies/{cmp_id}/activity ?limit=&cursor=
- *   GET v1/manage/catalogue ?cmp_id=
+ *   GET v1/manage/catalogue ?cmp_id=   (cmp_id optional; every item carries is_default)
  *   GET v1/manage/licence-types
  *
  * Every answer uses the §0.2 envelope; every read is audited as manage:<X-AIC-Actor>.
@@ -84,7 +84,9 @@ class ManageLicensingController extends Controller
     public function catalogue()
     {
         return $this->guard(function () {
-            $cmpId = $this->cmpId($this->query('cmp_id'));
+            // cmp_id is optional: Manage's plans_sync.php reads the Basic defaults with none (contract §3.4).
+            $raw = $this->query('cmp_id');
+            $cmpId = $raw === null ? null : $this->cmpId($raw);
             $items = Services::manageLicensing()->catalogue($cmpId);
             $this->audit('manage.catalogue.read', $cmpId, ['count' => count($items)]);
 

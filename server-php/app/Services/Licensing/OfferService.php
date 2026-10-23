@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Services\Licensing;
 
 use App\Libraries\Licensing\LicensingSupport as S;
+use App\Libraries\Licensing\ManageAppRegistry;
 use App\Libraries\Seller\Clock;
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
@@ -20,6 +21,14 @@ use Config\Services;
  *
  * Money is integer paise; gst_rate, price_basis (inclusive | exclusive), sac and the term are per offer (data,
  * never constants). Currency is INR (contract v1).
+ *
+ * Default offer (contract §3.1, D-L1): `is_default` marks the product's Basic plan — complimentary licence type,
+ * price 0, no term end. At most one PUBLISHED default per product_code (unique index uq_engage_offers_default);
+ * staff toggle it (setDefault) on a draft or a published version. Provisioning issues it to every signed-up holder.
+ *
+ * Publish-time checks against the offer's consumers (hazard G17): every app key must be a Manage registry key
+ * (ManageAppRegistry; aliases such as drive → docs are folded when the draft is saved), and a priced offer needs a
+ * Finance-valid SAC (99xxxx).
  */
 class OfferService
 {
@@ -62,6 +71,7 @@ class OfferService
             'term_days'    => (int) $o['term_days'],
             'seats'        => $o['seats'] !== null ? (int) $o['seats'] : null,
             'app_keys'     => S::fromJsonArray($o['app_keys_json'] ?? '[]'),
+            'is_default'   => in_array($o['is_default'] ?? false, [true, 't', 'true', 1, '1'], true),
             'entitlements' => S::json($o['entitlements']),
             'display'      => (object) $display,
             'valid_from'   => S::iso($o['valid_from']),
@@ -256,13 +266,17 @@ class OfferService
                 $e['app_keys'] = 'app_keys must be a list of app keys.';
                 $keys = [];
             }
-            $keys = array_values(array_unique(array_map(static fn ($k) => strtolower(trim((string) $k)), $keys)));
+            // Manage's spelling where Manage knows the key (drive → docs); unknown keys are kept so publish names them.
+            $keys = array_values(array_unique(array_map(static fn ($k) => ManageAppRegistry::fold((string) $k), $keys)));
             foreach ($keys as $k) {
                 if (! preg_match('/\A[a-z0-9][a-z0-9_\-]{1,47}\z/', $k)) {
                     $e['app_keys'] = 'Each app key: 2–48 lowercase letters, digits, - or _.';
                 }
             }
             $f['app_keys'] = $keys;
+        }
+        if (array_key_exists('is_default', $in)) {
+            $f['is_default'] = filter_var($in['is_default'], FILTER_VALIDATE_BOOLEAN);
         }
         if ($has('entitlements')) {
             [$ent, $ee] = self::normaliseEntitlements($in['entitlements'] ?? []);
@@ -447,9 +461,10 @@ class OfferService
         $max = (int) $this->db()->query('SELECT MAX(version) AS v FROM engage_offers WHERE offer_code = ?', [$o['offer_code']])->getRow()->v;
         $copy = [];
         foreach (['offer_code', 'product_code', 'licence_type_code', 'plan_code', 'label', 'description', 'price_paise', 'currency', 'price_basis',
-            'gst_rate', 'sac', 'term_months', 'term_days', 'seats', 'entitlements', 'display', 'valid_from', 'valid_to'] as $k) {
+            'gst_rate', 'sac', 'term_months', 'term_days', 'seats', 'entitlements', 'display', 'valid_from', 'valid_to', 'is_default'] as $k) {
             $copy[$k] = $o[$k];
         }
+        $copy['is_default'] = in_array($copy['is_default'], [true, 't', 'true', 1, '1'], true);
         $copy['app_keys'] = S::fromJsonArray($o['app_keys_json']);
         // A new version starts on sale when published unless staff set new dates.
         $copy['valid_from'] = null;
@@ -476,14 +491,26 @@ class OfferService
         if ((int) $o['price_paise'] > 0 && ($o['sac'] === null || $o['sac'] === '')) {
             return ['status' => 422, 'error' => 'A priced offer needs a SAC code before it is published (Finance needs it on the invoice).', 'details' => ['sac' => 'Required for a priced offer.']];
         }
+        if ((int) $o['price_paise'] > 0 && ! self::financeSac((string) $o['sac'])) {
+            return ['status' => 422, 'error' => 'Finance invoices need a 6-digit services SAC starting 99 (e.g. 997331).', 'details' => ['sac' => 'Must be 99 followed by 4 digits for a priced offer.']];
+        }
         if (S::fromJsonArray($o['app_keys_json']) === []) {
             return ['status' => 422, 'error' => 'Name at least one app this offer licenses.', 'details' => ['app_keys' => 'Required.']];
+        }
+        [, $unknown] = ManageAppRegistry::normalizeList(S::fromJsonArray($o['app_keys_json']));
+        if ($unknown !== []) {
+            return ['status' => 422, 'error' => 'Manage does not know the app key(s) ' . implode(', ', $unknown) . '. Use Manage\'s keys (e.g. books, inventory, billing, notes, docs).',
+                'details' => ['app_keys' => 'Unknown to Manage: ' . implode(', ', $unknown) . '.']];
+        }
+        $isDefault = in_array($o['is_default'] ?? false, [true, 't', 'true', 1, '1'], true);
+        if ($isDefault && ($de = $this->defaultOfferProblem($o, $type)) !== null) {
+            return ['status' => 422, 'error' => $de, 'details' => ['is_default' => $de]];
         }
         if ($o['valid_to'] !== null && strtotime((string) $o['valid_to']) <= time()) {
             return ['status' => 422, 'error' => 'valid_to has already passed.', 'details' => ['valid_to' => 'Must be in the future.']];
         }
         $db = $this->db();
-        $db->transBegin();
+        $db->transException(true)->transBegin();
         try {
             $prev = $db->query("SELECT id, version FROM engage_offers WHERE offer_code = ? AND status = 'published' FOR UPDATE", [$o['offer_code']])->getRowArray();
             if ($prev) {
@@ -491,8 +518,14 @@ class OfferService
             }
             $db->query("UPDATE engage_offers SET status = 'published', published_at = NOW(), published_by = ?, updated_at = NOW() WHERE id = ? AND status = 'draft'", [(int) $staff['id'], $id]);
             $db->transCommit();
+            $db->transException(false);
         } catch (\Throwable $e) {
             $db->transRollback();
+            $db->transException(false);
+            $db->resetTransStatus();
+            if (str_contains($e->getMessage(), 'uq_engage_offers_default')) {
+                return ['status' => 409, 'code' => 'default_offer_exists', 'error' => "Another offer is already the published Basic (default) of {$o['product_code']}. Clear its default flag or retire it first."];
+            }
             log_message('error', 'Offer publish failed: ' . $e->getMessage());
 
             return ['status' => 500, 'error' => 'Could not publish the offer.'];
@@ -515,6 +548,74 @@ class OfferService
         $this->audit('offer.retired', $id, ['offer_code' => $o['offer_code'], 'version' => (int) $o['version']]);
 
         return ['status' => 200, 'data' => self::view($this->findRow($id))];
+    }
+
+    /**
+     * Toggle the default (Basic) flag on a draft or published version. At most one published default per product —
+     * enforced by uq_engage_offers_default (409 default_offer_exists).
+     */
+    public function setDefault(int $id, bool $isDefault, array $staff): array
+    {
+        $o = $this->findRow($id);
+        if (! $o) {
+            return ['status' => 404, 'error' => 'Offer not found.'];
+        }
+        if ($o['status'] === 'retired') {
+            return ['status' => 409, 'error' => 'A retired version is no longer on sale; set the flag on the current version.'];
+        }
+        if ($isDefault) {
+            $type = (new LicenceTypeService($this->db()))->findByCode($o['licence_type_code']);
+            if (($de = $this->defaultOfferProblem($o, $type)) !== null) {
+                return ['status' => 422, 'error' => $de, 'details' => ['is_default' => $de]];
+            }
+        }
+        try {
+            $this->db()->query('UPDATE engage_offers SET is_default = ?, updated_at = NOW() WHERE id = ?', [$isDefault, $id]);
+        } catch (\Throwable $e) {
+            if (str_contains($e->getMessage(), 'uq_engage_offers_default')) {
+                return ['status' => 409, 'code' => 'default_offer_exists', 'error' => "Another offer is already the published Basic (default) of {$o['product_code']}. Clear its default flag first."];
+            }
+            throw $e;
+        }
+        $this->audit($isDefault ? 'offer.default_set' : 'offer.default_cleared', $id, ['offer_code' => $o['offer_code'], 'version' => (int) $o['version'], 'product_code' => $o['product_code']]);
+
+        return ['status' => 200, 'data' => self::view($this->findRow($id))];
+    }
+
+    /** Why this offer cannot be a product's Basic (D-L1: complimentary, free, no end), or null. */
+    private function defaultOfferProblem(array $o, ?array $type): ?string
+    {
+        if ((int) $o['price_paise'] !== 0) {
+            return 'The Basic (default) offer must be free (price 0).';
+        }
+        if ((int) $o['term_months'] !== 0 || (int) $o['term_days'] !== 0) {
+            return 'The Basic (default) offer has no term end (term 0 months + 0 days).';
+        }
+        if (! $type || $type['lifecycle_kind'] !== 'complimentary') {
+            return 'The Basic (default) offer uses a complimentary licence type.';
+        }
+
+        return null;
+    }
+
+    /** A SAC Finance accepts on an invoice line: 99 followed by 4 digits. */
+    public static function financeSac(string $sac): bool
+    {
+        return preg_match('/\A99\d{4}\z/', $sac) === 1;
+    }
+
+    /** The product's published default (Basic) offer that is on sale with an active type, or null. */
+    public function defaultFor(string $productCode): ?array
+    {
+        return $this->db()->query(self::SELECT . " WHERE o.product_code = ? AND o.is_default AND o.status = 'published' AND t.active
+            AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW())", [$productCode])->getRowArray() ?: null;
+    }
+
+    /** Every product's published default offer on sale. @return list<array<string,mixed>> */
+    public function defaultOffers(): array
+    {
+        return $this->db()->query(self::SELECT . " WHERE o.is_default AND o.status = 'published' AND t.active
+            AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW()) ORDER BY o.product_code")->getResultArray();
     }
 
     /** Immutable copy kept on a licence (what was sold, even if labels change later). */
