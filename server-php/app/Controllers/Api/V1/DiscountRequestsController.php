@@ -32,9 +32,15 @@ class DiscountRequestsController extends BaseApiController
         return $row ? $this->ok($row) : $this->fail('Discount request not found.', 404);
     }
 
+    /** Set only by approve / reject (role-gated in Routes.php), never by a create or an edit. */
+    private const DECISION_FIELDS = ['status', 'decided_by', 'decided_at', 'decision_notes', 'approval_id'];
+
     public function create()
     {
-        $data = $this->input();
+        // A new request is always pending: the decision fields cannot be posted (any signed-in role could create an
+        // "approved" request before).
+        $data = array_diff_key($this->input(), array_flip(self::DECISION_FIELDS));
+        $data['status']         = 'pending';
         $data['requested_by']   = $this->user()['id'] ?? null;
         $data['requester_kind'] = $data['requester_kind'] ?? 'user';
         $id = $this->m->insert($data, true);
@@ -64,9 +70,18 @@ class DiscountRequestsController extends BaseApiController
     public function update($id = null)
     {
         $data = $this->input();
+        unset($data['requested_by']);
         if (! $this->userHasRole(['super_admin', 'sales_manager'])) {
             // The decision is only made through approve / reject (role-gated in Routes.php), never by editing the row.
-            $data = array_diff_key($data, array_flip(['status', 'decided_by', 'decided_at', 'decision_notes', 'approval_id']));
+            $data = array_diff_key($data, array_flip(self::DECISION_FIELDS));
+            $row = $this->m->find((int) $id);
+            if (! $row) {
+                return $this->fail('Discount request not found.', 404);
+            }
+            // …and a decided request cannot be changed afterwards (e.g. raising the discount of an approved request).
+            if ($data !== [] && ($row['status'] ?? 'pending') !== 'pending') {
+                return $this->fail('This request was already decided and can no longer be edited.', 409);
+            }
         }
         if ($data === []) {
             return $this->ok($this->m->find((int) $id));
