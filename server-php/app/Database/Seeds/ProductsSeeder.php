@@ -23,6 +23,10 @@ class ProductsSeeder extends Seeder
             ['code' => 'flow',         'name' => 'AICOUNTLY Flow',        'category' => 'internal'],
             ['code' => 'console',      'name' => 'AICOUNTLY Console',     'category' => 'internal'],
             ['code' => 'other',        'name' => 'Other / Custom',        'category' => 'other'],
+            // Aicountly Academy courses — same rows as migration 2026-10-23-000110_AddAcademyProducts.
+            ['code' => 'academy',      'name' => 'Aicountly Academy',     'category' => 'Academy'],
+            ['code' => 'edge',         'name' => 'Aicountly Edge',        'category' => 'Academy'],
+            ['code' => 'aspire',       'name' => 'Aicountly Aspire',      'category' => 'Academy'],
         ];
 
         $now = date('Y-m-d H:i:s');

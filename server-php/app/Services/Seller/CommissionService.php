@@ -318,6 +318,75 @@ class CommissionService
     }
 
     /**
+     * Revenue view: lead payments grouped by product_code (read-only). Filters: category (engage_products.category,
+     * case-insensitive, e.g. "Academy"), product_code (comma list), from / to (paid_at dates, inclusive, YYYY-MM-DD).
+     *
+     * @return array<string,mixed>
+     */
+    public function revenueByProduct(array $q): array
+    {
+        $where = [];
+        $bind = [];
+        $e = [];
+        if (trim((string) ($q['category'] ?? '')) !== '') {
+            $where[] = 'LOWER(pr.category) = ?';
+            $bind[] = strtolower(trim((string) $q['category']));
+        }
+        $codes = array_values(array_filter(array_map('trim', explode(',', (string) ($q['product_code'] ?? '')))));
+        if ($codes !== []) {
+            $where[] = 'p.product_code IN (' . implode(',', array_fill(0, count($codes), '?')) . ')';
+            array_push($bind, ...$codes);
+        }
+        foreach (['from' => 'p.paid_at >= CAST(? AS DATE)', 'to' => "p.paid_at < CAST(? AS DATE) + INTERVAL '1 day'"] as $k => $sql) {
+            $v = trim((string) ($q[$k] ?? ''));
+            if ($v === '') {
+                continue;
+            }
+            if (! preg_match('/\A\d{4}-\d{2}-\d{2}\z/', $v) || strtotime($v) === false) {
+                $e[$k] = "{$k} must be a date like 2026-10-25.";
+
+                continue;
+            }
+            $where[] = $sql;
+            $bind[] = $v;
+        }
+        if ($e !== []) {
+            return ['status' => 422, 'error' => 'Please correct the filters.', 'details' => $e];
+        }
+        $rows = $this->db()->query(
+            "SELECT p.product_code, pr.name AS product_name, pr.category,
+                    COUNT(*) FILTER (WHERE p.status = 'confirmed')                  AS confirmed_count,
+                    COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'confirmed'), 0) AS confirmed_amount,
+                    COUNT(DISTINCT p.lead_id) FILTER (WHERE p.status = 'confirmed') AS paying_leads,
+                    COUNT(*) FILTER (WHERE p.status = 'refunded')                   AS refunded_count,
+                    COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'refunded'), 0)  AS refunded_amount
+               FROM engage_lead_payments p
+               LEFT JOIN engage_products pr ON pr.code = p.product_code"
+            . ($where !== [] ? ' WHERE ' . implode(' AND ', $where) : '')
+            . ' GROUP BY p.product_code, pr.name, pr.category ORDER BY p.product_code NULLS LAST',
+            $bind
+        )->getResultArray();
+        $total = 0;
+        $items = [];
+        foreach ($rows as $r) {
+            $paise = Money::toPaise((string) $r['confirmed_amount']);
+            $total += $paise;
+            $items[] = [
+                'product_code'     => $r['product_code'],
+                'product_name'     => $r['product_name'],
+                'category'         => $r['category'],
+                'confirmed_count'  => (int) $r['confirmed_count'],
+                'confirmed_amount' => Money::format($paise),
+                'paying_leads'     => (int) $r['paying_leads'],
+                'refunded_count'   => (int) $r['refunded_count'],
+                'refunded_amount'  => Money::format(Money::toPaise((string) $r['refunded_amount'])),
+            ];
+        }
+
+        return ['status' => 200, 'data' => ['items' => $items, 'total_confirmed_amount' => Money::format($total), 'currency' => 'INR']];
+    }
+
+    /**
      * Staff "payment confirmed" (idempotent on the lead + payment_ref natural key).
      *
      * @return array<string,mixed>
@@ -353,6 +422,10 @@ class CommissionService
             }
         }
         $product = trim((string) ($in['product_code'] ?? '')) ?: ($lead['interested_product'] ?? null);
+        // "Edge" / "Aicountly Edge" → `edge`, so a plan's product_scope (exact codes) covers it; unknown text is kept as sent.
+        if ($product !== null && ($known = (new \App\Models\ProductsModel())->resolve($product))) {
+            $product = (string) $known['code'];
+        }
         if (($in['currency'] ?? 'INR') !== 'INR') {
             $e['currency'] = 'Only INR is supported.';
         }

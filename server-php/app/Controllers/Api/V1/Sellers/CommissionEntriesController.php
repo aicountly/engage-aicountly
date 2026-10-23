@@ -12,6 +12,7 @@ use Config\Services;
  *   GET  v1/leads/{id}/payments
  *   POST v1/leads/{id}/payments {amount "1234.50", payment_ref, paid_at?, product_code?, notes?}   "payment confirmed"
  *   POST v1/lead-payments/{id}/refund {reason}                      reverses accrued / approved entries
+ *   GET  v1/lead-payments/by-product ?category= &product_code=a,b &from= &to=   revenue per product (super_admin | sales_manager)
  *   POST v1/leads/{id}/seller {seller_code|null}                    staff (re)attribution
  */
 class CommissionEntriesController extends BaseApiController
@@ -42,6 +43,11 @@ class CommissionEntriesController extends BaseApiController
     public function confirmPayment($leadId = null)
     {
         return $this->respondWith(Services::commissions()->confirmPayment((int) $leadId, $this->input(), $this->user()));
+    }
+
+    public function revenueByProduct()
+    {
+        return $this->respondWith(Services::commissions()->revenueByProduct((array) $this->request->getGet()));
     }
 
     public function refund($paymentId = null)

@@ -423,6 +423,10 @@ audited and mirrored to Console.
 - **LLM (placeholder)**: `LlmClient` uses deterministic templates when
   `llm_enabled` is off. Configure `ENGAGE_LLM_*` and enable it to route to a
   real provider (integration point is stubbed but wired).
+- **Aicountly Academy fees** ([docs/ACADEMY_FEES_RUNBOOK.md](docs/ACADEMY_FEES_RUNBOOK.md)): products
+  `academy` / `edge` / `aspire`; fees are collected through Aicountly Finance's gateways and confirmed on the
+  lead (`POST /api/v1/leads/{id}/payments`), which feeds revenue, seller commission and the Reach outcome.
+  Revenue per product: `GET /api/v1/lead-payments/by-product?category=Academy`.
 - **Manage (placeholder)**: not called unless `MANAGE_API_*` is set. Service
   layer left as an extension seam.
 - **Licensing** ([docs/LICENSING.md](docs/LICENSING.md)): staff-only catalogue (licence types,
