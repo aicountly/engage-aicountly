@@ -12,6 +12,10 @@ namespace App\Libraries\AicS2s;
  *   ENGAGE_OUTBOUND_MANAGE_SECRET    its shared secret (at least 32 bytes)
  *   ENGAGE_S2S_ENVIRONMENT           production | sandbox | local (sent as X-AIC-Environment; the same variable
  *                                    the inbound filter checks)
+ *   ENGAGE_OUTBOUND_MANAGE_READ_KEY_ID / ENGAGE_OUTBOUND_MANAGE_READ_SECRET
+ *                                    the READ-scope key Manage issued for engage:entitlements-reconcile's GET
+ *                                    (Manage's push key is POST-only, its read key GET-only — integration 2026-10).
+ *                                    Unset: the reconcile falls back to the push key (and Manage answers 403).
  *
  * Unconfigured = dormant: nothing is sent and callers keep their outbox rows pending.
  * The canonical PATH is the path after /api (e.g. /v1/inbound/engage/entitlements).
@@ -35,6 +39,15 @@ final class ManageClient
         $this->secret ??= (string) env('ENGAGE_OUTBOUND_MANAGE_SECRET', '');
         $this->environment ??= strtolower(trim((string) env('ENGAGE_S2S_ENVIRONMENT', '')));
         $this->transport = $transport ?? [self::class, 'curl'];
+    }
+
+    /** The client engage:entitlements-reconcile reads Manage with: the read key when set, else the push key. */
+    public static function forReconcile(?callable $transport = null): self
+    {
+        $id = trim((string) env('ENGAGE_OUTBOUND_MANAGE_READ_KEY_ID', ''));
+        $secret = (string) env('ENGAGE_OUTBOUND_MANAGE_READ_SECRET', '');
+
+        return $id !== '' && $secret !== '' ? new self($transport, null, $id, $secret) : new self($transport);
     }
 
     public function isConfigured(): bool

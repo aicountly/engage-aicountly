@@ -339,7 +339,8 @@ printf 'GET\n/v1/manage/companies/42/licences\nlimit=25&status=active\n179231040
 | `ENGAGE_INBOUND_MYAICOUNTLY_KEY_IDS`, `_SECRET_<KEYID>`, `_SCOPE_<KEYID>=issue` | my.aicountly's provisioning key(s) (§5b), same rules |
 | `ENGAGE_INBOUND_<CLIENT>_RATE_PER_MINUTE` | optional per-client limit per key (1–6000) instead of 120 read / 30 issue (e.g. 120 for my.aicountly's backfill) |
 | `MANAGE_API_BASE_URL` | Manage's API base **including `/api`** (entitlement push, §6) |
-| `ENGAGE_OUTBOUND_MANAGE_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_SECRET` | the key Manage issued to Engage for the push / reconcile (secret ≥ 32 bytes, never logged) |
+| `ENGAGE_OUTBOUND_MANAGE_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_SECRET` | the PUSH-scope key Manage issued to Engage (secret ≥ 32 bytes, never logged) |
+| `ENGAGE_OUTBOUND_MANAGE_READ_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_READ_SECRET` | the READ-scope key Manage issued for `engage:entitlements-reconcile` (Manage's push key may only POST; its read key may only GET). Unset: reconcile uses the push key and Manage answers 403 |
 
 A key id whose secret is missing or shorter than 32 bytes is not live. No environment or no live key → every route of
 that client answers 503 `inbound_not_configured`. `GET /health` reports `checks.manage_inbound`,
@@ -358,7 +359,8 @@ The old interim step "also run Manage's `subscription_admin.php set …`" is **r
 2. **Basic offers** — a super_admin runs `php spark engage:basic-offers --dry-run`, then `--apply` (add
    `--create-type` if no complimentary licence type exists). For each draft `<product>-basic`: set the Basic limits
    (entitlements, §6.2), check the app key, **Publish**. Only published defaults are provisioned.
-3. **Manage keys** — Manage issues Engage a push key; set `MANAGE_API_BASE_URL`, `ENGAGE_OUTBOUND_MANAGE_KEY_ID`,
+3. **Manage keys** — Manage issues Engage a push key (and a read key for the reconcile:
+   `ENGAGE_OUTBOUND_MANAGE_READ_KEY_ID` / `_SECRET`); set `MANAGE_API_BASE_URL`, `ENGAGE_OUTBOUND_MANAGE_KEY_ID`,
    `ENGAGE_OUTBOUND_MANAGE_SECRET` (and `ENGAGE_S2S_ENVIRONMENT`). Manage's inbound route must be live first; until
    then leave these unset (rows wait). Check `/health` → `manage_outbound: ok`; pending rows drain within a minute.
 4. **my.aicountly key** — set `ENGAGE_INBOUND_MYAICOUNTLY_KEY_IDS` / `_SECRET_<KEYID>` / `_SCOPE_<KEYID>=issue`

@@ -10,7 +10,6 @@ use App\Libraries\Licensing\CommandOptions;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use Config\Database;
-use Config\Services;
 
 /**
  * `php spark engage:entitlements-reconcile [--holder=<uuid>] [--limit=N]` — REPORT-ONLY drift between Engage and
@@ -32,7 +31,7 @@ class EntitlementsReconcile extends BaseCommand
 
     public function run(array $params)
     {
-        $client = Services::entitlementOutbox()->client();
+        $client = ManageClient::forReconcile(); // Manage's read-scope key (its push key is POST-only)
         if (! $client->isConfigured()) {
             CLI::write('Entitlement reconcile: ' . $client->status());
 
