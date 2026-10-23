@@ -14,3 +14,6 @@
 #! legacy-pattern: spark[[:space:]]+engage:console-audit-deliver
 # name                  | schedule    | command (run from the api folder)
 console-audit-deliver   | */5 * * * * | {php} spark engage:console-audit-deliver
+# Coupons (docs/COUPONS.md §5): release lapsed quote reservations, expire old quotes and ended coupons. Hourly, offset
+# from the other jobs; reports itself to Console as engage.coupons_expire.
+coupons-expire          | 41 * * * *  | {php} spark engage:coupons-expire

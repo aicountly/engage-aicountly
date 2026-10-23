@@ -135,7 +135,12 @@ $routes->group('v1', static function ($routes) {
     // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
     // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
     // ENGAGE_INBOUND_MANAGE_* key are set. Read keys may only GET; no write route exists in Phase A.
-    $routes->group('manage', ['filter' => 'aic-s2s:manage'], static function ($routes) {
+    // Coupons (docs/COUPONS.md §7): Manage keys of scope `quote` only, POST on exactly these two paths. Registered
+    // before the group so its POST catch-all does not take them; the group accepts read / issue keys only, so a quote
+    // key gets 403 route_not_allowed_for_key anywhere else.
+    $routes->post('manage/coupons/preview',  'Inbound\\ManageCouponsController::preview', ['filter' => 'aic-s2s:manage,quote']);
+    $routes->post('manage/upgrade-requests', 'Inbound\\ManageCouponsController::upgradeRequest', ['filter' => 'aic-s2s:manage,quote']);
+    $routes->group('manage', ['filter' => 'aic-s2s:manage,read,issue'], static function ($routes) {
         $M = 'Inbound\\ManageLicensingController::';
         $routes->get('companies/(:segment)/licences',                    $M . 'licences/$1');
         $routes->get('companies/(:segment)/licences/(:segment)',         $M . 'licence/$1/$2');
@@ -282,6 +287,31 @@ $routes->group('v1', static function ($routes) {
         $routes->post('licences/(:segment)/seat-assignments/(:num)/release', $L . 'LicencesController::releaseSeat/$1/$2', $licAdmin);
         $routes->post('licences/(:segment)/invoice-refs',     $L . 'LicencesController::invoiceRef/$1', $licAdmin);
 
+        // Coupons and quotes (docs/COUPONS.md). View / export: super_admin | sales_manager | seller_manager;
+        // create / edit / activate / pause / retire / generate / quote / release / reverse: super_admin | sales_manager.
+        $couponView  = ['filter' => 'role:super_admin,sales_manager,seller_manager'];
+        $couponAdmin = ['filter' => 'role:super_admin,sales_manager'];
+        $C = 'Api\\V1\\Coupons\\CouponsController::';
+        $routes->get('coupons',                               $C . 'index', $couponView);
+        $routes->post('coupons',                              $C . 'create', $couponAdmin);
+        $routes->get('coupons/(:num)',                        $C . 'show/$1', $couponView);
+        $routes->put('coupons/(:num)',                        $C . 'update/$1', $couponAdmin);
+        $routes->delete('coupons/(:num)',                     $C . 'delete/$1', $couponAdmin);
+        $routes->post('coupons/(:num)/activate',              $C . 'activate/$1', $couponAdmin);
+        $routes->post('coupons/(:num)/pause',                 $C . 'pause/$1', $couponAdmin);
+        $routes->post('coupons/(:num)/retire',                $C . 'retire/$1', $couponAdmin);
+        $routes->get('coupons/(:num)/codes',                  $C . 'codes/$1', $couponView);
+        $routes->post('coupons/(:num)/codes',                 $C . 'addCodes/$1', $couponAdmin);
+        $routes->get('coupons/(:num)/codes.csv',              $C . 'exportCodes/$1', $couponView);
+        $routes->post('coupons/(:num)/codes/(:num)/void',     $C . 'voidCode/$1/$2', $couponAdmin);
+        $routes->get('coupon-redemptions',                    $C . 'redemptions', $couponView);
+        $routes->post('coupon-redemptions/(:num)/release',    $C . 'release/$1', $couponAdmin);
+        $routes->post('coupon-redemptions/(:num)/reverse',    $C . 'reverse/$1', $couponAdmin);
+        $routes->get('coupon-report',                         $C . 'report', $couponView);
+        $routes->get('quotes',                                $C . 'quotes', $couponView);
+        $routes->post('quotes',                               $C . 'createQuote', $couponAdmin);
+        $routes->get('quotes/(:segment)',                     $C . 'quote/$1', $couponView);
+
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);
         $routes->resource('contacts', ['controller' => 'Api\\V1\\ContactsController']);
@@ -303,8 +333,11 @@ $routes->group('v1', static function ($routes) {
         $routes->delete('proposals/(:num)/lines/(:num)', 'Api\\V1\\ProposalsController::removeLine/$1/$2');
         $routes->resource('proposals', ['controller' => 'Api\\V1\\ProposalsController']);
 
-        $routes->post('discount-requests/(:num)/approve', 'Api\\V1\\DiscountRequestsController::approve/$1');
-        $routes->post('discount-requests/(:num)/reject',  'Api\\V1\\DiscountRequestsController::reject/$1');
+        // Approving / rejecting a discount or an approval request: super_admin | sales_manager only (it used to be any
+        // signed-in role — docs/COUPONS.md §2).
+        $decide = ['filter' => 'role:super_admin,sales_manager'];
+        $routes->post('discount-requests/(:num)/approve', 'Api\\V1\\DiscountRequestsController::approve/$1', $decide);
+        $routes->post('discount-requests/(:num)/reject',  'Api\\V1\\DiscountRequestsController::reject/$1', $decide);
         $routes->resource('discount-requests', ['controller' => 'Api\\V1\\DiscountRequestsController']);
 
         $routes->resource('follow-ups', ['controller' => 'Api\\V1\\FollowUpsController']);
@@ -333,9 +366,9 @@ $routes->group('v1', static function ($routes) {
         $routes->get('bot/reports-local',     'Api\\V1\\BotReportsController::localReports');
 
         // Approvals.
-        $routes->post('approvals/(:num)/approve', 'Api\\V1\\ApprovalsController::approve/$1');
-        $routes->post('approvals/(:num)/reject',  'Api\\V1\\ApprovalsController::reject/$1');
-        $routes->post('approvals/(:num)/execute', 'Api\\V1\\ApprovalsController::execute/$1');
+        $routes->post('approvals/(:num)/approve', 'Api\\V1\\ApprovalsController::approve/$1', $decide);
+        $routes->post('approvals/(:num)/reject',  'Api\\V1\\ApprovalsController::reject/$1', $decide);
+        $routes->post('approvals/(:num)/execute', 'Api\\V1\\ApprovalsController::execute/$1', $decide);
         $routes->resource('approvals', ['controller' => 'Api\\V1\\ApprovalsController']);
     });
 });

@@ -44,7 +44,16 @@ class ApprovalsController extends BaseApiController
 
     public function update($id = null)
     {
-        $this->m->update((int) $id, $this->input());
+        $data = $this->input();
+        if (! $this->userHasRole(['super_admin', 'sales_manager'])) {
+            // Decisions go through approve / reject / execute (role-gated in Routes.php), never by editing the row.
+            $data = array_diff_key($data, array_flip(['status', 'decided_by', 'decided_at', 'decision_notes', 'console_approval_id',
+                'console_status', 'production_confirmation', 'executed_at', 'execution_result']));
+        }
+        if ($data === []) {
+            return $this->ok($this->m->find((int) $id));
+        }
+        $this->m->update((int) $id, $data);
         $this->audit('approval_update', ['subject_kind' => 'approval_request', 'subject_id' => $id]);
         return $this->ok($this->m->find((int) $id));
     }

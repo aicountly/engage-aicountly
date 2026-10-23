@@ -8,7 +8,7 @@ import { formatPaise, termText, todayIST } from '../lib/licensing.js'
 /** Issue a licence from a published offer to a mapped Manage company. */
 export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId = null, cmpId = null }) {
   const qc = useQueryClient()
-  const [f, setF] = useState({ mapping: '', offer_id: '', starts_at: todayIST(), activate: true, seats_total: '', invoice_refs: '', notes: '' })
+  const [f, setF] = useState({ mapping: '', offer_id: '', starts_at: todayIST(), activate: true, seats_total: '', invoice_refs: '', notes: '', quote_ref: '' })
   const [error, setError] = useState(null)
   const mappings = useQuery({
     queryKey: ['account-companies', accountId || 'all', 'active'],
@@ -28,7 +28,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
       return api.post('/v1/licences', {
         account_id: chosenMapping.account_id, cmp_id: chosenMapping.cmp_id, offer_code: offer.offer_code, offer_version: offer.version,
         starts_at: f.starts_at || null, activate: f.activate, seats_total: f.seats_total === '' ? undefined : Number(f.seats_total),
-        invoice_refs: f.invoice_refs, notes: f.notes,
+        invoice_refs: f.invoice_refs, notes: f.notes, ...(f.quote_ref ? { quote_ref: f.quote_ref.trim() } : {}),
       }).then((r) => r.data?.data)
     },
     onSuccess: (data) => { setError(null); qc.invalidateQueries({ queryKey: ['licences'] }); onIssued?.(data) },
@@ -64,6 +64,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
       ) : null}
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.activate} onChange={(e) => setF({ ...f, activate: e.target.checked })} /> Activate now (otherwise it stays “issued” until you activate it)</label>
       <div><div className="engage-label">Invoice numbers (optional, comma separated)</div><input className="engage-input font-mono" placeholder="e.g. the Smart Books invoice number" value={f.invoice_refs} onChange={(e) => setF({ ...f, invoice_refs: e.target.value })} /></div>
+      <div><div className="engage-label">Quote ref (optional — from Sales → Quotes; commits its coupon with this licence)</div><input className="engage-input font-mono uppercase" placeholder="QTE-000012" value={f.quote_ref} onChange={(e) => setF({ ...f, quote_ref: e.target.value })} /></div>
       <div><div className="engage-label">Internal notes (not shown to the customer)</div><textarea className="engage-input" rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
     </Drawer>
   )
