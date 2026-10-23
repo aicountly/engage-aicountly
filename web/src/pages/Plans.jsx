@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '../lib/api.js'
 import GenericList from '../components/GenericList.jsx'
+import { useAuth } from '../lib/auth.jsx'
+import { LICENSING_ADMIN } from '../lib/licensing.js'
 import { formatMoney } from '../lib/format.js'
 
 export default function Plans() {
@@ -9,9 +11,14 @@ export default function Plans() {
     queryFn: () => api.get('/v1/products').then((r) => r.data?.data?.rows || r.data?.data?.items || r.data?.data || []),
   })
   const products = productsQ.data || []
+  // The API lets only super_admin / sales_manager write the catalogue (other roles get 403).
+  const { hasRole } = useAuth()
+  const canWrite = hasRole(LICENSING_ADMIN)
 
   return (
     <GenericList
+      canCreate={canWrite}
+      canEdit={canWrite}
       title="Plans"
       subtitle="Billable plans per product (monthly/annual pricing, seats)."
       resource="plans"
