@@ -64,6 +64,9 @@ $routes->get('/health', static function () {
             'reach_outcomes'      => \Config\Services::reachOutcomes()->status(),
             'finance_payouts'     => \Config\Services::financePayouts()->status(),
             'manage_inbound'      => \App\Libraries\AicS2s\AicS2sConfig::forClient('manage')->status(),
+            'myaicountly_inbound' => \App\Libraries\AicS2s\AicS2sConfig::forClient('myaicountly')->status(),
+            'manage_outbound'     => \Config\Services::entitlementOutbox()->client()->status(),
+            'entitlement_outbox'  => \Config\Services::entitlementOutbox()->status(),
             'finance_inbound_key' => strlen(trim((string) env('ENGAGE_INBOUND_FINANCE_KEY', ''))) >= 32 ? 'ok' : 'ENGAGE_INBOUND_FINANCE_KEY missing or shorter than 32 characters — Finance payout status updates get 503',
         ],
     ]);
@@ -145,6 +148,11 @@ $routes->group('v1', static function ($routes) {
         $routes->get('licence-types',                                    $M . 'licenceTypes');
         $routes->match(['POST', 'PUT', 'PATCH', 'DELETE'], '(:any)',     $M . 'noRoute');
     });
+
+    // my.aicountly (server side) → Engage: Basic provisioning after sign-up (contract §3.2, docs/LICENSING.md §5b).
+    // AIC-S2S v1, client myaicountly, key scope issue only (503 inbound_not_configured until
+    // ENGAGE_INBOUND_MYAICOUNTLY_* is set).
+    $routes->post('provisioning/accounts', 'Inbound\\ProvisioningController::accounts', ['filter' => 'aic-s2s:myaicountly,issue']);
 
     // Internal Reach ingest — validated by X-Portal-Token header.
     $routes->group('internal', ['filter' => 'internal-token'], static function ($routes) {
@@ -265,6 +273,11 @@ $routes->group('v1', static function ($routes) {
         $routes->post('offers/(:num)/publish',                $L . 'OffersController::publish/$1', $licAdmin);
         $routes->post('offers/(:num)/retire',                 $L . 'OffersController::retire/$1', $licAdmin);
         $routes->post('offers/(:num)/new-version',            $L . 'OffersController::newVersion/$1', $licAdmin);
+        $routes->post('offers/(:num)/default',                $L . 'OffersController::setDefault/$1', $licAdmin);
+        $routes->get('holders',                               $L . 'HoldersController::index');
+        $routes->get('holders/(:segment)',                    $L . 'HoldersController::show/$1');
+        $routes->get('entitlements/outbox',                   $L . 'EntitlementsController::outbox');
+        $routes->post('entitlements/outbox/(:num)/requeue',   $L . 'EntitlementsController::requeue/$1', $licAdmin);
         $routes->get('account-companies',                     $L . 'AccountCompaniesController::index');
         $routes->post('account-companies',                    $L . 'AccountCompaniesController::create', $licAdmin);
         $routes->post('account-companies/(:num)/unlink',      $L . 'AccountCompaniesController::unlink/$1', $licAdmin);
@@ -281,6 +294,7 @@ $routes->group('v1', static function ($routes) {
         $routes->post('licences/(:segment)/seat-assignments', $L . 'LicencesController::assignSeat/$1', $licAdmin);
         $routes->post('licences/(:segment)/seat-assignments/(:num)/release', $L . 'LicencesController::releaseSeat/$1/$2', $licAdmin);
         $routes->post('licences/(:segment)/invoice-refs',     $L . 'LicencesController::invoiceRef/$1', $licAdmin);
+        $routes->post('licences/(:segment)/change-offer',     $L . 'LicencesController::changeOffer/$1', $licAdmin);
 
         // Sales core.
         $routes->resource('accounts', ['controller' => 'Api\\V1\\AccountsController']);

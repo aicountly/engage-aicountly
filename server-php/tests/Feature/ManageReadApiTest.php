@@ -82,7 +82,8 @@ final class ManageReadApiTest extends LicensingTestCase
     {
         $refs = [];
         for ($i = 0; $i < 5; $i++) {
-            $refs[] = $this->issue(42)['licence_ref'];
+            // Several live licences of one product for one company are add-ons on purpose (the duplicate guard).
+            $refs[] = $this->issue(42, $i > 0 ? ['is_addon' => true] : [])['licence_ref'];
         }
         $this->asStaff($this->admin(), 'post', "v1/licences/{$refs[0]}/suspend", ['version' => 1, 'reason' => 'x']);
 
@@ -112,7 +113,7 @@ final class ManageReadApiTest extends LicensingTestCase
     {
         foreach ([['manage/companies/42/licences', 'limit=0'], ['manage/companies/42/licences', 'limit=101'], ['manage/companies/42/licences', 'limit=abc'],
             ['manage/companies/42/licences', 'cursor=not-a-cursor'], ['manage/companies/42/licences', 'status=paid'], ['manage/companies/abc/licences', ''],
-            ['manage/companies/0/activity', ''], ['manage/catalogue', ''], ['manage/catalogue', 'cmp_id=-1']] as [$p, $q]) {
+            ['manage/companies/0/activity', ''], ['manage/catalogue', 'cmp_id=-1'], ['manage/catalogue', 'cmp_id=abc']] as [$p, $q]) {
             $r = $this->s2s('get', $p, $q);
             $this->assertSame(400, $this->code($r), "{$p}?{$q}");
             $this->assertSame('bad_request', $this->json($r)['error']['code']);
@@ -179,6 +180,27 @@ final class ManageReadApiTest extends LicensingTestCase
         $this->assertSame(['code' => 'standard', 'label' => 'Standard licence', 'lifecycle_kind' => 'paid'], $a['licence_type']);
         $this->assertSame('30-day trial', $byCode['books-trial']['term']['cycle']);
         $this->assertSame('Try', $byCode['books-trial']['display']['badge']);
+    }
+
+    public function testCatalogueWithoutCompanyCarriesIsDefault(): void
+    {
+        $this->publishedOffer('books-annual');
+        $this->licenceType('basic', 'complimentary');
+        $admin = $this->admin();
+        $r = $this->asStaff($admin, 'post', 'v1/offers', ['offer_code' => 'books-basic', 'product_code' => 'books', 'licence_type_code' => 'basic',
+            'label' => 'Basic', 'price_paise' => 0, 'price_basis' => 'inclusive', 'gst_rate' => '0', 'is_default' => true,
+            'entitlements' => [['code' => 'max_companies', 'label' => 'Companies', 'value' => 1, 'unit' => 'count']]]);
+        $this->assertSame(200, $this->code($this->asStaff($admin, 'post', 'v1/offers/' . $this->json($r)['data']['id'] . '/publish')));
+
+        // Manage's plans_sync.php calls it with no cmp_id (contract §3.4).
+        $b = $this->data($this->s2s('get', 'manage/catalogue'));
+        $this->assertTrue($b['success']);
+        $byCode = array_combine(array_column(array_column($b['data'], 'offer'), 'code'), $b['data']);
+        $this->assertTrue($byCode['books-basic']['is_default']);
+        $this->assertFalse($byCode['books-annual']['is_default']);
+        $this->assertSame('complimentary', $byCode['books-basic']['licence_type']['lifecycle_kind']);
+        // With cmp_id it answers the same list (unchanged behaviour).
+        $this->assertSame($b['data'], $this->data($this->s2s('get', 'manage/catalogue', 'cmp_id=42'))['data']);
     }
 
     public function testLicenceTypesListsActiveTypesOnly(): void

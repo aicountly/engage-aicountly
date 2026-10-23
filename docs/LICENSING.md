@@ -1,17 +1,35 @@
-# Licensing (Phase A) — catalogue, licences and the Manage read API
+# Licensing — catalogue, holder licences, Basic plan, Manage read API and entitlement push
 
 Engage is where AICOUNTLY's sellable catalogue lives and where every licence is issued. It stays **staff-only**:
 customers never sign in to Engage. They see their licences in **manage.aicountly.com**, whose *server* reads them
 from Engage over a signed server-to-server API (AIC-S2S v1). Manage's browser never calls Engage.
 
-Binding documents: `commerce-plan-2026-10-18.md` (Phase A, Engage part) and `commerce-contract-v1-draft.md`
-(§0 conventions, §4 read API). This phase builds **no money flow**: no checkout, quotes, Finance licence-order inbound
-or Engage → Manage entitlement events (Phase B). `order_ref` and `source = 'order'` exist only so Phase B needs no
-schema change.
+Binding documents: `commerce-plan-2026-10-18.md` (Phase A, Engage part), `commerce-contract-v1-draft.md`
+(§0 conventions, §4 read API) and the AICOUNTLY rectification contracts v1 (23 Oct 2026, §3 "Plans & entitlements")
+with founder decisions **D-L1** (no trials; every signed-up user holds the free **Basic** plan of every app; a paid
+plan replaces Basic for that app) and **D-L2** (licences apply to the USER — the workspace owner — not to one company).
 
-**Dormant by default.** The migration creates empty tables and seeds nothing — no licence type, offer or price exists
-until staff create one. The Manage routes answer `503 inbound_not_configured` until the environment variables below
-are set. Existing Engage flows (leads, seller programme, Finance payouts) are untouched.
+What exists now:
+
+- **Holder-level licences** (§3): a licence names the holder (`holder_uuid`, the my.aicountly uuid of the owner), a
+  Manage company (`cmp_id`, legacy company-level licences keep working; Manage resolves them via the company's owner),
+  or both.
+- **Basic is data** (§2): each product's Basic is its published **default offer** (`is_default`; at most one per
+  product, DB-enforced). Nothing is seeded in production; `php spark engage:basic-offers` creates DRAFTS for staff to
+  fill in and publish.
+- **Basic provisioning** (§5b): my.aicountly calls Engage after every sign-up; Engage issues every published Basic.
+- **Entitlement push** (§6): every licence write queues the holder's full plan state per app in the same transaction;
+  a worker pushes it to Manage. **This replaces the old manual `subscription_admin.php` step.**
+- **Upgrade / downgrade** (`change-offer`, §3).
+
+Still not built: checkout, Finance licence-order inbound, proration. `order_ref` and `source = 'order'` exist only so
+that work needs no schema change. Coupons (rectification contract §4) are a separate stream; they plug into the
+extension point in §12.
+
+**Dormant by default.** The migrations create empty tables and seed nothing — no licence type, offer or price exists
+until staff create one. The Manage and my.aicountly routes answer `503 inbound_not_configured`, and the entitlement
+push keeps changes queued, until the environment variables in §8 are set. Existing Engage flows (leads, seller
+programme, Finance payouts) are untouched.
 
 **Nothing commercial is hard-coded.** Licence types, offers, prices, GST rate, price basis, SAC, terms, seats, apps and
 entitlements are rows typed by staff. The API is type-agnostic: every label Manage shows comes from data. The only
@@ -25,8 +43,10 @@ understands), offer status (draft | published | retired) and licence status (bel
 | `engage_licence_types` | `code` (permanent), `label`, `description`, `lifecycle_kind`, `display_schema` (free JSON for Manage), `active`, `sort_order` |
 | `engage_offers` | The catalogue, versioned per `offer_code`: `product_code` (→ `engage_products`), `licence_type_code`, `plan_code` (nullable → `engage_plans`), `label`, `description`, `price_paise`, `currency` (INR), `price_basis` (inclusive / exclusive of GST), `gst_rate`, `sac`, `term_months` + `term_days` (0 + 0 = no end), `seats` (null = no limit), `app_keys[]` (defaults to the product code), `entitlements` (`[{code,label,value,unit}]`), `display` (`{attributes:[{label,value}], cycle_label, …}`), `status`, `valid_from` / `valid_to`. UNIQUE (`offer_code`, `version`); at most one published version per code |
 | `engage_account_companies` | Engage account ↔ Manage company `cmp_id`, `verified_by_display` ("verified manually by &lt;staff email&gt;"), `verification_note`, `verified_at`; unlinking keeps the row (`status = unlinked`, reason). A `cmp_id` belongs to at most one account at a time; an account may hold several companies |
-| `engage_licences` | `licence_ref` (`LIC-000123`), `cmp_id`, `account_id`, `offer_id` + `offer_code` + `offer_version` + `offer_snapshot` (the exact version sold, labels included), `product_code`, `licence_type_code`, `plan_code`, `app_keys[]`, `seats_total`, `starts_at`, `ends_at` (exclusive), `status`, `status_reason` (internal), `order_ref` (UNIQUE, Phase B), `invoice_refs[]`, `source` (staff / order), `notes` (internal), `version` (optimistic lock) |
-| `engage_licence_events` | Append-only activity: `event_id`, `licence_ref`, `cmp_id`, `seq` (per `cmp_id`), `type`, `actor_kind` (staff / system / order), `actor_display`, `summary` (customer-safe), `reason` (internal), `changes` (JSON), `licence_version`, `occurred_at` |
+| `engage_licences` | `licence_ref` (`LIC-000123`), `holder_uuid` (my.aicountly uuid, nullable), `cmp_id` (nullable — at least one of the two), `account_id` (nullable only for a provisioned Basic), `offer_id` + `offer_code` + `offer_version` + `offer_snapshot` (the exact version sold, labels included), `product_code`, `licence_type_code`, `plan_code`, `app_keys[]`, `seats_total`, `starts_at`, `ends_at` (exclusive), `status`, `status_reason` (internal), `is_basic` (issued from the product's default offer), `is_addon` (a deliberate second live licence), `idempotency_key` + `request_hash` (issue replay), `superseded_at`, `holder_note`, `order_ref` (UNIQUE, Phase B), `invoice_refs[]`, `source` (staff / order / provisioning), `notes` (internal), `version` (optimistic lock). At most one held Basic per (holder, product): `uq_engage_licences_basic_live` |
+| `engage_licence_events` | Append-only activity: `event_id`, `licence_ref`, `cmp_id`, `holder_uuid`, `seq` (per `cmp_id`; per holder for a licence without a company), `type`, `actor_kind` (staff / system / order), `actor_display`, `summary` (customer-safe), `reason` (internal), `changes` (JSON), `licence_version`, `occurred_at` |
+| `engage_holders` | Holders Engage heard of (provisioning, or a staff issue): `holder_uuid`, `email`, `name`, `signed_up_at`, `source` — the staff "find a holder" lookup |
+| `engage_entitlement_outbox`, `engage_entitlement_seq` | The Engage → Manage push (§6): one row per pushed full state of (holder, app), `seq` per holder |
 | `engage_licence_seats` | Seat assignments: `member_ref` (optional identifier, e.g. a my.aicountly uuid), `member_label`, `assigned_at`, `released_at` |
 | `engage_s2s_nonces`, `engage_s2s_rate` | AIC-S2S nonce replay window and per-key rate counters |
 
@@ -36,7 +56,12 @@ Database guarantees (migration `2026-10-18-000100_CreateLicensingTables`):
   version except `published → retired`, and refuses deleting anything but a draft.
 - **Events are append-only.** Trigger `engage_licence_events_append_only` refuses UPDATE, DELETE and TRUNCATE.
 - **seq per company** is assigned by trigger `engage_licence_events_seq` (a counter row per `cmp_id`, locked in the
-  inserting transaction) — a writer cannot choose it.
+  inserting transaction; per `holder_uuid` for a licence without a company) — a writer cannot choose it.
+- **One published Basic per product**: `uq_engage_offers_default` (product_code) WHERE is_default AND published.
+- **One held Basic per holder + product**: `uq_engage_licences_basic_live`.
+
+Migrations: `2026-10-18-000100_CreateLicensingTables`, `2026-10-23-100100_HolderLevelLicensing`,
+`2026-10-23-100200_CreateEntitlementOutbox` (all additive).
 
 Dates: a date typed by staff (`YYYY-MM-DD`) means 00:00 IST that day. A term is added on the Indian calendar
 (12 months from 18/10/2026 → `ends_at` 18/10/2027 00:00 IST, i.e. the licence runs **until 17/10/2027**). `ends_at`
@@ -48,12 +73,18 @@ is exclusive; the API returns UTC ISO-8601 instants. Money is integer paise.
 |---|---|
 | Create | Draft v1 of a new `offer_code`. Product, licence type, label, price, price basis and GST rate are required; nothing is pre-filled |
 | Edit / Discard | Drafts only |
-| Publish | Draft only; the licence type must be active; a priced offer needs a SAC (Finance prints it); at least one app key; `valid_to` in the future. Publishing **retires the previous published version** of the code in the same transaction |
+| Publish | Draft only; the licence type must be active; a priced offer needs a SAC **Finance accepts (`99` + 4 digits, e.g. 997331)**; at least one app key and **every app key a Manage registry key** (§6.1; `drive` is saved as `docs`); `valid_to` in the future; a default offer must be Basic-shaped (below). Publishing **retires the previous published version** of the code in the same transaction |
+| Default (Basic) | `POST offers/{id}/default {is_default}` on a draft or a published version. A default offer must be **free (price 0), open-ended (term 0 + 0) and of a complimentary licence type**. At most one **published** default per product — a second answers **409 `default_offer_exists`** (also enforced by the database). A new version copies the flag |
 | New version | Copies any version into a new draft (one draft per code at a time) |
 | Retire | Published version only. Existing licences keep their snapshot |
 
 The catalogue Manage sees = published versions whose licence type is active and that are on sale now
 (`valid_from ≤ now < valid_to`, either may be empty).
+
+`php spark engage:basic-offers --dry-run | --apply [--licence-type=<code>] [--create-type]` creates, for every
+product whose code Manage knows and that has no default offer yet, a **draft** `<product>-basic` offer (price 0, no
+end, no seat limit, `is_default`, **no entitlements**). It never publishes: staff set the Basic limits
+(entitlements, §6.2 conventions) and publish. Idempotent.
 
 ## 3. Licence statuses and transitions
 
@@ -61,17 +92,20 @@ The catalogue Manage sees = published versions whose licence type is active and 
              activate                suspend                 reinstate (term not ended)
   issued ───────────────▶ active ─────────────▶ suspended ─────────────────────────▶ active
     │  ▲ issue(activate)     │  ▲                    │
-    │  └─────────────────────┘  │ renew              │
+    │  └─────────────────────┘  │ renew, change-offer│
     │                           │                    │
     │      term ended (engage:licences-expire)       │
     ├──────────────────────▶ expired ◀───────────────┘
     │                           │
-    └──────── revoke ──────▶ revoked (final) ◀── revoke ── active | suspended | expired
+    └──────── revoke ──────▶ revoked (final) ◀── revoke ── active | suspended | expired | superseded
+
+  Basic only:  active ──(a paid licence of the same holder + product becomes active)──▶ superseded
+               superseded ──(no paid licence active any more: revoke / expiry / suspend)──▶ active
 ```
 
 | Action (staff) | From | Effect | Event |
 |---|---|---|---|
-| Issue | — | New licence from a **published, on-sale** offer to a company **mapped to the account**; `starts_at` (default now), `ends_at` = start + term, seats = offer seats unless overridden, optional invoice refs; `activate` (default true) | `issued` (+ `activated`) |
+| Issue | — | New licence from a **published, on-sale** offer to a **holder** (`holder_uuid`; one Engage has not heard of needs `holder_note` — how staff verified the uuid) and/or a company **mapped to the account**; `starts_at` (default now), `ends_at` = start + term, seats = offer seats unless overridden, optional invoice refs; `activate` (default true). Guards: `Idempotency-Key` header (or `idempotency_key`) replays a retry (`replayed: true`; same key + other request → **409 `idempotency_conflict`**); a second live paid licence of the same product for the same holder or company → **409 `live_licence_exists`** unless `is_addon: true`. Optional `quote_ref` (coupons, §12) | `issued` (+ `activated`) |
 | Activate | issued | → active | `activated` |
 | Renew | active, expired | `ends_at` += one term of the current published version of the **same** offer (from the current end, or from now if it has ended) → active; a newer version replaces the snapshot; optional invoice refs | `renewed` |
 | Extend | issued, active, suspended | `ends_at` → a later date (reason required) | `extended` |
@@ -81,25 +115,25 @@ The catalogue Manage sees = published versions whose licence type is active and 
 | Change seats | issued, active, suspended | `seats_total` (≥ seats assigned; null = no limit) | `seats_changed` |
 | Assign / release seat | assign: issued, active; release: any | within `seats_total`; one live seat per member | `seat_assigned` / `seat_released` |
 | Link invoice | any | append an invoice number to `invoice_refs` | `invoice_linked` |
+| Change offer | issued, active, suspended | `POST licences/{ref}/change-offer {version, offer_code, offer_version?, term_mode keep\|restart, seats_total?, reason?, quote_ref?}`: move to another published, on-sale offer of the **same product** (upgrade or downgrade; `changes.direction` by price). `keep` (default) keeps `ends_at`; `restart` starts the new term now. Seats follow the new offer unless sent (≥ assigned). Never on a Basic licence (409 `basic_not_changeable` — issue the paid licence instead) and never **to** a default offer (revoke the paid licence: Basic returns). No proration is computed | `plan_changed` |
+| Supersede / reactivate (system) | Basic: active ⇄ superseded | in the same transaction as the paid licence's change (issue / activate / reinstate → superseded; revoke / expire / suspend → active again) | `superseded` / `reactivated` |
 | Expire (system) | issued, active, suspended with `ends_at ≤ now` | → expired | `expired` (actor system) |
 
 Every write: one transaction, licence row locked (`FOR UPDATE`), the caller's `version` must equal the stored one
-(else **409 `version_conflict`** with `details.current_version`), the row is updated with `version + 1` and the event(s)
-inserted — the change and its event commit together or not at all. A disallowed transition is **409
+(else **409 `version_conflict`** with `details.current_version`), the row is updated with `version + 1`, the event(s)
+inserted, the holder's Basic superseded / reactivated, the coupon hook run (§12) and the entitlement state queued for
+Manage (§6) — all of it commits together or not at all (licensing writes run with CodeIgniter transaction exceptions
+on, so a failed statement can never be reported as success). A disallowed transition is **409
 `invalid_transition`**. Staff writes are also written to `engage_audit_logs` (`licence.*`, `offer.*`,
 `licence_type.*`, `licence.company_linked` / `_unlinked`) and fanned out to Console's central audit.
 
 A live licence whose term has ended **reads as expired** everywhere (staff screens and Manage) even before the expiry
-job records it. Upgrades (moving to another offer) are not built: renew refuses another `offer_code`.
+job records it. Renew keeps the same `offer_code`; moving to another offer is `change-offer`.
 
-`php spark engage:licences-expire` records expiries (with events). It is **not** scheduled by the deploy; once licences
-exist add, hourly:
-
-```
-23 * * * * cd /path/to/api && php spark engage:licences-expire >> writable/logs/licences_expire.log 2>&1
-```
-
-It reports to Console's Cron Job Monitor as `engage.licences_expire` when `CONSOLE_CRON_MONITOR_KEY` is set.
+`php spark engage:licences-expire` records expiries (with events), reactivates the holder's Basic and queues the new
+state. It is **scheduled hourly by `bin/ops/jobs.txt`** (`licences-expire`, installed by the deploy; it replaces any
+hand-installed line) and reports to Console's Cron Job Monitor as `engage.licences_expire`. **No automation ever
+starts Manage's 45-day restriction / purge clock**: a paid plan that ends falls back to Basic.
 
 ## 4. Roles
 
@@ -110,13 +144,17 @@ Roles come from Console → Roles & Access (`ConsoleRoleSync::CATALOG`); no new 
 | super_admin, sales_manager | yes | yes |
 | seller_manager, kyc_reviewer, member | yes | no (403) |
 
-UI: sidebar **Licensing → Licences / Offers / Licence types / Account ↔ company**, and on each account page
-**Manage companies** + **Licences** panels. Write buttons are hidden for read-only roles; the API enforces the same
+UI: sidebar **Licensing → Licences / Offers / Licence types / Account ↔ company / Manage sync**, and on each account
+page **Manage companies** + **Licences** panels. The licence screens show the holder; offers carry a **Basic (default)**
+toggle; a licence has **Change plan**; **Manage sync** shows the outbox (pending / delivered / rejected / dead) with
+**Re-queue**. Write buttons are hidden for read-only roles; the API enforces the same
 rule (`role:super_admin,sales_manager` in `Routes.php`).
 
-Staff API (`/api/v1`, staff JWT): `licence-types`, `offers` (+ `/{id}/publish|retire|new-version`, `DELETE` a draft),
-`account-companies` (+ `/{id}/unlink`), `licences` (+ `/{ref}/activate|renew|extend|suspend|reinstate|revoke|seats|
-seat-assignments|seat-assignments/{id}/release|invoice-refs`). Answers use Engage's usual `{ok, data}` /
+Staff API (`/api/v1`, staff JWT): `licence-types`, `offers` (+ `/{id}/publish|retire|new-version|default`, `DELETE` a
+draft), `account-companies` (+ `/{id}/unlink`), `licences` (`?holder_uuid=&is_basic=` filters; + `/{ref}/activate|renew|
+extend|suspend|reinstate|revoke|seats|seat-assignments|seat-assignments/{id}/release|invoice-refs|change-offer`),
+`holders` (`?q=` e-mail / name / uuid; `/{uuid}` with licences and pushes), `entitlements/outbox` (+ `/{id}/requeue`,
+write roles). Answers use Engage's usual `{ok, data}` /
 `{ok:false, error, code?, details?}`.
 
 ## 5. Manage read API (contract §4)
@@ -129,7 +167,7 @@ All under `https://engage.aicountly.org/api/v1/manage/`, GET only, filter `aic-s
 | `companies/{cmp_id}/licences/{licence_ref}` | one licence |
 | `companies/{cmp_id}/licences/{licence_ref}/seats` | `{licence_ref, total, assigned, items:[{seat_id, member_ref, member_label, assigned_at, released_at}]}` |
 | `companies/{cmp_id}/activity?limit=&cursor=` | events, newest first: `{event_id, seq, licence_ref, type{code,label}, summary, actor{kind, display}, changes, occurred_at}` + `page` |
-| `catalogue?cmp_id=` | offers on sale: `{offer{code,version}, label, description, product{code,label}, licence_type{code,label,lifecycle_kind}, plan, price{amount_paise,currency,basis,gst_rate,sac}, term{months,days,cycle}, seats, app_keys, entitlements, attributes, display, valid_from, valid_to}` |
+| `catalogue?cmp_id=` | offers on sale: `{offer{code,version}, label, description, product{code,label}, licence_type{code,label,lifecycle_kind}, plan, price{amount_paise,currency,basis,gst_rate,sac}, term{months,days,cycle}, seats, app_keys, is_default, entitlements, attributes, display, valid_from, valid_to}`. **`cmp_id` is optional** (Manage's hourly `plans_sync.php` reads the Basic defaults — `is_default: true` — without one); when given it is validated and the answer is the same |
 | `licence-types` | active types `{code, label, description, lifecycle_kind, display_schema}` |
 
 Licence (type-agnostic, contract §4): `{licence_ref, product{code,label}, licence_type{code,label,lifecycle_kind},
@@ -154,11 +192,89 @@ issued_at, updated_at, version}`. `status.tone` ∈ success | info | warning | d
   key id and path in metadata. `X-AIC-Actor` is recorded for audit only — it never authorises anything.
 - Any non-GET under `v1/manage/` with a read key → 403 `route_not_allowed_for_key`; no Manage write route exists.
 
-## 6. AIC-S2S v1 (inbound, `App\Filters\AicS2sFilter`)
+## 5b. Basic provisioning (my.aicountly → Engage, contract §3.2)
 
-Reusable: the route names the calling client (`'filter' => 'aic-s2s:manage'`); configuration is read per client by
-`App\Libraries\AicS2s\AicS2sConfig`; signing is `App\Libraries\AicS2s\AicS2sSignature` (also usable by an outbound
-client in Phase B).
+```
+POST https://engage.aicountly.org/api/v1/provisioning/accounts       filter aic-s2s:myaicountly,issue
+X-AIC-Client: myaicountly   (AIC-S2S v1 headers as in §7; key scope issue — a read key gets 403)
+{"holder_uuid":"10042","email":"asha@example.com","name":"Asha","signed_up_at":"2026-10-23T10:00:00Z","request_id":"<uuid>"}
+→ 200 {"success":true,"data":{"holder_uuid":"10042","licences":[{"licence_ref":"LIC-000123","product_code":"books",
+        "plan":{"code":"books-basic","label":"Basic"},"status":"active"}]},"request_id":"…"}
+```
+
+- For every product with a **published default offer** (on sale, active type) Engage ensures exactly one held Basic
+  licence for (holder, product) — `source provisioning`, no account, no company, actor "my.aicountly sign-up".
+  Idempotent: a retry answers the same licences and writes nothing. If an active paid licence of the product exists
+  the Basic is created `superseded`. A Basic **staff revoked** is not re-issued (reported `revoked`).
+- Products without a default offer are skipped. After publishing a new product's Basic run
+  `php spark engage:provision-basic --pending` (every provisioned holder still missing one), or `--holder=<uuid>`.
+- The holder (e-mail, name) is recorded in `engage_holders` for the staff lookup.
+- Errors: 400 `bad_request` (not a JSON object), 422 `validation_failed` (`details.holder_uuid|email|signed_up_at|
+  request_id`), 503 `database_unavailable` (retryable), plus the §7 auth errors. my.aicountly calls it from an outbox
+  with retry; sign-up is never blocked by it.
+
+## 6. Entitlement push (Engage → Manage, contract §3.3)
+
+Every licence write — issue, activate, renew, extend, suspend, reinstate, revoke, expire, change-offer, seats,
+provisioning, and the Basic supersede / reactivate it causes — queues, **in the same transaction**, the FULL current
+state of each (holder, app) it touches in `engage_entitlement_outbox` (unchanged states — e.g. a seat assignment —
+queue nothing). `php spark engage:entitlements-push` (every minute, `jobs.txt`) sends them:
+
+```
+POST {MANAGE_API_BASE_URL}/v1/inbound/engage/entitlements      AIC-S2S v1, X-AIC-Client: engage,
+                                                                X-AIC-Request-Id = event_id
+{"event_id":"uuid","holder_uuid":"10042","app_key":"books","seq":17,
+ "plan":{"code":"books-pro","label":"Pro","offer_code":"books-pro","offer_version":2,
+         "licence_type_code":"paid","lifecycle_kind":"paid","is_default":false},
+ "status":"active","licence_ref":"LIC-000123","starts_at":"…","ends_at":"…|null","seats_total":10,
+ "entitlements":[{"code":"max_companies","label":"Companies","value":5,"unit":"count"}],"occurred_at":"…"}
+```
+
+- **Which licence speaks** for (holder, app): an effectively active paid licence (several → the one ending last);
+  else the holder's Basic (`status active`, `plan.is_default true`, plan and entitlements from the product's
+  **current** published default offer); else the latest suspended / expired / revoked licence (that status); else
+  `none` with `plan: null`. `plan.code` = the offer's plan code, else its offer code.
+- **seq** is monotonic per holder (`engage_entitlement_seq`, taken under a row lock in the writing transaction).
+  Delivery is strictly in seq order per holder: a row is sent only when no lower seq of that holder is pending; a
+  pending row with a newer pending state of the same (holder, app) is `skipped` (states are full, so only the newest
+  matters). Manage ignores seq ≤ its stored seq.
+- **Answers:** 2xx → `delivered`; 400 / 404 / 409 / 410 / 422 → `rejected` (not retried, logged critical);
+  0 / 401 / 403 / 408 / 429 / 5xx → retried after 2, 4, 8 … minutes (at most 6 h), `dead` after 12 attempts.
+- **Dead-letter visibility:** `/health` `checks.entitlement_outbox` ("attention: N dead, M rejected …"),
+  `checks.manage_outbound`; Licensing → **Manage sync** lists rows and **Re-queue** queues the CURRENT state again as
+  a new event (next seq).
+- **Legacy company-only licences** (no holder) are pushed with `holder_uuid: null` and an extra `cmp_id`, seq per
+  company — Manage resolves the holder through the company's owner (contract: "push what you know").
+- **Dormant** until `MANAGE_API_BASE_URL` + `ENGAGE_OUTBOUND_MANAGE_KEY_ID` / `_SECRET` + `ENGAGE_S2S_ENVIRONMENT`
+  are set: rows stay pending and are sent once configured.
+- `php spark engage:entitlements-reconcile [--holder=]` (daily, `jobs.txt`) is **report-only**: it reads Manage's
+  stored state (`GET {MANAGE_API_BASE_URL}/v1/inbound/engage/entitlements/{holder_uuid}`, same S2S key) for each holder
+  Engage has pushed to and prints drift (missing, status / plan / licence / end differ, Manage seq behind). It never
+  writes. `php spark engage:entitlements-reproject [--holder=] [--product=] [--dry-run]` re-queues changed states —
+  run it after publishing a **new version of a Basic** (Basic holders are pushed with the current Basic limits).
+
+### 6.1 Manage app keys
+
+An offer's `app_keys` must be keys Manage knows. `App\Libraries\Licensing\ManageAppRegistry` is a static mirror of
+Manage's `CompanyAppRegistry` (APP_KEYS, COMPANY_LEVEL_KEYS, ALIASES — the `AppCatalogService` ids Manage serves at
+`GET /api/apps`), pinned by `tests/Unit/LicensingAutomationUnitTest.php`. Aliases are folded when a draft is saved
+(`drive` → `docs`, `connect` → `chat`, `ourpeople` → `hrms` …); an unknown key blocks publishing. When Manage adds an
+application, add it to the mirror in the same change.
+
+### 6.2 Entitlement codes (contract §3.6)
+
+Values are data on the offer (`entitlements`); an absent code means unlimited / feature on. Manage enforces
+`max_companies` and `max_users`; products enforce `<app>.<limit>` codes (`books.max_branches`,
+`inventory.max_warehouses`, `billing.max_bills_per_month`, `drive.storage_mb`, `notes.max_notes` …) and
+`feature.<app>.<name>` booleans.
+
+## 7. AIC-S2S v1 (inbound, `App\Filters\AicS2sFilter`)
+
+Reusable: the route names the calling client (`'filter' => 'aic-s2s:manage'`) and, optionally, the key scopes it
+accepts (`'aic-s2s:myaicountly,issue'` — a key of another scope gets 403 `route_not_allowed_for_key`); configuration
+is read per client by `App\Libraries\AicS2s\AicS2sConfig` (`ENGAGE_INBOUND_<CLIENT>_*`, optional
+`ENGAGE_INBOUND_<CLIENT>_RATE_PER_MINUTE`); signing is `App\Libraries\AicS2s\AicS2sSignature`, used outbound by
+`App\Libraries\AicS2s\ManageClient` (§6).
 
 Headers Manage sends on every request:
 
@@ -212,44 +328,70 @@ printf 'GET\n/v1/manage/companies/42/licences\nlimit=25&status=active\n179231040
 
 (The same vector is pinned in `tests/Unit/AicS2sSignatureTest.php`.)
 
-## 7. Configuration (`api/.env`, names in `server-php/.env.example`)
+## 8. Configuration (`api/.env`, names in `server-php/.env.example`)
 
 | Variable | Meaning |
 |---|---|
 | `ENGAGE_S2S_ENVIRONMENT` | `production`, `sandbox` or `local`; must equal Manage's `X-AIC-Environment` |
 | `ENGAGE_INBOUND_MANAGE_KEY_IDS` | comma-separated live key ids for Manage (two during a rotation), e.g. `manage-read-2026-10` |
 | `ENGAGE_INBOUND_MANAGE_SECRET_<KEYID>` | the shared secret for that key id, **at least 32 bytes**; `<KEYID>` upper-cased, every other character → `_` (`manage-read-2026-10` → `ENGAGE_INBOUND_MANAGE_SECRET_MANAGE_READ_2026_10`). Generate with `php -r "echo bin2hex(random_bytes(32)).PHP_EOL;"`; Manage holds the same value |
-| `ENGAGE_INBOUND_MANAGE_SCOPE_<KEYID>` | `read` (default; GET only) or `issue` (POST only — nothing uses it in Phase A) |
+| `ENGAGE_INBOUND_MANAGE_SCOPE_<KEYID>` | `read` (default; GET only) or `issue` (POST only — no Manage route uses it yet) |
+| `ENGAGE_INBOUND_MYAICOUNTLY_KEY_IDS`, `_SECRET_<KEYID>`, `_SCOPE_<KEYID>=issue` | my.aicountly's provisioning key(s) (§5b), same rules |
+| `ENGAGE_INBOUND_<CLIENT>_RATE_PER_MINUTE` | optional per-client limit per key (1–6000) instead of 120 read / 30 issue (e.g. 120 for my.aicountly's backfill) |
+| `MANAGE_API_BASE_URL` | Manage's API base **including `/api`** (entitlement push, §6) |
+| `ENGAGE_OUTBOUND_MANAGE_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_SECRET` | the key Manage issued to Engage for the push / reconcile (secret ≥ 32 bytes, never logged) |
 
-A key id whose secret is missing or shorter than 32 bytes is not live. No environment or no live key → every Manage
-route answers 503 `inbound_not_configured`. `GET /health` reports `checks.manage_inbound` (never a secret).
+A key id whose secret is missing or shorter than 32 bytes is not live. No environment or no live key → every route of
+that client answers 503 `inbound_not_configured`. `GET /health` reports `checks.manage_inbound`,
+`checks.myaicountly_inbound`, `checks.manage_outbound` and `checks.entitlement_outbox` (never a secret).
 Rotation: add the new id to `KEY_IDS` with its secret, switch Manage to it, then remove the old id.
 
-## 8. Runbook — staff issuing a licence by hand (interim, until Phase B)
+## 9. Runbook
 
-Payment is still collected and invoiced outside Engage (commerce plan §6 "Manual sales runbook").
+The old interim step "also run Manage's `subscription_admin.php set …`" is **retired**: Engage now tells Manage itself
+(§6). Do not write `ghm_subscription` by hand for a licence — automation never writes it and never restricts.
 
-1. **Payment and invoice** — collect payment (Pay link or bank transfer) and issue the GST invoice from AICOUNTLY's
-   Smart Books company as today. Note the invoice number.
-2. **Catalogue (once per offer)** — a super_admin or sales_manager creates the licence type
-   (Licensing → Licence types) and the offer (Licensing → Offers → New offer: product, type, label, price in ₹, price
-   basis, GST rate, SAC, term, seats, apps, entitlements), checks it, and **Publishes** it. To change anything later:
-   **New version** → edit → Publish (the old version is retired; issued licences keep theirs).
-3. **Map the company** — on the customer's account (Sales → Accounts → account → *Manage companies* → Map a company)
-   enter the Manage company id (`cmp_id`) and how you verified it (e.g. the owner read it out from Manage on a call).
-   It is recorded as "verified manually by &lt;you&gt;". A company can be mapped to one account only.
-4. **Issue** — on the account page (*Licences → Issue licence*) or Licensing → Licences: choose the mapped company and
-   the published offer, the start date (dd/mm/yyyy shown; the licence runs until the day before the end), seats if they
-   differ from the offer, the Smart Books invoice number, and leave **Activate now** ticked. Confirm.
-5. **Manage entitlement (interim)** — until Phase B's entitlement events, also run Manage's
-   `subscription_admin.php set --kind=paid --status=active --period-end=… --source=manual` so the app shows it
-   (the licence's `ends_at`, last day = the day before).
-6. **Later changes** — open the licence: *Renew* (adds a term, attach the new invoice number), *Extend* (goodwill,
-   reason), *Suspend* / *Reinstate* / *Revoke* (reason, kept internal), *Change seats*, *Assign a seat*, *Link invoice*.
-   Each writes one activity event the customer sees in Manage (without the internal reason). If the screen says the
-   licence was changed by someone else, reload and redo the action.
+### 9.1 Once, when switching this on (activation order)
 
-## 9. Tests
+1. **Deploy Engage** (migrations run; `jobs.txt` installs `licences-expire`, `entitlements-push`,
+   `entitlements-reconcile`). Everything is dormant: push rows stay pending.
+2. **Basic offers** — a super_admin runs `php spark engage:basic-offers --dry-run`, then `--apply` (add
+   `--create-type` if no complimentary licence type exists). For each draft `<product>-basic`: set the Basic limits
+   (entitlements, §6.2), check the app key, **Publish**. Only published defaults are provisioned.
+3. **Manage keys** — Manage issues Engage a push key; set `MANAGE_API_BASE_URL`, `ENGAGE_OUTBOUND_MANAGE_KEY_ID`,
+   `ENGAGE_OUTBOUND_MANAGE_SECRET` (and `ENGAGE_S2S_ENVIRONMENT`). Manage's inbound route must be live first; until
+   then leave these unset (rows wait). Check `/health` → `manage_outbound: ok`; pending rows drain within a minute.
+4. **my.aicountly key** — set `ENGAGE_INBOUND_MYAICOUNTLY_KEY_IDS` / `_SECRET_<KEYID>` / `_SCOPE_<KEYID>=issue`
+   (optionally `_RATE_PER_MINUTE=120`) here and the same key on my.aicountly; check `myaicountly_inbound: ok`. New
+   sign-ups get their Basic.
+5. **Backfill** existing users from my.aicountly (`php spark accounts:engage-provision-backfill --dry-run`, then for
+   real; batched and resumable). Watch Licensing → Manage sync.
+6. Next day: read the `engage:entitlements-reconcile` output (cron log / Console monitor) for drift.
+
+A product whose Basic is published later: publish it, then `php spark engage:provision-basic --pending`. A new
+version of a Basic: publish it, then `php spark engage:entitlements-reproject --product=<code>`.
+
+### 9.2 Selling a paid plan (until checkout exists)
+
+1. **Payment and invoice** — collect payment (Pay link or bank transfer) and issue the GST invoice as today. Note the
+   invoice number.
+2. **Catalogue (once per offer)** — create the licence type and the offer (Licensing → Offers → New offer: product,
+   type, label, price in ₹, price basis, GST rate, SAC `99xxxx`, term, seats, Manage app keys, entitlements) and
+   **Publish**. To change it later: **New version** → edit → Publish.
+3. **Find the holder** — the owner of the workspace the plan is for (D-L2: every company the owner owns uses it). In
+   *Issue licence* search the holder by e-mail or uuid (holders who signed up are known); for one Engage has not heard
+   of, type the my.aicountly uuid and say how you verified it. Optionally also map and pick a Manage company (legacy).
+4. **Issue** — choose the offer, start date, seats, invoice number; leave **Activate now** ticked. The holder's Basic
+   for that product is superseded and Manage receives the new plan within a minute (Licensing → Manage sync). A
+   second paid licence of the same product is refused unless you tick **Add-on**; a double click is harmless (the
+   drawer sends an idempotency key).
+5. **Later changes** — open the licence: *Renew*, *Change plan* (upgrade / downgrade within the product; keep the end
+   date or restart the term), *Extend*, *Suspend* / *Reinstate* / *Revoke*, *Change seats*, *Assign a seat*, *Link
+   invoice*. Each change reaches Manage automatically. Revoking or letting a paid plan expire brings Basic back.
+6. **If Manage sync shows rejected or dead rows** — read the error (e.g. an unknown app key or Manage's inbound not
+   live), fix the cause, then **Re-queue**.
+
+## 10. Tests
 
 ```
 cd server-php
@@ -260,9 +402,13 @@ env database.tests.database=engage_test database.tests.username=postgres databas
 
 Licensing: `tests/Unit/AicS2sSignatureTest.php`, `tests/Unit/LicensingSupportTest.php`,
 `tests/Feature/AicS2sFilterTest.php`, `tests/Feature/LicensingCatalogueTest.php`,
-`tests/Feature/LicenceLifecycleTest.php`, `tests/Feature/ManageReadApiTest.php` (base `tests/_support/LicensingTestCase.php`).
+`tests/Feature/LicenceLifecycleTest.php`, `tests/Feature/ManageReadApiTest.php`, `tests/Feature/HolderLicensingTest.php`
+(holder licences, outbox atomicity and seq order, delivery / retry / dead letter, idempotency, duplicate guard,
+default-offer uniqueness, Basic supersede / reactivate, change-offer, provisioning, commands),
+`tests/Unit/LicensingAutomationUnitTest.php` (registry mirror, signature vectors, jobs.txt) (base
+`tests/_support/LicensingTestCase.php`).
 
-## 10. Deviations from the contract draft
+## 11. Deviations from the contract draft
 
 - **Extra fields** (additive): licences also carry `offer{code,version,label}`, `app_keys[]`, `issued_at`,
   `updated_at`, and `licence_type.lifecycle_kind`; activity items carry `seq` and `licence_ref`. Nothing in §4 is
@@ -277,3 +423,14 @@ Licensing: `tests/Unit/AicS2sSignatureTest.php`, `tests/Unit/LicensingSupportTes
   into Engage's Manage routes).
 - **Rate limit** uses a per-minute window in PostgreSQL (`engage_s2s_rate`), not a sliding window; nonces live in
   `engage_s2s_nonces` (pruned on each request).
+- **Rectification contract §3** (additive): pushes for a legacy company-only licence carry `holder_uuid: null` and
+  `cmp_id`; a staff-revoked Basic is not re-issued by provisioning; Basic holders are pushed with the product's
+  current Basic version; `GET catalogue` no longer requires `cmp_id`.
+
+## 12. Extension points
+
+`App\Services\Licensing\LicenceHooks::afterLicenceWrite(BaseConnection $db, string $event, array $licence, array
+$input)` runs **inside the licence write transaction** for `issue`, `renew` and `change-offer` (a no-op here).
+`$input` is the staff request, including the optional `quote_ref` (validated for shape only, stored nowhere by
+licensing). The coupons stream implements it (commit the reserved redemption with the `licence_ref`); throwing
+`LicenceHookRejected` refuses the write with its status / code / message and rolls everything back.

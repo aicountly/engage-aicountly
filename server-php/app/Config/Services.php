@@ -34,6 +34,8 @@ use App\Services\Licensing\LicenceService;
 use App\Services\Licensing\LicenceTypeService;
 use App\Services\Licensing\ManageReadService;
 use App\Services\Licensing\OfferService;
+use App\Services\Licensing\EntitlementOutbox;
+use App\Services\Licensing\ProvisioningService;
 use CodeIgniter\Config\BaseService;
 
 class Services extends BaseService
@@ -296,5 +298,23 @@ class Services extends BaseService
             return static::getSharedInstance('manageLicensing') ?? static::manageLicensing(false);
         }
         return new ManageReadService();
+    }
+
+    /** Engage → Manage entitlement push outbox (docs/LICENSING.md §6). */
+    public static function entitlementOutbox(bool $getShared = true): EntitlementOutbox
+    {
+        if ($getShared) {
+            return static::getSharedInstance('entitlementOutbox') ?? static::entitlementOutbox(false);
+        }
+        return new EntitlementOutbox();
+    }
+
+    /** Basic provisioning (contract §3.2). */
+    public static function provisioning(bool $getShared = true): ProvisioningService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('provisioning') ?? static::provisioning(false);
+        }
+        return new ProvisioningService();
     }
 }

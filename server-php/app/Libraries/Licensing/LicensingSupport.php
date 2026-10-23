@@ -161,4 +161,26 @@ final class LicensingSupport
     {
         return "to_char({$column} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')";
     }
+
+    /**
+     * Run $fn with CodeIgniter's transaction exceptions on: since CI 4.5 a failing query INSIDE a transaction returns
+     * false instead of throwing, so a failed insert would let the caller "commit" (PostgreSQL then rolls the aborted
+     * transaction back) and report success. Licensing writes must fail loudly; the flag is restored afterwards, and the
+     * connection's transaction status is reset — in CodeIgniter's strict mode a caught failure would otherwise make
+     * the NEXT transStart()/transComplete() on the shared connection roll back silently.
+     *
+     * @template T
+     * @param callable(): T $fn
+     * @return T
+     */
+    public static function strictTx(\CodeIgniter\Database\BaseConnection $db, callable $fn): mixed
+    {
+        $db->transException(true);
+        try {
+            return $fn();
+        } finally {
+            $db->transException(false);
+            $db->resetTransStatus();
+        }
+    }
 }

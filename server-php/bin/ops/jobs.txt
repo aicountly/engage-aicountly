@@ -12,5 +12,14 @@
 # Replaces the hand-installed line README.md used to give, so the job never runs twice. The spark command name is
 # Engage's own.
 #! legacy-pattern: spark[[:space:]]+engage:console-audit-deliver
+# docs/LICENSING.md used to tell operators to hand-install the hourly expiry line; this block replaces it.
+#! legacy-pattern: spark[[:space:]]+engage:licences-expire
 # name                  | schedule    | command (run from the api folder)
 console-audit-deliver   | */5 * * * * | {php} spark engage:console-audit-deliver
+# Licensing (docs/LICENSING.md §6-§8): expiry hourly (a paid plan that ends falls back to Basic; never restricts),
+# the Engage -> Manage entitlement push every minute (dormant and exit 0 until MANAGE_API_BASE_URL /
+# ENGAGE_OUTBOUND_MANAGE_* are set) and the report-only drift check daily. Each reports itself to Console's Cron Job
+# Monitor (engage.licences_expire, engage.entitlements_push, engage.entitlements_reconcile).
+licences-expire         | 23 * * * *  | {php} spark engage:licences-expire
+entitlements-push       | * * * * *   | {php} spark engage:entitlements-push
+entitlements-reconcile  | 41 4 * * *  | {php} spark engage:entitlements-reconcile

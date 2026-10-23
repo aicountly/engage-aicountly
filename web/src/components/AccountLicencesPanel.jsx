@@ -29,7 +29,8 @@ export default function AccountLicencesPanel({ accountId }) {
         emptyMessage="No licences for this account."
         columns={[
           { key: 'licence_ref', header: 'Licence', render: (l) => <span className="font-mono text-xs">{l.licence_ref}</span> },
-          { key: 'cmp_id', header: 'cmp_id', render: (l) => <span className="font-mono">{l.cmp_id}</span> },
+          { key: 'holder', header: 'Holder', render: (l) => <span className="font-mono text-xs">{l.holder_uuid || '—'}</span> },
+          { key: 'cmp_id', header: 'cmp_id', render: (l) => <span className="font-mono">{l.cmp_id ?? '—'}</span> },
           { key: 'offer', header: 'Offer', render: (l) => l.offer.label },
           { key: 'status', header: 'Status', render: (l) => <LicenceStatusBadge status={l.status} /> },
           { key: 'term', header: 'Term', nowrap: true, render: (l) => `${formatDateIN(l.term.starts_at)} – ${lastDayIN(l.term.ends_at)}` },
