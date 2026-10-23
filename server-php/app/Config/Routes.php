@@ -270,6 +270,7 @@ $routes->group('v1', static function ($routes) {
         $routes->get('licence-types',                         $L . 'LicenceTypesController::index');
         $routes->post('licence-types',                        $L . 'LicenceTypesController::create', $licAdmin);
         $routes->put('licence-types/(:num)',                  $L . 'LicenceTypesController::update/$1', $licAdmin);
+        $routes->get('entitlement-codes',                     $L . 'EntitlementCodesController::index');
         $routes->get('offers',                                $L . 'OffersController::index');
         $routes->get('offers/(:num)',                         $L . 'OffersController::show/$1');
         $routes->post('offers',                               $L . 'OffersController::create', $licAdmin);

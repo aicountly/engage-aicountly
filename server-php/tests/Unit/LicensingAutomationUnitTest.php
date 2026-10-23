@@ -24,7 +24,8 @@ final class LicensingAutomationUnitTest extends CIUnitTestCase
 
     public function testManageRegistryMirrorIsPinned(): void
     {
-        // manage-aicountly server-php/src/Services/CompanyAppRegistry.php @ 515abd3 — update both together.
+        // manage-aicountly server-php/src/Services/CompanyAppRegistry.php @ f8906b6 — update both together
+        // (the whole catalogue is pinned in ManageAppRegistryTest).
         $this->assertCount(35, ManageAppRegistry::APP_KEYS);
         $this->assertSame(['manage', 'auditor'], ManageAppRegistry::COMPANY_LEVEL_KEYS);
         foreach (['books', 'inventory', 'billing', 'notes', 'docs', 'chat', 'buddy', 'receptionist', 'purchases'] as $k) {

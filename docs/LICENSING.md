@@ -154,8 +154,23 @@ Staff API (`/api/v1`, staff JWT): `licence-types`, `offers` (+ `/{id}/publish|re
 draft), `account-companies` (+ `/{id}/unlink`), `licences` (`?holder_uuid=&is_basic=` filters; + `/{ref}/activate|renew|
 extend|suspend|reinstate|revoke|seats|seat-assignments|seat-assignments/{id}/release|invoice-refs|change-offer`),
 `holders` (`?q=` e-mail / name / uuid; `/{uuid}` with licences and pushes), `entitlements/outbox` (+ `/{id}/requeue`,
-write roles). Answers use Engage's usual `{ok, data}` /
+write roles), `entitlement-codes` (read-only, below). Answers use Engage's usual `{ok, data}` /
 `{ok:false, error, code?, details?}`.
+
+**Products and entitlement codes (fleet alignment, 2026-10).** `ProductsSeeder` (run by every deploy) carries every
+application in Manage's catalogue as a product, code = Manage registry key (`ManageAppRegistry::CATALOG_KEYS`, 38 keys:
+manage, books, hrms, auditor, fr, secretarial, vault, chat, calendar, docs, notes, pos, billing, inventory, sales,
+purchases, insights, buddy, contacts, remote, advisor, appointments, contracts, pay, crm, helpdesk, receptionist,
+valuations, email, messaging, voice, edge, aspire, integrate, benefits, capital, apis, community) — idempotent, no price,
+no offer; existing rows and the legacy codes (ourpeople, flow, console, other) are never touched. Offers' `app_keys` are
+validated against the same mirror (drive → docs, pulse → buddy, lobby → receptionist, connect → chat). Note: Manage
+stores no plan for `app_key: manage` (its push answers 422), so an offer should not name `manage`.
+`GET v1/entitlement-codes[?app=sales,drive]` (any signed-in role) lists the limit codes staff can pick
+(`EntitlementCodeCatalogue`: `max_companies` and `max_users`, which Manage enforces for every app, plus each product's
+own codes from its fleet role file — e.g. `sales.max_orders_per_month`, `pos.max_terminals`, `drive.storage_mb`);
+`?app=` narrows to Manage's codes plus those apps'. Licensing → Offers → Entitlements offers them as autocomplete
+(narrowed to the offer's app keys, "show codes of every app" to widen); a code the list does not know is still
+accepted as typed (`free_text_allowed: true`), so a product can add a limit before this list knows it.
 
 ## 5. Manage read API (contract §4)
 
