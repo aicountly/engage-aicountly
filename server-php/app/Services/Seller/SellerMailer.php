@@ -129,7 +129,7 @@ class SellerMailer
             'SMTPCrypto' => (string) env('ENGAGE_SMTP_CRYPTO', 'tls'),
             'mailType'   => 'text',
         ], false);
-        $mailer->setFrom((string) env('ENGAGE_MAIL_FROM', ''), (string) env('ENGAGE_MAIL_FROM_NAME', 'AICOUNTLY Sellers'));
+        $mailer->setFrom((string) env('ENGAGE_MAIL_FROM', ''), (string) env('ENGAGE_MAIL_FROM_NAME', 'Aicountly Sellers'));
         $mailer->setTo($email);
         $mailer->setSubject($subject);
         $mailer->setMessage($text);
@@ -147,21 +147,21 @@ class SellerMailer
         $n = (string) ($vars['name'] ?? 'there');
         switch ($trigger) {
             case 'seller_activation':
-                return ['Activate your AICOUNTLY seller account',
-                    "Hello {$n},\n\nYour application to become an AICOUNTLY seller was approved. Your seller code is {$vars['seller_code']}.\n\n"
+                return ['Activate your Aicountly seller account',
+                    "Hello {$n},\n\nYour application to become an Aicountly seller was approved. Your seller code is {$vars['seller_code']}.\n\n"
                     . "Set your password here (the link works once and expires {$vars['expires_at']}):\n{$vars['activation_url']}\n\n"
-                    . "If you did not apply, ignore this email.\n\nAICOUNTLY"];
+                    . "If you did not apply, ignore this email.\n\nAicountly"];
             case 'seller_password_reset':
-                return ['Reset your AICOUNTLY seller password',
+                return ['Reset your Aicountly seller password',
                     "Hello {$n},\n\nUse this link to set a new password (it works once and expires {$vars['expires_at']}):\n{$vars['reset_url']}\n\n"
-                    . "If you did not ask for this, ignore this email — your password is unchanged.\n\nAICOUNTLY"];
+                    . "If you did not ask for this, ignore this email — your password is unchanged.\n\nAicountly"];
             case 'seller_login_otp':
-                return ['Your AICOUNTLY seller sign-in code',
+                return ['Your Aicountly seller sign-in code',
                     "Hello {$n},\n\nYour sign-in code is {$vars['code']}. It expires in {$vars['expires_minutes']} minutes.\n\n"
-                    . "If you did not try to sign in, change your password.\n\nAICOUNTLY"];
+                    . "If you did not try to sign in, change your password.\n\nAicountly"];
         }
 
-        return ['AICOUNTLY', ''];
+        return ['Aicountly', ''];
     }
 
     private function consoleBase(): string

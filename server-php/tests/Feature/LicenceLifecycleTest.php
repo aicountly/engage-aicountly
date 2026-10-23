@@ -79,7 +79,7 @@ final class LicenceLifecycleTest extends LicensingTestCase
         $this->assertSame(['AIC/26-27/000001'], $l['invoice_refs']);
         $this->assertSame('Books — test annual', $l['offer']['label']);
         $this->assertSame('Standard licence', $l['licence_type']['label']);
-        $this->assertSame('AICOUNTLY Books', $l['product']['label']);
+        $this->assertSame('Aicountly Books', $l['product']['label']);
         $this->assertSame([['code' => 'companies', 'label' => 'Companies', 'value' => 1, 'unit' => null]], $l['entitlements']);
         $this->assertSame([['label' => 'Support', 'value' => 'Email']], $l['attributes']);
         $this->assertSame(1, $l['version']);

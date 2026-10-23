@@ -238,7 +238,7 @@ class SellerLeadService
 
     private static function protectedAnswer(): array
     {
-        return ['status' => 409, 'code' => 'lead_protected', 'error' => 'This contact is already registered with AICOUNTLY.'];
+        return ['status' => 409, 'code' => 'lead_protected', 'error' => 'This contact is already registered with Aicountly.'];
     }
 
     /** IST calendar date of a timestamp (YYYY-MM-DD by default). */

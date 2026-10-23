@@ -77,7 +77,7 @@ final class SellerLeadsCommissionsTest extends SellerTestCase
         $other = $this->portal('post', 'leads', ['name' => 'Meena', 'mobile' => '9820011111', 'consent_confirmed' => true], $b['session']);
         $this->assertSame(409, $this->code($other), 'matched by mobile');
         $this->assertSame('lead_protected', $this->json($other)['code']);
-        $this->assertSame('This contact is already registered with AICOUNTLY.', $this->json($other)['error']);
+        $this->assertSame('This contact is already registered with Aicountly.', $this->json($other)['error']);
         $this->assertSame(3, $this->db()->table('engage_seller_lead_registrations')->countAllResults());
 
         $list = $this->json($this->portal('get', 'leads', [], $a['session']))['data'];
@@ -222,7 +222,7 @@ final class SellerLeadsCommissionsTest extends SellerTestCase
         $this->assertTrue($sc['plan']['published']);
         $this->assertSame('1000.00', $sc['totals']['accrued']);
         $this->assertSame('10% of first payment', $sc['items'][0]['rule_label']);
-        $this->assertSame('AICOUNTLY Books', $sc['items'][0]['product']);
+        $this->assertSame('Aicountly Books', $sc['items'][0]['product']);
         $this->assertSame('CE-' . $entry['id'], $sc['items'][0]['id']);
 
         // Hold release (hourly command).

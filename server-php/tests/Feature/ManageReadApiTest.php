@@ -50,7 +50,7 @@ final class ManageReadApiTest extends LicensingTestCase
         }
         $this->assertSame($l['licence_ref'], $x['licence_ref']);
         $this->assertSame(['code' => 'active', 'label' => 'Active', 'tone' => 'success'], $x['status']);
-        $this->assertSame(['code' => 'books', 'label' => 'AICOUNTLY Books'], $x['product']);
+        $this->assertSame(['code' => 'books', 'label' => 'Aicountly Books'], $x['product']);
         $this->assertSame('standard', $x['licence_type']['code']);
         $this->assertNull($x['plan']);
         $this->assertSame(['total' => 3, 'assigned' => 0], $x['seats']);

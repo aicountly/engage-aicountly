@@ -241,7 +241,7 @@ class SellerAuthService
         }
         $current = $this->accounts->currentAgreement();
         if ($current === null) {
-            return ['status' => 409, 'code' => 'conflict', 'error' => 'No seller agreement has been published yet. AICOUNTLY will contact you.'];
+            return ['status' => 409, 'code' => 'conflict', 'error' => 'No seller agreement has been published yet. Aicountly will contact you.'];
         }
         if ($version !== (string) $current['version_label']) {
             return ['status' => 409, 'code' => 'agreement_version_mismatch', 'error' => 'The seller agreement has changed. Reload and accept the current version.'];
@@ -299,7 +299,7 @@ class SellerAuthService
      */
     public function requestReset(string $email, string $ip): array
     {
-        $unavailable = ['status' => 503, 'code' => 'mailer_unavailable', 'error' => 'We could not send the email. Try again later or contact AICOUNTLY.'];
+        $unavailable = ['status' => 503, 'code' => 'mailer_unavailable', 'error' => 'We could not send the email. Try again later or contact Aicountly.'];
         if (! $this->mailer->isConfigured()) {
             return $unavailable;
         }

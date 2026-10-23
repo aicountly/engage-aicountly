@@ -628,7 +628,7 @@ final class SellerPayoutsTest extends SellerTestCase
         $this->assertSame('194H', $detail['tds_section']);
         $this->assertCount(1, $detail['entries']);
         $this->assertSame(['id', 'lead_code', 'product', 'amount', 'accrued_at'], array_keys($detail['entries'][0]));
-        $this->assertSame(['CE-' . $e, 'AICOUNTLY Books', '1200.00'], [$detail['entries'][0]['id'], $detail['entries'][0]['product'], $detail['entries'][0]['amount']]);
+        $this->assertSame(['CE-' . $e, 'Aicountly Books', '1200.00'], [$detail['entries'][0]['id'], $detail['entries'][0]['product'], $detail['entries'][0]['amount']]);
         $this->assertSame(['legal_name' => 'Ravi Kumar', 'seller_code' => $s['seller_code'], 'entity_type' => 'individual', 'pan_masked' => 'XXXXXX234F', 'gstin_masked' => null], $detail['payee']);
         $this->assertNull($detail['issuer']);
         $this->assertStringNotContainsString(self::PAN, json_encode($detail));
