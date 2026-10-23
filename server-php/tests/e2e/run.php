@@ -48,8 +48,11 @@ if ($myaicDir === '' || !is_file($myaicDir . '/server-php/spark') || !is_file($m
 if (!is_file($engageDir . '/vendor/autoload.php')) {
     $skip('run composer install in engage-aicountly/server-php first');
 }
-if ($pgPort !== 5432 && ($pgSocket === '' || !file_exists("{$pgSocket}/.s.PGSQL.{$pgPort}"))) {
-    $skip('my.aicountly connects on port 5432 only: set E2E_PG_SOCKET_DIR to the server\'s socket directory (a .s.PGSQL.5432 link is made there)');
+// my.aicountly takes DB_UUID_PORT since externaldb::portFor(); an older checkout connects on 5432 only and
+// needs the socket-link workaround below.
+$myaicHasPort = str_contains((string) @file_get_contents($myaicDir . '/server-php/app/Libraries/externaldb.php'), 'function portFor(');
+if (!$myaicHasPort && $pgPort !== 5432 && ($pgSocket === '' || !file_exists("{$pgSocket}/.s.PGSQL.{$pgPort}"))) {
+    $skip('this my.aicountly checkout connects on port 5432 only: set E2E_PG_SOCKET_DIR to the server\'s socket directory (a .s.PGSQL.5432 link is made there)');
 }
 try {
     $admin = new PDO("pgsql:host={$pgHost};port={$pgPort};dbname=postgres", $pgUser, $pgPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
@@ -147,7 +150,7 @@ foreach ($dbs as $db) {
     $admin->exec("CREATE DATABASE {$db}");
 }
 $madeLink = null;
-if ($pgPort !== 5432 && !file_exists("{$pgSocket}/.s.PGSQL.5432")) {
+if (!$myaicHasPort && $pgPort !== 5432 && !file_exists("{$pgSocket}/.s.PGSQL.5432")) {
     symlink("{$pgSocket}/.s.PGSQL.{$pgPort}", "{$pgSocket}/.s.PGSQL.5432");
     $madeLink = "{$pgSocket}/.s.PGSQL.5432";
 }
@@ -225,7 +228,8 @@ $manageEnv = [
 ];
 $myaicEnv = [
     'CI_ENVIRONMENT' => 'production',
-    'DB_UUID_HOST' => $pgPort === 5432 ? $pgHost : $pgSocket, 'DB_UUID_USER' => $pgUser, 'DB_UUID_PASS' => $pgPass !== '' ? $pgPass : 'unused',
+    'DB_UUID_HOST' => $pgPort === 5432 || $myaicHasPort ? $pgHost : $pgSocket, 'DB_UUID_PORT' => (string) $pgPort,
+    'DB_UUID_USER' => $pgUser, 'DB_UUID_PASS' => $pgPass !== '' ? $pgPass : 'unused',
     'DB_UUID_NAME' => $dbs['myaic'],
     'ENGAGE_API_BASE_URL' => $engageUrl, 'MYAICOUNTLY_S2S_ENGAGE_KEY_ID' => $k['prov']['id'],
     'MYAICOUNTLY_S2S_ENGAGE_SECRET' => $k['prov']['secret'], 'MYAICOUNTLY_S2S_ENVIRONMENT' => $env,

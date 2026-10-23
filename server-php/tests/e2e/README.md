@@ -30,8 +30,10 @@ export E2E_MANAGE_DIR=/path/to/manage-aicountly E2E_MYAIC_DIR=/path/to/my-aicoun
 php engage-aicountly/server-php/tests/e2e/run.php      # exit 0 = all passed, 1 = a failure
 ```
 
-- my.aicountly's database connection always uses port 5432. On another port, also set `E2E_PG_SOCKET_DIR` to the
-  server's unix-socket directory: the script links `.s.PGSQL.5432` there for the run and removes it afterwards.
+- my.aicountly takes the port from `DB_UUID_PORT` (externaldb::portFor), which the script passes from `E2E_PG_PORT`.
+  Only a my.aicountly checkout older than that connects on 5432 alone: then, on another port, also set
+  `E2E_PG_SOCKET_DIR` to the server's unix-socket directory: the script links `.s.PGSQL.5432` there for the run and
+  removes it afterwards.
 - `E2E_TRANSCRIPT=/path/file.txt` writes every command the script ran with its output; `E2E_KEEP=1` keeps the three
   databases (`e2e<random>_engage|_manage|_myaic`) and the temp folder for inspection.
 - Missing prerequisites (no `E2E_MANAGE_DIR` / `E2E_MYAIC_DIR`, no `vendor/`, no `pdo_pgsql`, database unreachable)
