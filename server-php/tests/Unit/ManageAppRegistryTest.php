@@ -109,10 +109,12 @@ final class ManageAppRegistryTest extends CIUnitTestCase
             // Books, Inventory, Billing, Drive, Notes (enforced on main before the role files).
             'books.max_branches', 'books.max_vouchers_per_month', 'inventory.max_warehouses', 'inventory.max_items',
             'billing.max_bills_per_month', 'drive.storage_mb', 'notes.max_notes',
+            // Phase 5: Edge and Aspire.
+            'edge.max_active_learners', 'aspire.max_workshops_per_month',
         ] as $code) {
             $this->assertTrue(EntitlementCodeCatalogue::isKnown($code), $code);
         }
-        $this->assertCount(48, $codes);
+        $this->assertCount(50, $codes);
         $this->assertSame('mb', EntitlementCodeCatalogue::find(' DRIVE.storage_mb ')['unit'] ?? null);
         $this->assertNull(EntitlementCodeCatalogue::find('sales.max_rockets'));
     }
