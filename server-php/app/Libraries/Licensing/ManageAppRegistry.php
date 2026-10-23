@@ -5,13 +5,18 @@ namespace App\Libraries\Licensing;
 
 /**
  * Static mirror of the application keys Manage accepts for a plan / subscription (contract §3.3: an offer's
- * app_keys must be Manage registry keys). Copied from manage-aicountly server-php/src/Services/CompanyAppRegistry.php
- * (APP_KEYS + COMPANY_LEVEL_KEYS + ALIASES, which are the AppCatalogService ids Manage serves at GET /api/apps),
- * read at manage-aicountly 515abd3 (23 Oct 2026). tests/Unit/ManageAppRegistryTest.php pins the list — when Manage
- * adds an application, add it here in the same change.
+ * app_keys must be Manage registry keys = the AppCatalogService ids Manage serves at GET /api/apps). Copied from
+ * manage-aicountly server-php/src/Services/CompanyAppRegistry.php (APP_KEYS + COMPANY_LEVEL_KEYS + PLAN_ONLY_KEYS +
+ * ALIASES) and AppCatalogService.php, read at manage-aicountly f8906b6 (fleet registry, 23 Oct 2026).
+ * tests/Unit/ManageAppRegistryTest.php pins CATALOG_KEYS (the 38 catalog ids, catalog order) and that APP_KEYS +
+ * COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS is exactly that list — when Manage adds an application, add it here in the
+ * same change.
  *
  * Aliases fold a product's own name onto Manage's key: Drive is catalogued as `docs` (so `drive` and `docs` both
  * normalise to `docs`), Connect as `chat`, Pulse as `buddy`, Lobby as `receptionist`, Purchase as `purchases`.
+ *
+ * Manage stores a plan for every key here except `manage` itself (Manage answers 422 unknown_application to a push
+ * for app_key manage: max_companies / max_users ride on each application's plan).
  */
 final class ManageAppRegistry
 {
@@ -27,6 +32,17 @@ final class ManageAppRegistry
 
     /** @var list<string> Manage CompanyAppRegistry::COMPANY_LEVEL_KEYS. */
     public const COMPANY_LEVEL_KEYS = ['manage', 'auditor'];
+
+    /** @var list<string> Catalogued at GET /api/apps with no company (Manage CompanyAppRegistry::PLAN_ONLY_KEYS). */
+    public const CATALOG_ONLY_KEYS = ['community'];
+
+    /** @var list<string> Manage AppCatalogService ids, in catalog (launcher) order — every product Engage licenses. */
+    public const CATALOG_KEYS = [
+        'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
+        'billing', 'inventory', 'sales', 'purchases', 'insights', 'buddy', 'contacts', 'remote', 'advisor', 'appointments',
+        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice', 'edge',
+        'aspire', 'integrate', 'benefits', 'capital', 'apis', 'community',
+    ];
 
     /** @var array<string,string> Manage CompanyAppRegistry::ALIASES. */
     public const ALIASES = [
@@ -49,7 +65,8 @@ final class ManageAppRegistry
         }
         $key = self::ALIASES[$key] ?? $key;
 
-        return in_array($key, self::APP_KEYS, true) || in_array($key, self::COMPANY_LEVEL_KEYS, true) ? $key : null;
+        return in_array($key, self::APP_KEYS, true) || in_array($key, self::COMPANY_LEVEL_KEYS, true)
+            || in_array($key, self::CATALOG_ONLY_KEYS, true) ? $key : null;
     }
 
     /**
@@ -83,6 +100,6 @@ final class ManageAppRegistry
     /** @return list<string> */
     public static function all(): array
     {
-        return array_merge(self::APP_KEYS, self::COMPANY_LEVEL_KEYS);
+        return array_merge(self::APP_KEYS, self::COMPANY_LEVEL_KEYS, self::CATALOG_ONLY_KEYS);
     }
 }

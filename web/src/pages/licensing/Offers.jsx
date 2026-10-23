@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api, { pickRows } from '../../lib/api.js'
 import PageHeader from '../../components/PageHeader.jsx'
 import Drawer from '../../components/Drawer.jsx'
+import EntitlementCodePicker, { appKeysOf } from '../../components/EntitlementCodePicker.jsx'
 import { ErrorNote, OfferStatusBadge, describeError } from '../../components/LicensingBits.jsx'
 import { useAuth } from '../../lib/auth.jsx'
 import { LICENSING_ADMIN, formatDateIN, formatPaise, paiseToRupees, parseJsonField, rupeesToPaise, termText } from '../../lib/licensing.js'
@@ -187,7 +188,12 @@ export default function Offers() {
             <div><div className="engage-label">On sale until (optional)</div><input className="engage-input" type="date" value={draft.valid_to} onChange={set('valid_to')} /></div>
           </div>
           <div>
-            <div className="engage-label">Entitlements (JSON list of {'{code, label, value, unit}'})</div>
+            <div className="engage-label">Entitlements (JSON list of {'{code, label, value, unit}'}; absent code = unlimited)</div>
+            <EntitlementCodePicker
+              text={draft.entitlementsText}
+              apps={appKeysOf(draft.app_keys, draft.product_code)}
+              onChange={(t) => setDraft((d) => ({ ...d, entitlementsText: t }))}
+            />
             <textarea className="engage-input font-mono text-xs" rows={5} value={draft.entitlementsText} onChange={set('entitlementsText')} />
           </div>
           <div>

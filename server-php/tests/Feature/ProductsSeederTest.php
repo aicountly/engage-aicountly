@@ -28,4 +28,32 @@ final class ProductsSeederTest extends DatabaseTestCase
         }
         $this->assertSame(0, $db->table('engage_offers')->countAllResults(), 'no offers or prices are seeded');
     }
+
+    public function testEveryManageCatalogAppIsAProductAndLegacyRowsStay(): void
+    {
+        $db = Database::connect('tests');
+        $db->table('engage_offers')->where('id >', 0)->delete();
+        // An existing row staff renamed must survive a re-seed untouched.
+        $db->table('engage_products')->whereIn('code', ['crm', 'community'])->delete();
+        $db->table('engage_products')->insert(['code' => 'crm', 'name' => 'CRM (renamed by staff)', 'category' => 'custom', 'is_active' => false, 'sort_order' => 5]);
+        $seeder = new ProductsSeeder(config('Database'), $db);
+        $seeder->run();
+        $before = $db->table('engage_products')->countAllResults();
+        $seeder->run();
+        $this->assertSame($before, $db->table('engage_products')->countAllResults(), 'idempotent');
+        foreach (ManageAppRegistry::CATALOG_KEYS as $code) {
+            $row = $db->table('engage_products')->where('code', $code)->get()->getRowArray();
+            $this->assertNotNull($row, "{$code} is a product");
+            $this->assertNotSame('', trim((string) $row['name']), $code);
+            $this->assertNotSame('', trim((string) $row['category']), $code);
+        }
+        $crm = $db->table('engage_products')->where('code', 'crm')->get()->getRowArray();
+        $this->assertSame(['CRM (renamed by staff)', 'custom'], [$crm['name'], $crm['category']], 'an existing row is never overwritten');
+        foreach (['ourpeople', 'flow', 'console', 'other'] as $legacy) {
+            $this->assertSame(1, $db->table('engage_products')->where('code', $legacy)->countAllResults(), "legacy {$legacy} kept");
+        }
+        $this->assertSame(0, $db->table('engage_offers')->countAllResults(), 'no offers or prices are seeded');
+        $this->assertSame([], array_values(array_filter(array_column($db->table('engage_products')->get()->getResultArray(), 'code'), static fn ($c) => ! in_array($c, [...ManageAppRegistry::CATALOG_KEYS, 'ourpeople', 'flow', 'console', 'other'], true) && ! str_starts_with((string) $c, 'test'))),
+            'nothing outside the catalogue and the legacy codes');
+    }
 }
