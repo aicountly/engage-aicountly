@@ -181,8 +181,9 @@ prefixed with a course key (`edge.…`, `aspire.…`, `academy.…`), which is r
 runs itself; they are never licensed to companies. Their `engage_products` rows (`academy`, `edge`, `aspire`, category
 `Academy`) are course products only — leads, fee payments, seller commission and the revenue view use them
 (docs/ACADEMY_FEES_RUNBOOK.md) — and are not licensable. `ManageAppRegistry::COURSE_KEYS` lists them; none is in
-`CATALOG_KEYS` / `PLAN_KEYS` (although Manage still catalogues `edge` and `aspire`), and `EntitlementCodeCatalogue`
-has no code for them. Consequently:
+`CATALOG_KEYS` / `PLAN_KEYS` (Manage retired `edge` and `aspire` from its registry too —
+`CompanyAppRegistry::ACADEMY_COURSE_KEYS`, a push for them answers 422 `unknown_application`, and Manage's migration
+025 revokes its copies of Engage licences for them), and `EntitlementCodeCatalogue` has no code for them. Consequently:
 
 - an offer cannot be created, versioned or published for a course product (any product of category `Academy`) or with
   a course key in `app_keys` (422 `course_not_licensable` at publish / new version, a field error on the draft);
@@ -190,8 +191,8 @@ has no code for them. Consequently:
 - no licence can be issued from such an offer; a course licence issued before the decision cannot be activated,
   renewed, extended or moved to another offer (409 `course_not_licensable`) — staff may suspend, revoke or let it
   expire (there is no "non-renewing" status, so the licence row itself is left as it is);
-- the entitlement outbox never queues a push for them, and `engage:entitlements-reconcile` does not count Manage still
-  listing `edge` / `aspire` as drift;
+- the entitlement outbox never queues a push for them (pending ones were skipped by the migration below), and
+  `engage:entitlements-reconcile` does not count an older Manage still listing `edge` / `aspire` as drift;
 - the Manage read API (§5) never returns a course licence (404 like a missing one), its seats or events, or a course
   offer in `catalogue`.
 
@@ -320,8 +321,8 @@ application, add it to the mirror in the same change.
 Publishing, `engage:basic-offers` and the entitlement outbox accept exactly the keys **Manage holds a plan for**:
 `ManageAppRegistry::PLAN_KEYS` / `planKey()` — every catalogued key except `manage` (Manage's `max_companies` /
 `max_users` ride on each application's plan). An offer naming `manage` is refused at publish ("Manage holds no plan for:
-manage"), and the outbox never queues a push Manage would refuse. `edge` and `aspire` are not in it even though Manage
-still holds plan keys for them: they are Aicountly Academy courses, never licensed (§4); reconcile ignores them. The
+manage"), and the outbox never queues a push Manage would refuse. `edge` and `aspire` are in neither copy: they are
+Aicountly Academy courses, never licensed (§4); reconcile ignores them should an older Manage still list them. The
 list is pinned in both repositories to the same file,
 `server-php/tests/_support/fixtures/manage_plan_app_keys.json` here and `server-php/tests/fixtures/manage_plan_app_keys.json`
 in manage-aicountly (byte-identical; `ManageAppRegistryTest` and Manage's `plan_app_keys_contract_test` pin each side to

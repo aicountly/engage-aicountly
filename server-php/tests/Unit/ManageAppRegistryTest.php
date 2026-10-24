@@ -15,19 +15,24 @@ use CodeIgniter\Test\CIUnitTestCase;
  */
 final class ManageAppRegistryTest extends CIUnitTestCase
 {
-    /** manage-aicountly server-php/src/Services/AppCatalogService.php ids, catalog order (GET /api/apps) @ f8906b6. */
+    /**
+     * manage-aicountly server-php/src/Services/AppCatalogService.php ids, catalog order (GET /api/apps) @ f7f7535
+     * (claude/academy-only: Aicountly Edge and Aicountly Aspire retired from Manage's registry as Aicountly Academy
+     * courses, CompanyAppRegistry::ACADEMY_COURSE_KEYS).
+     */
     private const MANAGE_CATALOG = [
         'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
         'billing', 'inventory', 'sales', 'purchases', 'insights', 'buddy', 'contacts', 'remote', 'advisor', 'appointments',
-        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice', 'edge',
-        'aspire', 'integrate', 'benefits', 'capital', 'apis', 'community',
+        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice',
+        'integrate', 'benefits', 'capital', 'apis', 'community',
     ];
 
-    public function testMirrorEqualsManagesCatalogueLessTheAcademyCourses(): void
+    public function testMirrorEqualsManagesCatalogue(): void
     {
         // Aicountly Edge and Aicountly Aspire are Aicountly Academy courses, never licensed (owner decision 2026-10-24):
-        // Engage's mirror is Manage's catalogue without them.
-        $licensable = array_values(array_diff(self::MANAGE_CATALOG, ['edge', 'aspire']));
+        // neither Manage's catalogue nor Engage's mirror has them.
+        $licensable = self::MANAGE_CATALOG;
+        $this->assertSame([], array_intersect(['edge', 'aspire'], $licensable));
         $this->assertSame($licensable, ManageAppRegistry::CATALOG_KEYS);
         $all = ManageAppRegistry::all();
         sort($all);
@@ -95,7 +100,7 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         $d = \App\Commands\EntitlementsReconcile::appKeyDrift(['plan_app_keys' => array_merge(array_diff(ManageAppRegistry::PLAN_KEYS, ['crm']), ['rocket'])]);
         $this->assertSame(['Manage accepts rocket but Engage does not (add to ManageAppRegistry::PLAN_KEYS)', 'Engage accepts crm but Manage refuses it (pushes would be 422)'], $d);
         $this->assertSame(['Manage did not list plan_app_keys'], \App\Commands\EntitlementsReconcile::appKeyDrift(null));
-        // Manage still holding plan keys for the Aicountly Academy courses is not drift: Engage never licenses them.
+        // An older Manage still listing plan keys for the Aicountly Academy courses is not drift: Engage never licenses them.
         $this->assertSame([], \App\Commands\EntitlementsReconcile::appKeyDrift(['plan_app_keys' => array_merge(ManageAppRegistry::PLAN_KEYS, ['edge', 'aspire'])]));
     }
 

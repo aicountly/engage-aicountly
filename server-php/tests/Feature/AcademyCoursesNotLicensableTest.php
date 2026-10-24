@@ -169,6 +169,9 @@ final class AcademyCoursesNotLicensableTest extends LicensingTestCase
         $r = $this->asStaff($admin, 'post', 'v1/licences/LIC-900001/revoke', ['version' => 1, 'reason' => 'Aicountly Academy course: not licensed']);
         $this->assertSame(200, $this->code($r), (string) $r->response()->getBody());
         $this->assertSame(0, $this->db()->table('engage_entitlement_outbox')->where('app_key', 'edge')->countAllResults(), 'no push for a course key');
+        // Manage answers 422 unknown_application to an edge / aspire push: the outbox never queues one.
+        $this->assertSame([], (new \App\Services\Licensing\EntitlementOutbox($this->db()))->enqueue(null, 42, ['edge', 'aspire', 'academy', 'EDGE'], 'test', 'LIC-900001', true));
+        $this->assertSame(0, $this->db()->table('engage_entitlement_outbox')->whereIn('app_key', ['academy', 'edge', 'aspire'])->countAllResults());
     }
 
     public function testMigrationRetiresCourseOffersSkipsPushesAndKeepsLicences(): void

@@ -7,16 +7,17 @@ namespace App\Libraries\Licensing;
  * Static mirror of the application keys Manage accepts for a plan / subscription (contract §3.3: an offer's
  * app_keys must be Manage registry keys = the AppCatalogService ids Manage serves at GET /api/apps). Copied from
  * manage-aicountly server-php/src/Services/CompanyAppRegistry.php (APP_KEYS + COMPANY_LEVEL_KEYS + PLAN_ONLY_KEYS +
- * ALIASES) and AppCatalogService.php, read at manage-aicountly f8906b6 (fleet registry, 23 Oct 2026).
- * tests/Unit/ManageAppRegistryTest.php pins CATALOG_KEYS (Manage's 38 catalog ids less edge and aspire = 36, catalog
- * order) and that APP_KEYS + COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS is exactly that list — when Manage adds an
- * application, add it here in the same change.
+ * ALIASES) and AppCatalogService.php, read at manage-aicountly f7f7535 (claude/academy-only, 24 Oct 2026).
+ * tests/Unit/ManageAppRegistryTest.php pins CATALOG_KEYS (the 36 catalog ids, catalog order) and that APP_KEYS +
+ * COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS is exactly that list — when Manage adds an application, add it here in the
+ * same change.
  *
  * Aliases fold a product's own name onto Manage's key: Drive is catalogued as `docs` (so `drive` and `docs` both
  * normalise to `docs`), Connect as `chat`, Pulse as `buddy`, Lobby as `receptionist`, Purchase as `purchases`.
  *
- * Aicountly Edge and Aicountly Aspire are left out on purpose although Manage catalogues them: they are Aicountly
- * Academy courses, never licensed (COURSE_KEYS). The pin test and engage:entitlements-reconcile allow for that.
+ * Aicountly Edge and Aicountly Aspire are not here: they are Aicountly Academy courses, never licensed (COURSE_KEYS;
+ * Manage retired them too, CompanyAppRegistry::ACADEMY_COURSE_KEYS, and answers 422 unknown_application to a push).
+ * engage:entitlements-reconcile ignores them should an older Manage still list them.
  *
  * Manage stores a plan for every key here except `manage` itself (Manage answers 422 unknown_application to a push
  * for app_key manage: max_companies / max_users ride on each application's plan). PLAN_KEYS / planKey() are exactly
@@ -44,8 +45,8 @@ final class ManageAppRegistry
     public const CATALOG_ONLY_KEYS = ['community'];
 
     /**
-     * @var list<string> Manage AppCatalogService ids, in catalog (launcher) order, minus COURSE_KEYS — every product
-     * Engage licenses.
+     * @var list<string> Manage AppCatalogService ids, in catalog (launcher) order — every product Engage licenses
+     * (no COURSE_KEYS).
      */
     public const CATALOG_KEYS = [
         'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
@@ -57,7 +58,7 @@ final class ManageAppRegistry
     /**
      * @var list<string> Aicountly Academy course products (engage_products category Academy; docs/ACADEMY_FEES_RUNBOOK.md):
      * courses Aicountly runs itself, never licensed to companies (owner decision, 2026-10-24). They are not Manage app
-     * keys for Engage even where Manage still catalogues them (edge, aspire): no offer, licence, entitlement code or
+     * keys (Manage retired edge and aspire as well): no offer, licence, entitlement code or
      * entitlement push may name them, and the Manage-facing reads never return them. Leads, fee payments and seller
      * commission use these codes as ordinary products.
      */

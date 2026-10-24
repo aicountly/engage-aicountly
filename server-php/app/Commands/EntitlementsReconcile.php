@@ -118,7 +118,7 @@ class EntitlementsReconcile extends BaseCommand
 
     /**
      * Differences between Manage's plan app keys (GET v1/inbound/engage/app-keys → data.plan_app_keys) and
-     * ManageAppRegistry::PLAN_KEYS. Empty = in step. Course keys Manage still lists (edge, aspire) are not drift:
+     * ManageAppRegistry::PLAN_KEYS. Empty = in step. Course keys an older Manage still lists (edge, aspire) are not drift:
      * Engage never licenses them (ManageAppRegistry::COURSE_KEYS).
      *
      * @return list<string>
@@ -130,7 +130,7 @@ class EntitlementsReconcile extends BaseCommand
             return ['Manage did not list plan_app_keys'];
         }
         $d = [];
-        // Aicountly Academy courses (edge, aspire) are never licensed: Manage may still hold a plan key for them.
+        // Aicountly Academy courses (edge, aspire) are never licensed: an older Manage may still list a plan key for them.
         $theirs = array_values(array_filter($theirs, static fn (string $k): bool => ! ManageAppRegistry::isCourse($k)));
         if (($extra = array_values(array_diff($theirs, ManageAppRegistry::PLAN_KEYS))) !== []) {
             $d[] = 'Manage accepts ' . implode(', ', $extra) . ' but Engage does not (add to ManageAppRegistry::PLAN_KEYS)';
