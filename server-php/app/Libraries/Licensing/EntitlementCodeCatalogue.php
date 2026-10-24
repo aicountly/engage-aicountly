@@ -72,9 +72,8 @@ final class EntitlementCodeCatalogue
         ['code' => 'integrate.max_apps', 'label' => 'Integration Apps', 'unit' => 'count', 'app' => 'integrate', 'enforced_by' => 'product'],
         ['code' => 'benefits.max_open_applications', 'label' => 'Applications in progress', 'unit' => 'count', 'app' => 'benefits', 'enforced_by' => 'product'],
         ['code' => 'capital.max_open_applications', 'label' => 'Open applications', 'unit' => 'count', 'app' => 'capital', 'enforced_by' => 'product'],
-        // Phase 5: Edge and Aspire read their operating organisation's plan (v1/companies/{cmp}/plan, 60 s).
-        ['code' => 'edge.max_active_learners', 'label' => 'Active learners', 'unit' => 'count', 'app' => 'edge', 'enforced_by' => 'product'],
-        ['code' => 'aspire.max_workshops_per_month', 'label' => 'Workshops a month', 'unit' => 'count', 'app' => 'aspire', 'enforced_by' => 'product'],
+        // No codes for Aicountly Edge / Aicountly Aspire: they are Aicountly Academy courses, never licensed
+        // (ManageAppRegistry::COURSE_KEYS; OfferService refuses an entitlement code prefixed with a course key).
     ];
 
     /**

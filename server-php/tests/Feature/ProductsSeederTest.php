@@ -53,7 +53,10 @@ final class ProductsSeederTest extends DatabaseTestCase
             $this->assertSame(1, $db->table('engage_products')->where('code', $legacy)->countAllResults(), "legacy {$legacy} kept");
         }
         $this->assertSame(0, $db->table('engage_offers')->countAllResults(), 'no offers or prices are seeded');
-        $this->assertSame([], array_values(array_filter(array_column($db->table('engage_products')->get()->getResultArray(), 'code'), static fn ($c) => ! in_array($c, [...ManageAppRegistry::CATALOG_KEYS, 'ourpeople', 'flow', 'console', 'other', 'academy'], true) && ! str_starts_with((string) $c, 'test'))),
-            'nothing outside the catalogue, the legacy codes and the Academy umbrella course');
+        $this->assertSame([], array_values(array_filter(array_column($db->table('engage_products')->get()->getResultArray(), 'code'), static fn ($c) => ! in_array($c, [...ManageAppRegistry::CATALOG_KEYS, ...ManageAppRegistry::COURSE_KEYS, 'ourpeople', 'flow', 'console', 'other'], true) && ! str_starts_with((string) $c, 'test'))),
+            'nothing outside the catalogue, the legacy codes and the Aicountly Academy course products');
+        foreach (ManageAppRegistry::COURSE_KEYS as $code) {
+            $this->assertSame('Academy', $db->table('engage_products')->where('code', $code)->get()->getRowArray()['category'] ?? null, "{$code} is a course product");
+        }
     }
 }

@@ -31,11 +31,12 @@ Migration `2026-10-24-000010_AddAcademyProducts` (it runs on deploy with `php sp
 The migration is idempotent. If a row already exists, only its name and category are corrected; its id, sort
 order, description and `is_active` stay as they are.
 
-`edge` and `aspire` are also **Manage registry keys** (Licensing: `ManageAppRegistry`, offers' `app_keys`, entitlement
-codes `edge.max_active_learners` / `aspire.max_workshops_per_month`). It is one product row per code, shared by both
-uses: licensing offers and entitlements keep working on the code, and course leads and fee payments name the same
-code. Only the row's category becomes `Academy` (it was `learning`); nothing in Engage reads the category except the
-revenue filter below. `academy` is a course-only code, not a Manage app key.
+`academy`, `edge` and `aspire` are **course products only, not licensable** (owner decision, 2026-10-24): Aicountly
+Edge and Aicountly Aspire are courses Aicountly runs, never licensed to companies. No offer, licence or entitlement
+code can name them (`ManageAppRegistry::COURSE_KEYS`; docs/LICENSING.md § Aicountly Academy courses), and any
+course offer left from the earlier licensing work was retired by migration `2026-10-24-000020_RetireAcademyCourseLicensing`.
+Only the row's category becomes `Academy` (it was `learning`); besides the revenue filter below, Licensing reads the
+category to refuse offers for a course product.
 
 **Matching.** Every lead intake links a free-text interest to a product by **code or display name**. The match
 ignores case and extra spaces, and a code match wins over a name match (`ProductsModel::resolve`):

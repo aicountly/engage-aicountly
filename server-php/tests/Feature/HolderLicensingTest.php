@@ -594,6 +594,10 @@ final class HolderLicensingTest extends LicensingTestCase
         $this->assertStringContainsString('skip flow: not a Manage app key', $out);
         $this->assertStringContainsString('skip manage: Manage holds no plan for it', $out);
         $this->assertStringNotContainsString('manage-basic', $out);
+        foreach (['academy', 'edge', 'aspire'] as $course) {
+            $this->assertStringContainsString("skip {$course}: Aicountly Academy course product (not licensable)", $out);
+            $this->assertStringNotContainsString("{$course}-basic", $out);
+        }
         $this->assertSame(0, $this->db()->table('engage_offers')->countAllResults());
 
         $this->spark(\App\Commands\BasicOffers::class, ['apply' => null, 'create-type' => null]);
@@ -608,6 +612,7 @@ final class HolderLicensingTest extends LicensingTestCase
         $this->assertSame('{books}', $books['app_keys']);
         $docs = $this->db()->table('engage_offers')->where('product_code', 'docs')->get()->getRowArray();
         $this->assertSame('{docs}', $docs['app_keys']);
+        $this->assertSame(0, $this->db()->table('engage_offers')->whereIn('product_code', ['academy', 'edge', 'aspire'])->countAllResults(), 'no Basic offer for a course');
         $n = count($drafts);
         $this->spark(\App\Commands\BasicOffers::class, ['apply' => null]);
         $this->assertSame($n, $this->db()->table('engage_offers')->countAllResults());

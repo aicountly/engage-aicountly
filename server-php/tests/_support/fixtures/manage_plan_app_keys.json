@@ -6,7 +6,7 @@
     "hrms", "calendar", "appointments", "notes", "docs", "vault", "chat", "crm", "helpdesk",
     "remote", "messaging", "voice", "email", "receptionist",
     "fr", "secretarial", "advisor",
-    "edge", "aspire", "integrate", "apis", "buddy",
+    "integrate", "apis", "buddy",
     "auditor", "community"
   ],
   "no_plan": ["manage"],

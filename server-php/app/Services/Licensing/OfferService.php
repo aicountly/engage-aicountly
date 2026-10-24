@@ -131,7 +131,8 @@ class OfferService
     {
         return $this->db()->query(self::SELECT . " WHERE o.status = 'published' AND t.active
             AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW())
-            ORDER BY o.product_code, o.offer_code")->getResultArray();
+            AND " . self::notCourseSql('o') . '
+            ORDER BY o.product_code, o.offer_code')->getResultArray();
     }
 
     /** True when a published offer row is on sale right now. */
@@ -140,6 +141,8 @@ class OfferService
         $now = time();
 
         return $o['status'] === 'published'
+            && ! ManageAppRegistry::isCourse((string) ($o['product_code'] ?? ''))
+            && ManageAppRegistry::courseKeysIn(S::fromJsonArray($o['app_keys_json'] ?? '[]')) === []
             && ($o['valid_from'] === null || strtotime((string) $o['valid_from']) <= $now)
             && ($o['valid_to'] === null || strtotime((string) $o['valid_to']) > $now);
     }
@@ -162,8 +165,11 @@ class OfferService
         }
         if ($has('product_code')) {
             $pc = trim((string) ($in['product_code'] ?? ''));
-            if ($pc === '' || $this->db()->table('engage_products')->where('code', $pc)->countAllResults() === 0) {
+            $prod = $pc === '' ? null : $this->db()->table('engage_products')->select('name, category')->where('code', $pc)->get()->getRowArray();
+            if (! $prod) {
                 $e['product_code'] = 'Choose a product from the Products catalogue.';
+            } elseif (self::isCourseProduct($pc, $prod['category'] ?? null)) {
+                $e['product_code'] = ($prod['name'] ?: $pc) . ' is an Aicountly Academy course, not a licensable product: no offer can be made for it.';
             }
             $f['product_code'] = $pc;
         }
@@ -273,6 +279,9 @@ class OfferService
                     $e['app_keys'] = 'Each app key: 2–48 lowercase letters, digits, - or _.';
                 }
             }
+            if (($course = ManageAppRegistry::courseKeysIn($keys)) !== [] && ! isset($e['product_code'])) {
+                $e['app_keys'] = implode(', ', $course) . ': Aicountly Academy course(s), not licensable — remove from app_keys.';
+            }
             $f['app_keys'] = $keys;
         }
         if (array_key_exists('is_default', $in)) {
@@ -355,6 +364,9 @@ class OfferService
             $unit = $x['unit'] ?? null;
             if (! preg_match('/\A[a-z0-9][a-z0-9_.\-]{0,63}\z/', $code)) {
                 return [[], "entitlements[{$i}].code: 1–64 lowercase letters, digits, . - or _."];
+            }
+            if (str_contains($code, '.') && ManageAppRegistry::isCourse(explode('.', $code)[0])) {
+                return [[], "entitlements[{$i}].code {$code}: " . explode('.', $code)[0] . ' is an Aicountly Academy course, not licensable.'];
             }
             if (isset($codes[$code])) {
                 return [[], "entitlements[{$i}].code {$code} is repeated."];
@@ -458,6 +470,9 @@ class OfferService
         if ($draft) {
             return ['status' => 409, 'error' => "Offer {$o['offer_code']} already has a draft (v{$draft->version}). Edit that one."];
         }
+        if (($ce = $this->courseProblem($o)) !== null) {
+            return ['status' => 422, 'code' => 'course_not_licensable', 'error' => $ce, 'details' => ['product_code' => $ce]];
+        }
         $max = (int) $this->db()->query('SELECT MAX(version) AS v FROM engage_offers WHERE offer_code = ?', [$o['offer_code']])->getRow()->v;
         $copy = [];
         foreach (['offer_code', 'product_code', 'licence_type_code', 'plan_code', 'label', 'description', 'price_paise', 'currency', 'price_basis',
@@ -496,6 +511,9 @@ class OfferService
         }
         if (S::fromJsonArray($o['app_keys_json']) === []) {
             return ['status' => 422, 'error' => 'Name at least one app this offer licenses.', 'details' => ['app_keys' => 'Required.']];
+        }
+        if (($ce = $this->courseProblem($o)) !== null) {
+            return ['status' => 422, 'code' => 'course_not_licensable', 'error' => $ce, 'details' => ['product_code' => $ce]];
         }
         [, $refused] = ManageAppRegistry::planKeyList(S::fromJsonArray($o['app_keys_json']));
         $noPlan = array_values(array_filter($refused, static fn ($k) => ManageAppRegistry::normalize((string) $k) !== null));
@@ -606,6 +624,38 @@ class OfferService
         return null;
     }
 
+    /**
+     * Aicountly Academy course products (Aicountly Edge, Aicountly Aspire, the `academy` umbrella; any product of
+     * category Academy) are courses Aicountly runs, never licensed: no offer, licence or entitlement names them.
+     */
+    public static function isCourseProduct(string $productCode, ?string $category = null): bool
+    {
+        return ManageAppRegistry::isCourse($productCode) || strcasecmp(trim((string) $category), 'Academy') === 0;
+    }
+
+    /** SQL: offer alias $a is not for a course product and names no course app key (constants only). */
+    public static function notCourseSql(string $a): string
+    {
+        $list = ManageAppRegistry::courseKeysSql();
+
+        return "({$a}.product_code NOT IN ({$list}) AND NOT ({$a}.app_keys && ARRAY[{$list}]::text[])
+            AND NOT EXISTS (SELECT 1 FROM engage_products cp WHERE cp.code = {$a}.product_code AND LOWER(cp.category) = 'academy'))";
+    }
+
+    /** Why $o (an offer row) cannot be published / versioned as a course offer, or null. */
+    private function courseProblem(array $o): ?string
+    {
+        $cat = $this->db()->query('SELECT category FROM engage_products WHERE code = ?', [(string) $o['product_code']])->getRow()->category ?? null;
+        if (self::isCourseProduct((string) $o['product_code'], $cat)) {
+            return "{$o['product_code']} is an Aicountly Academy course, not a licensable product: no offer can be published for it.";
+        }
+        if (($course = ManageAppRegistry::courseKeysIn(S::fromJsonArray($o['app_keys_json'] ?? '[]'))) !== []) {
+            return implode(', ', $course) . ': Aicountly Academy course(s), not licensable — remove from app_keys.';
+        }
+
+        return null;
+    }
+
     /** A SAC Finance accepts on an invoice line: 99 followed by 4 digits. */
     public static function financeSac(string $sac): bool
     {
@@ -616,14 +666,15 @@ class OfferService
     public function defaultFor(string $productCode): ?array
     {
         return $this->db()->query(self::SELECT . " WHERE o.product_code = ? AND o.is_default AND o.status = 'published' AND t.active
-            AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW())", [$productCode])->getRowArray() ?: null;
+            AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW()) AND " . self::notCourseSql('o'), [$productCode])->getRowArray() ?: null;
     }
 
     /** Every product's published default offer on sale. @return list<array<string,mixed>> */
     public function defaultOffers(): array
     {
         return $this->db()->query(self::SELECT . " WHERE o.is_default AND o.status = 'published' AND t.active
-            AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW()) ORDER BY o.product_code")->getResultArray();
+            AND (o.valid_from IS NULL OR o.valid_from <= NOW()) AND (o.valid_to IS NULL OR o.valid_to > NOW()) AND " . self::notCourseSql('o') . '
+            ORDER BY o.product_code')->getResultArray();
     }
 
     /** Immutable copy kept on a licence (what was sold, even if labels change later). */

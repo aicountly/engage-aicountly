@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Services\Licensing;
 
 use App\Libraries\Licensing\LicensingSupport as S;
+use App\Libraries\Licensing\ManageAppRegistry;
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
 use Config\Services;
@@ -60,6 +61,19 @@ class LicenceService
         'invoice'   => self::STATUSES,
         'change-offer' => ['issued', 'active', 'suspended'],
     ];
+
+    /**
+     * Actions refused on a licence of an Aicountly Academy course (ManageAppRegistry::COURSE_KEYS): courses are never
+     * licensed, so such a licence (issued before 2026-10-24) can only be wound down — suspend, revoke or expire.
+     */
+    public const COURSE_BLOCKED = ['activate', 'renew', 'extend', 'change-offer'];
+
+    /** True when an offer or licence row is for a course product or names a course app key. */
+    public static function coversCourse(array $row): bool
+    {
+        return ManageAppRegistry::isCourse((string) ($row['product_code'] ?? ''))
+            || ManageAppRegistry::courseKeysIn(S::fromJsonArray($row['app_keys_json'] ?? '[]')) !== [];
+    }
 
     public const STATUS_LABELS = [
         'issued'    => ['label' => 'Issued', 'tone' => 'info'],
@@ -344,6 +358,9 @@ class LicenceService
         $offer = isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
             ? $offers->findVersion($code, (int) $in['offer_version'])
             : $offers->publishedVersion($code);
+        if ($offer && self::coversCourse($offer)) {
+            return self::invalid(['offer_code' => 'That offer is for an Aicountly Academy course (' . $offer['product_code'] . '): courses are not licensed.']);
+        }
         if (! $offer || ! OfferService::isOnSale($offer)) {
             return self::invalid(['offer_code' => 'That offer version is not published and on sale.']);
         }
@@ -909,6 +926,11 @@ class LicenceService
                 $db->transRollback();
 
                 return ['status' => 409, 'code' => 'invalid_transition', 'error' => "A licence that is {$l['status']} cannot be changed this way ({$action})."];
+            }
+            if (in_array($action, self::COURSE_BLOCKED, true) && self::coversCourse($l)) {
+                $db->transRollback();
+
+                return ['status' => 409, 'code' => 'course_not_licensable', 'error' => "Licence {$l['licence_ref']} is for an Aicountly Academy course ({$l['product_code']}): courses are not licensed, so it cannot be activated, renewed, extended or moved to another offer. Suspend, revoke or let it expire."];
             }
             $out = $fn($l);
             if (isset($out['status']) && is_int($out['status'])) {

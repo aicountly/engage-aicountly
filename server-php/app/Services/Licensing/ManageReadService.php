@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Services\Licensing;
 
 use App\Libraries\Licensing\LicensingSupport as S;
+use App\Libraries\Licensing\ManageAppRegistry;
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
 
@@ -11,6 +12,10 @@ use Config\Database;
  * Read model behind the Manage-facing API (commerce contract v1 §4). Every company-scoped query is filtered by
  * cmp_id: another company's licence is answered exactly like a missing one, a company without licences gets an
  * empty list. Lists use the §0.3 cursor (timestamp DESC, id DESC); there are no totals.
+ *
+ * Aicountly Academy courses (ManageAppRegistry::COURSE_KEYS: academy, edge, aspire) are never licensed: a licence of
+ * one (issued before 2026-10-24) is answered like a missing one, its events are left out of the activity feed, and
+ * no course offer appears in the catalogue.
  */
 class ManageReadService
 {
@@ -30,7 +35,7 @@ class ManageReadService
      */
     public function licences(int $cmpId, array $filters, int $limit, ?array $cursor): array
     {
-        $where = ['l.cmp_id = ?'];
+        $where = ['l.cmp_id = ?', self::notCourseLicenceSql('l')];
         $binds = [$cmpId];
         if (! empty($filters['status'])) {
             // Filter on the status Manage is shown (a live licence past its end reads "expired").
@@ -68,7 +73,7 @@ class ManageReadService
     {
         $l = (new LicenceService($this->db()))->findForCompany($cmpId, $ref);
 
-        return $l ? LicenceService::contractView($l) : null;
+        return $l && ! LicenceService::coversCourse($l) ? LicenceService::contractView($l) : null;
     }
 
     /** @return array<string,mixed>|null */
@@ -76,7 +81,7 @@ class ManageReadService
     {
         $svc = new LicenceService($this->db());
         $l = $svc->findForCompany($cmpId, $ref);
-        if (! $l) {
+        if (! $l || LicenceService::coversCourse($l)) {
             return null;
         }
 
@@ -91,7 +96,7 @@ class ManageReadService
     /** @return array{items: list<array<string,mixed>>, next_cursor: ?string} */
     public function activity(int $cmpId, int $limit, ?array $cursor, ?string $licenceRef = null): array
     {
-        $where = ['e.cmp_id = ?'];
+        $where = ['e.cmp_id = ?', 'NOT EXISTS (SELECT 1 FROM engage_licences cl WHERE cl.id = e.licence_id AND NOT ' . self::notCourseLicenceSql('cl') . ')'];
         $binds = [$cmpId];
         if ($licenceRef !== null) {
             $where[] = 'e.licence_ref = ?';
@@ -150,7 +155,7 @@ class ManageReadService
                 'valid_from'   => $v['valid_from'],
                 'valid_to'     => $v['valid_to'],
             ];
-        }, (new OfferService($this->db()))->onSale());
+        }, array_values(array_filter((new OfferService($this->db()))->onSale(), static fn (array $o): bool => ! LicenceService::coversCourse($o))));
     }
 
     /** @return list<array<string,mixed>> */
@@ -163,6 +168,14 @@ class ManageReadService
             'lifecycle_kind' => $t['lifecycle_kind'],
             'display_schema' => $t['display_schema'],
         ], (new LicenceTypeService($this->db()))->list(true));
+    }
+
+    /** SQL: licence alias $a is not for a course product and names no course app key (constants only). */
+    private static function notCourseLicenceSql(string $a): string
+    {
+        $list = ManageAppRegistry::courseKeysSql();
+
+        return "({$a}.product_code NOT IN ({$list}) AND NOT ({$a}.app_keys && ARRAY[{$list}]::text[]))";
     }
 
     /** @return array{items: list<array<string,mixed>>, next_cursor: ?string} */

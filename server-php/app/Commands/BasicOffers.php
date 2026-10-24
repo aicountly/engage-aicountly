@@ -4,6 +4,7 @@ namespace App\Commands;
 
 use App\Libraries\Licensing\ManageAppRegistry;
 use App\Libraries\Licensing\CommandOptions;
+use App\Services\Licensing\OfferService;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use Config\Database;
@@ -13,7 +14,8 @@ use Config\Services;
  * `php spark engage:basic-offers --dry-run | --apply [--licence-type=<code>] [--create-type]` (contract §3.1).
  *
  * For every product whose code Manage knows (ManageAppRegistry; others such as `flow`, `console`, `other` are listed
- * as skipped) and that has NO default offer yet (draft or published), creates a DRAFT "Basic" offer:
+ * as skipped; Aicountly Academy course products — academy, edge, aspire, any category Academy — are skipped as not
+ * licensable) and that has NO default offer yet (draft or published), creates a DRAFT "Basic" offer:
  * offer_code <product>-basic, price 0, no term end, no seat limit, app_keys [Manage key], is_default, entitlements
  * EMPTY. Nothing is published: staff fill in the Basic limits (Licensing → Offers → the draft → entitlements),
  * review and Publish. Idempotent — a product that already has a default offer, or an offer code <product>-basic,
@@ -74,7 +76,12 @@ class BasicOffers extends BaseCommand
         }
 
         $created = 0;
-        foreach ($db->query('SELECT code, name FROM engage_products ORDER BY code')->getResultArray() as $p) {
+        foreach ($db->query('SELECT code, name, category FROM engage_products ORDER BY code')->getResultArray() as $p) {
+            if (OfferService::isCourseProduct($p['code'], $p['category'] ?? null)) {
+                CLI::write("  skip {$p['code']}: Aicountly Academy course product (not licensable)");
+
+                continue;
+            }
             $app = ManageAppRegistry::planKey($p['code']);
             if ($app === null) {
                 CLI::write(ManageAppRegistry::normalize($p['code']) !== null

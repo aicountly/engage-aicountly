@@ -47,8 +47,9 @@ class ProductsSeeder extends Seeder
             ['code' => 'email',        'name' => 'Aicountly Email',        'category' => 'communication'],
             ['code' => 'messaging',    'name' => 'Aicountly Messaging',    'category' => 'communication'],
             ['code' => 'voice',        'name' => 'Aicountly Voice',        'category' => 'communication'],
-            // Edge and Aspire are Manage registry keys and also Aicountly Academy courses (leads, fee payments, seller
-            // commission): one row each, category Academy (migration 2026-10-24-000010_AddAcademyProducts).
+            // Aicountly Edge and Aicountly Aspire are Aicountly Academy courses (leads, fee payments, seller commission),
+            // never licensed: course products only, not Manage app keys for Engage (ManageAppRegistry::COURSE_KEYS).
+            // One row each, category Academy (migration 2026-10-24-000010_AddAcademyProducts).
             ['code' => 'edge',         'name' => 'Aicountly Edge',         'category' => 'Academy'],
             ['code' => 'aspire',       'name' => 'Aicountly Aspire',       'category' => 'Academy'],
             ['code' => 'integrate',    'name' => 'Aicountly Integrate',    'category' => 'developer'],
