@@ -7,13 +7,17 @@ namespace App\Libraries\Licensing;
  * Static mirror of the application keys Manage accepts for a plan / subscription (contract §3.3: an offer's
  * app_keys must be Manage registry keys = the AppCatalogService ids Manage serves at GET /api/apps). Copied from
  * manage-aicountly server-php/src/Services/CompanyAppRegistry.php (APP_KEYS + COMPANY_LEVEL_KEYS + PLAN_ONLY_KEYS +
- * ALIASES) and AppCatalogService.php, read at manage-aicountly f8906b6 (fleet registry, 23 Oct 2026).
- * tests/Unit/ManageAppRegistryTest.php pins CATALOG_KEYS (the 38 catalog ids, catalog order) and that APP_KEYS +
+ * ALIASES) and AppCatalogService.php, read at manage-aicountly f7f7535 (claude/academy-only, 24 Oct 2026).
+ * tests/Unit/ManageAppRegistryTest.php pins CATALOG_KEYS (the 36 catalog ids, catalog order) and that APP_KEYS +
  * COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS is exactly that list — when Manage adds an application, add it here in the
  * same change.
  *
  * Aliases fold a product's own name onto Manage's key: Drive is catalogued as `docs` (so `drive` and `docs` both
  * normalise to `docs`), Connect as `chat`, Pulse as `buddy`, Lobby as `receptionist`, Purchase as `purchases`.
+ *
+ * Aicountly Edge and Aicountly Aspire are not here: they are Aicountly Academy courses, never licensed (COURSE_KEYS;
+ * Manage retired them too, CompanyAppRegistry::ACADEMY_COURSE_KEYS, and answers 422 unknown_application to a push).
+ * engage:entitlements-reconcile ignores them should an older Manage still list them.
  *
  * Manage stores a plan for every key here except `manage` itself (Manage answers 422 unknown_application to a push
  * for app_key manage: max_companies / max_users ride on each application's plan). PLAN_KEYS / planKey() are exactly
@@ -31,7 +35,7 @@ final class ManageAppRegistry
         'hrms', 'calendar', 'appointments', 'notes', 'docs', 'vault', 'chat', 'crm', 'helpdesk',
         'remote', 'messaging', 'voice', 'email', 'receptionist',
         'fr', 'secretarial', 'advisor',
-        'edge', 'aspire', 'integrate', 'apis', 'buddy',
+        'integrate', 'apis', 'buddy',
     ];
 
     /** @var list<string> Manage CompanyAppRegistry::COMPANY_LEVEL_KEYS. */
@@ -40,13 +44,25 @@ final class ManageAppRegistry
     /** @var list<string> Catalogued at GET /api/apps with no company (Manage CompanyAppRegistry::PLAN_ONLY_KEYS). */
     public const CATALOG_ONLY_KEYS = ['community'];
 
-    /** @var list<string> Manage AppCatalogService ids, in catalog (launcher) order — every product Engage licenses. */
+    /**
+     * @var list<string> Manage AppCatalogService ids, in catalog (launcher) order — every product Engage licenses
+     * (no COURSE_KEYS).
+     */
     public const CATALOG_KEYS = [
         'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
         'billing', 'inventory', 'sales', 'purchases', 'insights', 'buddy', 'contacts', 'remote', 'advisor', 'appointments',
-        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice', 'edge',
-        'aspire', 'integrate', 'benefits', 'capital', 'apis', 'community',
+        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice',
+        'integrate', 'benefits', 'capital', 'apis', 'community',
     ];
+
+    /**
+     * @var list<string> Aicountly Academy course products (engage_products category Academy; docs/ACADEMY_FEES_RUNBOOK.md):
+     * courses Aicountly runs itself, never licensed to companies (owner decision, 2026-10-24). They are not Manage app
+     * keys (Manage retired edge and aspire as well): no offer, licence, entitlement code or
+     * entitlement push may name them, and the Manage-facing reads never return them. Leads, fee payments and seller
+     * commission use these codes as ordinary products.
+     */
+    public const COURSE_KEYS = ['academy', 'edge', 'aspire'];
 
     /**
      * @var list<string> Keys Manage holds a plan for (CompanyAppRegistry::hasPlan): APP_KEYS + PLAN_ONLY_KEYS
@@ -58,7 +74,7 @@ final class ManageAppRegistry
         'hrms', 'calendar', 'appointments', 'notes', 'docs', 'vault', 'chat', 'crm', 'helpdesk',
         'remote', 'messaging', 'voice', 'email', 'receptionist',
         'fr', 'secretarial', 'advisor',
-        'edge', 'aspire', 'integrate', 'apis', 'buddy',
+        'integrate', 'apis', 'buddy',
         'auditor', 'community',
     ];
 
@@ -74,7 +90,38 @@ final class ManageAppRegistry
         'ourpeople'   => 'hrms',
     ];
 
-    /** Manage's key for $key, or null when Manage knows no such application. */
+    /** True for an Aicountly Academy course product code (COURSE_KEYS): never licensable. */
+    public static function isCourse(?string $key): bool
+    {
+        return in_array(strtolower(trim((string) $key)), self::COURSE_KEYS, true);
+    }
+
+    /**
+     * The course keys among $keys (lower-cased, de-duplicated, order kept).
+     *
+     * @param list<string> $keys
+     * @return list<string>
+     */
+    public static function courseKeysIn(array $keys): array
+    {
+        $out = [];
+        foreach ($keys as $k) {
+            $k = strtolower(trim((string) $k));
+            if (self::isCourse($k) && ! in_array($k, $out, true)) {
+                $out[] = $k;
+            }
+        }
+
+        return $out;
+    }
+
+    /** SQL list literal of COURSE_KEYS for a NOT IN / IN clause (constants only, no user input). */
+    public static function courseKeysSql(): string
+    {
+        return "'" . implode("','", self::COURSE_KEYS) . "'";
+    }
+
+    /** Manage's key for $key, or null when Manage knows no such application (or Engage does not license it). */
     public static function normalize(?string $key): ?string
     {
         $key = strtolower(trim((string) $key));

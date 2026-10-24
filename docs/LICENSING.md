@@ -82,7 +82,8 @@ The catalogue Manage sees = published versions whose licence type is active and 
 (`valid_from ≤ now < valid_to`, either may be empty).
 
 `php spark engage:basic-offers --dry-run | --apply [--licence-type=<code>] [--create-type]` creates, for every
-product whose code Manage knows and that has no default offer yet, a **draft** `<product>-basic` offer (price 0, no
+product whose code Manage knows (Aicountly Academy course products are skipped) and that has no default offer yet, a
+**draft** `<product>-basic` offer (price 0, no
 end, no seat limit, `is_default`, **no entitlements**). It never publishes: staff set the Basic limits
 (entitlements, §6.2 conventions) and publish. Idempotent.
 
@@ -158,13 +159,13 @@ write roles), `entitlement-codes` (read-only, below). Answers use Engage's usual
 `{ok:false, error, code?, details?}`.
 
 **Products and entitlement codes (fleet alignment, 2026-10).** `ProductsSeeder` (run by every deploy) carries every
-application in Manage's catalogue as a product, code = Manage registry key (`ManageAppRegistry::CATALOG_KEYS`, 38 keys:
+application Engage licenses as a product, code = Manage registry key (`ManageAppRegistry::CATALOG_KEYS`, 36 keys:
 manage, books, hrms, auditor, fr, secretarial, vault, chat, calendar, docs, notes, pos, billing, inventory, sales,
 purchases, insights, buddy, contacts, remote, advisor, appointments, contracts, pay, crm, helpdesk, receptionist,
-valuations, email, messaging, voice, edge, aspire, integrate, benefits, capital, apis, community) — idempotent, no price,
-no offer; existing rows and the legacy codes (ourpeople, flow, console, other) are never touched. `edge` and `aspire` are
-also Aicountly Academy course products (category `Academy`, one row each; docs/ACADEMY_FEES_RUNBOOK.md), and `academy`
-is a course-only product that is not a Manage key (offers cannot name it as an app key). Offers' `app_keys` are
+valuations, email, messaging, voice, integrate, benefits, capital, apis, community) — idempotent, no price,
+no offer; existing rows and the legacy codes (ourpeople, flow, console, other) are never touched. `academy`, `edge`
+(Aicountly Edge) and `aspire` (Aicountly Aspire) are **course products only, not licensable** (§ Aicountly Academy
+courses below). Offers' `app_keys` are
 validated against the same mirror (drive → docs, pulse → buddy, lobby → receptionist, connect → chat). Manage
 stores no plan for `app_key: manage` (its push answers 422), so publishing an offer that names `manage` is refused and
 `engage:basic-offers` skips the `manage` product (see §6.1).
@@ -173,7 +174,42 @@ stores no plan for `app_key: manage` (its push answers 422), so publishing an of
 own codes from its fleet role file — e.g. `sales.max_orders_per_month`, `pos.max_terminals`, `drive.storage_mb`);
 `?app=` narrows to Manage's codes plus those apps'. Licensing → Offers → Entitlements offers them as autocomplete
 (narrowed to the offer's app keys, "show codes of every app" to widen); a code the list does not know is still
-accepted as typed (`free_text_allowed: true`), so a product can add a limit before this list knows it.
+accepted as typed (`free_text_allowed: true`), so a product can add a limit before this list knows it — except a code
+prefixed with a course key (`edge.…`, `aspire.…`, `academy.…`), which is refused.
+
+**Aicountly Academy courses (owner decision, 2026-10-24).** Aicountly Edge and Aicountly Aspire are courses Aicountly
+runs itself; they are never licensed to companies. Their `engage_products` rows (`academy`, `edge`, `aspire`, category
+`Academy`) are course products only — leads, fee payments, seller commission and the revenue view use them
+(docs/ACADEMY_FEES_RUNBOOK.md) — and are not licensable. `ManageAppRegistry::COURSE_KEYS` lists them; none is in
+`CATALOG_KEYS` / `PLAN_KEYS` (Manage retired `edge` and `aspire` from its registry too —
+`CompanyAppRegistry::ACADEMY_COURSE_KEYS`, a push for them answers 422 `unknown_application`, and Manage's migration
+025 revokes its copies of Engage licences for them), and `EntitlementCodeCatalogue` has no code for them. Consequently:
+
+- an offer cannot be created, versioned or published for a course product (any product of category `Academy`) or with
+  a course key in `app_keys` (422 `course_not_licensable` at publish / new version, a field error on the draft);
+- `engage:basic-offers` skips them ("Aicountly Academy course product (not licensable)");
+- no licence can be issued from such an offer; a course licence issued before the decision cannot be activated,
+  renewed, extended or moved to another offer (409 `course_not_licensable`) — staff may suspend, revoke or let it
+  expire (there is no "non-renewing" status, so the licence row itself is left as it is);
+- the entitlement outbox never queues a push for them (pending ones were skipped by the migration below), and
+  `engage:entitlements-reconcile` does not count an older Manage still listing `edge` / `aspire` as drift;
+- the Manage read API (§5) never returns a course licence (404 like a missing one), its seats or events, or a course
+  offer in `catalogue`.
+
+Migration `2026-10-24-000020_RetireAcademyCourseLicensing` retired any draft / published course offer (and any
+published offer naming a course key; a draft of another product only lost the course keys), skipped pending
+entitlement pushes for them, and logged — without changing — any licence already issued for a course. To list
+those licences for the owner:
+
+```sql
+SELECT licence_ref, product_code, status, cmp_id, holder_uuid, account_id, offer_code, offer_version, starts_at, ends_at
+  FROM engage_licences
+ WHERE product_code IN ('academy','edge','aspire') OR app_keys && ARRAY['academy','edge','aspire']::text[]
+ ORDER BY id;
+-- and the offers the migration retired:
+SELECT id, offer_code, version, product_code, status, retired_at FROM engage_offers
+ WHERE product_code IN ('academy','edge','aspire') OR app_keys && ARRAY['academy','edge','aspire']::text[] ORDER BY id;
+```
 
 ## 5. Manage read API (contract §4)
 
@@ -195,6 +231,9 @@ issued_at, updated_at, version}`. `status.tone` ∈ success | info | warning | d
 
 - **Scope:** every company query is filtered by `cmp_id`. Another company's licence answers exactly like a missing
   one (**404 `not_found`**); a company with no licences gets **an empty list**, never 404.
+- **Aicountly Academy courses:** a licence of a course product (`academy`, `edge`, `aspire`) is never returned — the
+  list leaves it out, its detail and seats answer 404 `not_found`, its events are not in `activity` — and no course
+  offer is in `catalogue` (§4, Aicountly Academy courses).
 - **Not exposed to Manage:** internal reasons, staff names (actor shows "Aicountly team"), notes, account, price
   snapshot, `order_ref`.
 - **Envelope (§0.2):** `{"success":true,"data":…,"page":{"next_cursor":…,"limit":25},"request_id":"…"}` (`page` on
@@ -282,7 +321,9 @@ application, add it to the mirror in the same change.
 Publishing, `engage:basic-offers` and the entitlement outbox accept exactly the keys **Manage holds a plan for**:
 `ManageAppRegistry::PLAN_KEYS` / `planKey()` — every catalogued key except `manage` (Manage's `max_companies` /
 `max_users` ride on each application's plan). An offer naming `manage` is refused at publish ("Manage holds no plan for:
-manage"), and the outbox never queues a push Manage would refuse. The list is pinned in both repositories to the same file,
+manage"), and the outbox never queues a push Manage would refuse. `edge` and `aspire` are in neither copy: they are
+Aicountly Academy courses, never licensed (§4); reconcile ignores them should an older Manage still list them. The
+list is pinned in both repositories to the same file,
 `server-php/tests/_support/fixtures/manage_plan_app_keys.json` here and `server-php/tests/fixtures/manage_plan_app_keys.json`
 in manage-aicountly (byte-identical; `ManageAppRegistryTest` and Manage's `plan_app_keys_contract_test` pin each side to
 it). `engage:entitlements-reconcile` also reads Manage's live list (`GET v1/inbound/engage/app-keys`, read key) and prints

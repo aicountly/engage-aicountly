@@ -15,27 +15,65 @@ use CodeIgniter\Test\CIUnitTestCase;
  */
 final class ManageAppRegistryTest extends CIUnitTestCase
 {
-    /** manage-aicountly server-php/src/Services/AppCatalogService.php ids, catalog order (GET /api/apps) @ f8906b6. */
+    /**
+     * manage-aicountly server-php/src/Services/AppCatalogService.php ids, catalog order (GET /api/apps) @ f7f7535
+     * (claude/academy-only: Aicountly Edge and Aicountly Aspire retired from Manage's registry as Aicountly Academy
+     * courses, CompanyAppRegistry::ACADEMY_COURSE_KEYS).
+     */
     private const MANAGE_CATALOG = [
         'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
         'billing', 'inventory', 'sales', 'purchases', 'insights', 'buddy', 'contacts', 'remote', 'advisor', 'appointments',
-        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice', 'edge',
-        'aspire', 'integrate', 'benefits', 'capital', 'apis', 'community',
+        'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice',
+        'integrate', 'benefits', 'capital', 'apis', 'community',
     ];
 
     public function testMirrorEqualsManagesCatalogue(): void
     {
-        $this->assertSame(self::MANAGE_CATALOG, ManageAppRegistry::CATALOG_KEYS);
+        // Aicountly Edge and Aicountly Aspire are Aicountly Academy courses, never licensed (owner decision 2026-10-24):
+        // neither Manage's catalogue nor Engage's mirror has them.
+        $licensable = self::MANAGE_CATALOG;
+        $this->assertSame([], array_intersect(['edge', 'aspire'], $licensable));
+        $this->assertSame($licensable, ManageAppRegistry::CATALOG_KEYS);
         $all = ManageAppRegistry::all();
         sort($all);
-        $want = self::MANAGE_CATALOG;
+        $want = $licensable;
         sort($want);
-        $this->assertSame($want, $all, 'APP_KEYS + COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS = the catalog, nothing more or less');
-        $this->assertCount(38, array_unique($all));
-        foreach (self::MANAGE_CATALOG as $k) {
+        $this->assertSame($want, $all, 'APP_KEYS + COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS = the licensable catalog, nothing more or less');
+        $this->assertCount(36, array_unique($all));
+        foreach ($licensable as $k) {
             $this->assertSame($k, ManageAppRegistry::normalize($k), $k);
             $this->assertSame($k, ManageAppRegistry::normalize(strtoupper($k)), $k);
         }
+    }
+
+    public function testAcademyCoursesAreNotLicensable(): void
+    {
+        $this->assertSame(['academy', 'edge', 'aspire'], ManageAppRegistry::COURSE_KEYS);
+        foreach (['academy', 'edge', 'aspire', 'EDGE', ' Aspire '] as $k) {
+            $this->assertTrue(ManageAppRegistry::isCourse($k), $k);
+            $this->assertNull(ManageAppRegistry::normalize($k), $k);
+            $this->assertNull(ManageAppRegistry::planKey($k), $k);
+        }
+        foreach (ManageAppRegistry::COURSE_KEYS as $k) {
+            $this->assertNotContains($k, ManageAppRegistry::all());
+            $this->assertNotContains($k, ManageAppRegistry::PLAN_KEYS);
+            $this->assertNotContains($k, ManageAppRegistry::CATALOG_KEYS);
+        }
+        $this->assertFalse(ManageAppRegistry::isCourse('books'));
+        $this->assertSame(['edge', 'aspire'], ManageAppRegistry::courseKeysIn(['books', 'EDGE', 'aspire', 'edge']));
+        $this->assertSame([['books'], ['edge', 'aspire']], ManageAppRegistry::planKeyList(['books', 'edge', 'aspire']));
+        foreach (EntitlementCodeCatalogue::CODES as $c) {
+            $this->assertFalse(ManageAppRegistry::isCourse((string) $c['app']), $c['code']);
+            $this->assertFalse(ManageAppRegistry::isCourse(explode('.', $c['code'])[0]), $c['code']);
+        }
+        $this->assertSame(['max_companies', 'max_users'], array_column(EntitlementCodeCatalogue::all(['edge', 'aspire']), 'code'), 'no course codes');
+        [, $err] = \App\Services\Licensing\OfferService::normaliseEntitlements([['code' => 'edge.max_active_learners', 'label' => 'Active learners', 'value' => 10]]);
+        $this->assertStringContainsString('Aicountly Academy course', (string) $err);
+        [, $err] = \App\Services\Licensing\OfferService::normaliseEntitlements([['code' => 'aspire.max_workshops_per_month', 'label' => 'Workshops', 'value' => 2]]);
+        $this->assertStringContainsString('Aicountly Academy course', (string) $err);
+        [$ok, $err] = \App\Services\Licensing\OfferService::normaliseEntitlements([['code' => 'edges', 'label' => 'Not a course prefix', 'value' => 1]]);
+        $this->assertNull($err);
+        $this->assertSame('edges', $ok[0]['code']);
     }
 
     public function testPlanKeysAreExactlyWhatManageAccepts(): void
@@ -62,6 +100,8 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         $d = \App\Commands\EntitlementsReconcile::appKeyDrift(['plan_app_keys' => array_merge(array_diff(ManageAppRegistry::PLAN_KEYS, ['crm']), ['rocket'])]);
         $this->assertSame(['Manage accepts rocket but Engage does not (add to ManageAppRegistry::PLAN_KEYS)', 'Engage accepts crm but Manage refuses it (pushes would be 422)'], $d);
         $this->assertSame(['Manage did not list plan_app_keys'], \App\Commands\EntitlementsReconcile::appKeyDrift(null));
+        // An older Manage still listing plan keys for the Aicountly Academy courses is not drift: Engage never licenses them.
+        $this->assertSame([], \App\Commands\EntitlementsReconcile::appKeyDrift(['plan_app_keys' => array_merge(ManageAppRegistry::PLAN_KEYS, ['edge', 'aspire'])]));
     }
 
     public function testAliasesFoldOntoManageKeys(): void
@@ -109,12 +149,14 @@ final class ManageAppRegistryTest extends CIUnitTestCase
             // Books, Inventory, Billing, Drive, Notes (enforced on main before the role files).
             'books.max_branches', 'books.max_vouchers_per_month', 'inventory.max_warehouses', 'inventory.max_items',
             'billing.max_bills_per_month', 'drive.storage_mb', 'notes.max_notes',
-            // Phase 5: Edge and Aspire.
-            'edge.max_active_learners', 'aspire.max_workshops_per_month',
         ] as $code) {
             $this->assertTrue(EntitlementCodeCatalogue::isKnown($code), $code);
         }
-        $this->assertCount(50, $codes);
+        // Aicountly Edge / Aicountly Aspire are Aicountly Academy courses, never licensed: no codes.
+        foreach (['edge.max_active_learners', 'aspire.max_workshops_per_month'] as $code) {
+            $this->assertFalse(EntitlementCodeCatalogue::isKnown($code), $code);
+        }
+        $this->assertCount(48, $codes);
         $this->assertSame('mb', EntitlementCodeCatalogue::find(' DRIVE.storage_mb ')['unit'] ?? null);
         $this->assertNull(EntitlementCodeCatalogue::find('sales.max_rockets'));
     }
