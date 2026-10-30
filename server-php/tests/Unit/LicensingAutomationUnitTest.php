@@ -27,7 +27,7 @@ final class LicensingAutomationUnitTest extends CIUnitTestCase
         // manage-aicountly server-php/src/Services/CompanyAppRegistry.php @ f7f7535 — update both together
         // (the whole catalogue is pinned in ManageAppRegistryTest). No edge / aspire: Aicountly Academy courses,
         // never licensed (ManageAppRegistry::COURSE_KEYS, Manage CompanyAppRegistry::ACADEMY_COURSE_KEYS).
-        $this->assertCount(33, ManageAppRegistry::APP_KEYS);
+        $this->assertCount(39, ManageAppRegistry::APP_KEYS);
         $this->assertSame([], array_intersect(ManageAppRegistry::COURSE_KEYS, ManageAppRegistry::APP_KEYS));
         $this->assertSame(['manage', 'auditor'], ManageAppRegistry::COMPANY_LEVEL_KEYS);
         foreach (['books', 'inventory', 'billing', 'notes', 'docs', 'chat', 'buddy', 'receptionist', 'purchases'] as $k) {
