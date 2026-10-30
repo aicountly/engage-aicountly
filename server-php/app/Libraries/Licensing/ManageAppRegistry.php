@@ -36,6 +36,7 @@ final class ManageAppRegistry
         'remote', 'messaging', 'voice', 'email', 'receptionist',
         'fr', 'secretarial', 'advisor',
         'integrate', 'apis', 'buddy',
+        'stay', 'library', 'pharma', 'me', 'campus', 'slip',
     ];
 
     /** @var list<string> Manage CompanyAppRegistry::COMPANY_LEVEL_KEYS. */
@@ -52,7 +53,9 @@ final class ManageAppRegistry
         'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
         'billing', 'inventory', 'sales', 'purchases', 'insights', 'buddy', 'contacts', 'remote', 'advisor', 'appointments',
         'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice',
-        'integrate', 'benefits', 'capital', 'apis', 'community',
+        'integrate', 'benefits', 'capital', 'apis',
+        'stay', 'library', 'pharma', 'me', 'campus', 'slip',
+        'community',
     ];
 
     /**
@@ -75,6 +78,7 @@ final class ManageAppRegistry
         'remote', 'messaging', 'voice', 'email', 'receptionist',
         'fr', 'secretarial', 'advisor',
         'integrate', 'apis', 'buddy',
+        'stay', 'library', 'pharma', 'me', 'campus', 'slip',
         'auditor', 'community',
     ];
 

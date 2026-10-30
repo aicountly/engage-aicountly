@@ -24,7 +24,9 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         'manage', 'books', 'hrms', 'auditor', 'fr', 'secretarial', 'vault', 'chat', 'calendar', 'docs', 'notes', 'pos',
         'billing', 'inventory', 'sales', 'purchases', 'insights', 'buddy', 'contacts', 'remote', 'advisor', 'appointments',
         'contracts', 'pay', 'crm', 'helpdesk', 'receptionist', 'valuations', 'email', 'messaging', 'voice',
-        'integrate', 'benefits', 'capital', 'apis', 'community',
+        'integrate', 'benefits', 'capital', 'apis',
+        'stay', 'library', 'pharma', 'me', 'campus', 'slip',
+        'community',
     ];
 
     public function testMirrorEqualsManagesCatalogue(): void
@@ -39,7 +41,7 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         $want = $licensable;
         sort($want);
         $this->assertSame($want, $all, 'APP_KEYS + COMPANY_LEVEL_KEYS + CATALOG_ONLY_KEYS = the licensable catalog, nothing more or less');
-        $this->assertCount(36, array_unique($all));
+        $this->assertCount(42, array_unique($all));
         foreach ($licensable as $k) {
             $this->assertSame($k, ManageAppRegistry::normalize($k), $k);
             $this->assertSame($k, ManageAppRegistry::normalize(strtoupper($k)), $k);

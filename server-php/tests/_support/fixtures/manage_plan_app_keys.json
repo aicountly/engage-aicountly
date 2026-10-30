@@ -7,6 +7,7 @@
     "remote", "messaging", "voice", "email", "receptionist",
     "fr", "secretarial", "advisor",
     "integrate", "apis", "buddy",
+    "stay", "library", "pharma", "me", "campus", "slip",
     "auditor", "community"
   ],
   "no_plan": ["manage"],
