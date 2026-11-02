@@ -112,6 +112,10 @@ final class TokenGrantPusher
                             last_error = NULL, updated_at = NOW() WHERE id = ?",
                     [(int) $g['id']]
                 );
+                // Only now is it true that the tokens are in the customer's wallet, so only
+                // now is it honest to say so. Telling them at redemption would mean telling
+                // them before Pulse had the grant.
+                $this->tellTheCustomer($g);
 
                 return true;
             }
@@ -145,6 +149,44 @@ final class TokenGrantPusher
         log_message($dead ? 'error' : 'warning', 'token grant {ref} not delivered (attempt {n}): {e}', [
             'ref' => $g['grant_ref'], 'n' => $attempts, 'e' => $error,
         ]);
+    }
+
+    /**
+     * "Your AI credits have been added." Never throws and never fails the delivery: the
+     * tokens are already there, and a customer who was not told still has them.
+     *
+     * @param array<string,mixed> $g
+     */
+    private function tellTheCustomer(array $g): void
+    {
+        if ((string) $g['origin'] !== 'voucher') {
+            // A purchase is announced with its invoice by the purchase flow, which knows
+            // the amount and the invoice number. Saying it twice would be worse than once.
+            return;
+        }
+        try {
+            $notifier = new CustomerNotifier($this->db);
+            $holder = (string) $g['holder_uuid'];
+            $contact = $notifier->contact($holder);
+            $left = (int) ($this->db()->query(
+                "SELECT COALESCE(SUM(tokens),0) AS n FROM engage_token_grants WHERE holder_uuid = ? AND status = 'delivered'",
+                [$holder]
+            )->getRowArray()['n'] ?? 0);
+
+            $notifier->sendFirstAvailable('credits.voucher_redeemed', ['email'], $contact, [
+                'company_name'  => 'your Aicountly workspace',
+                'holder_name'   => $contact['name'] ?? 'there',
+                'tokens_added'  => number_format((float) $g['tokens']),
+                'voucher_code'  => (string) ($g['origin_ref'] ?? ''),
+                'tokens_left'   => number_format((float) $left),
+                'leftover_note' => '',
+                'usage_url'     => rtrim((string) env('MANAGE_APP_URL', 'https://manage.aicountly.com'), '/') . '/#/commercial/ai',
+            ], 'grant:' . (string) $g['grant_ref']);
+        } catch (\Throwable $e) {
+            log_message('warning', 'token grant {ref} delivered but the customer was not told: {m}', [
+                'ref' => $g['grant_ref'], 'm' => $e->getMessage(),
+            ]);
+        }
     }
 
     /** Put a dead grant back in the queue, once someone has fixed whatever stopped it. */

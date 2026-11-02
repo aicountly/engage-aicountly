@@ -221,3 +221,85 @@ wallet: 1,000,000 − 15,000 = 985,000, and the ledger nets to the balance
 It also states the contrast the decision rests on: the same credit **bought** would be
 ₹1,000 taxable + ₹180 GST = **₹1,180 collected**; as a voucher it is a free supply with no
 invoice and no GST.
+
+---
+
+## 11. Telling the customer
+
+A credits system that can refuse an AI call is only fair if the customer hears about it
+before the refusal. Nine triggers, all registered as Console templates
+(`console-react-app` migration 083).
+
+### 11.1 Who sends what
+
+| | Owner | Why |
+|---|---|---|
+| `credits.balance_low` · `balance_critical` · `balance_exhausted` · `usage_spike` | **Pulse detects, Engage delivers** | Pulse owns the balance and the burn rate; Engage holds the holder's e-mail (`engage_holders`) and the Console key |
+| `credits.voucher_issued` · `voucher_redeemed` · `purchase_receipt` · `purchase_failed` · `plan.changed` | **Engage** | it owns vouchers, orders and licences |
+
+### 11.2 Channels, and what actually works today
+
+One rule: **the cheapest channel that still reaches the person in time to act.**
+
+| Channel | Used for | Live? |
+|---|---|---|
+| **E-mail** | anything carrying detail or a document | **yes** |
+| **WhatsApp** | actionable, read quickly, far cheaper than SMS | no — needs Meta template approval; seeded `draft` |
+| **SMS** | only when work has stopped or money moved | no — needs DLT registration; seeded `pending_dlt` |
+| In-app | every trigger, always | Pulse's own `buddy_notifications` |
+
+Three separate things block SMS and WhatsApp, and all three are outside this code:
+
+1. **No phone number.** The cross-product contact lookup
+   (`my.aicountly POST /api/internal/account/contacts`) returns **e-mail only**, by
+   deliberate directory policy. Until it returns a mobile, those sends are skipped for
+   want of a recipient.
+2. **DLT** for SMS and **Meta approval** for WhatsApp. Console refuses an unapproved
+   template with `200 skipped_reason`, not an error, so the code is already correct and
+   goes live the day the approvals land.
+3. `SMS_SKIP_SEND` and `WHATSAPP_SKIP_SEND` default to `true` in Console.
+
+Escalation is **first-available, not all-channels**: a customer who gets the same message
+three ways learns to ignore all three. The list exists so a missing phone number falls
+back to e-mail.
+
+### 11.3 Not spamming people
+
+The hard part is not sending a warning; it is not sending it four thousand times.
+
+```
+armed  ──crossing detected──▶  queued  ──delivered──▶  sent
+  ▲                                                      │
+  └──────────────── a top-up re-arms it ─────────────────┘
+```
+
+- **Crossing, not level.** "Below 20%" is true for every call after the first.
+  `buddy_token_alerts` holds one row per (holder, trigger); a conditional UPSERT means
+  two concurrent calls cannot both queue the same alert.
+- **A failed delivery is re-armed**, not marked sent: a warning nobody received must not
+  be counted as one the customer has had.
+- **Idempotency keys** on every send, so a retried run cannot produce a second copy.
+- Console adds its own per-recipient rate limit (10/hour) on top.
+
+### 11.4 Runway, not only percent
+
+A percentage needs a denominator, and a pay-as-you-go customer has none — their balance
+is whatever they last bought, so they read as 100% full until the moment they are empty.
+Days of runway (balance ÷ the last 7 days' average burn) works for both kinds of customer
+and is what a person actually wants to know. Percent still applies where a plan allowance
+gives a real denominator, and whichever is worse wins.
+
+Defaults: low at 20% or 7 days, critical at 5% or 2 days, spike at 5× the daily average.
+All in `buddy_settings`, all changeable without a deploy.
+
+### 11.5 Off by default
+
+`token_alerts_enabled` ships as `0`. A customer's first balance warning should be
+somebody's decision, not a deploy's side effect.
+
+### 11.6 Jobs
+
+| Job | Where | When |
+|---|---|---|
+| `pulse:token-alerts` | Pulse | hourly at :29 — works out who should be warned |
+| `engage:token-alerts-send` | Engage | every 15 min — collects and delivers |

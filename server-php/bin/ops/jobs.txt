@@ -33,3 +33,7 @@ token-rates-push        | 11 * * * *  | {php} spark engage:token-rates-push
 # Token grants (docs/TOKEN_CONVERSIONS.md §10): deliver queued grants — vouchers and purchases — to AI Pulse. Every
 # minute, because a customer who has just redeemed a voucher is watching for the tokens. Idempotent on grant_ref.
 token-grants-push       | * * * * *   | {php} spark engage:token-grants-push
+# AI token balance warnings (docs/TOKEN_CONVERSIONS.md §11): collect what Pulse has worked out and deliver it through
+# Console's notification hub. Every 15 minutes — a customer running out of tokens should hear within the hour, and
+# Pulse only queues on a threshold crossing so there is rarely anything to collect.
+token-alerts-send       | */15 * * * * | {php} spark engage:token-alerts-send
