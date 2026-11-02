@@ -309,6 +309,22 @@ $routes->group('v1', static function ($routes) {
         $routes->post('licences/(:segment)/invoice-refs',     $L . 'LicencesController::invoiceRef/$1', $licAdmin);
         $routes->post('licences/(:segment)/change-offer',     $L . 'LicencesController::changeOffer/$1', $licAdmin);
 
+        // Token conversion rates (docs/TOKEN_CONVERSIONS.md). What a model's tokens cost a customer:
+        // view super_admin | sales_manager | seller_manager; create / edit / activate / retire and the
+        // pricing settings super_admin | sales_manager — the same split as coupons, because this decides
+        // what a customer is charged just as directly.
+        $tokenView  = ['filter' => 'role:super_admin,sales_manager,seller_manager'];
+        $tokenAdmin = ['filter' => 'role:super_admin,sales_manager'];
+        $T = 'Api\\V1\\Tokens\\TokenRatesController::';
+        $routes->get('token-rates',                   $T . 'index', $tokenView);
+        $routes->get('token-rates/catalogue',         $T . 'catalogue', $tokenView);
+        $routes->get('token-rates/pricing',           $T . 'pricing', $tokenView);
+        $routes->put('token-rates/pricing',           $T . 'setPricing', $tokenAdmin);
+        $routes->post('token-rates',                  $T . 'create', $tokenAdmin);
+        $routes->put('token-rates/(:num)',            $T . 'update/$1', $tokenAdmin);
+        $routes->post('token-rates/(:num)/activate',  $T . 'activate/$1', $tokenAdmin);
+        $routes->post('token-rates/(:num)/retire',    $T . 'retire/$1', $tokenAdmin);
+
         // Coupons and quotes (docs/COUPONS.md). View / export: super_admin | sales_manager | seller_manager;
         // create / edit / activate / pause / retire / generate / quote / release / reverse: super_admin | sales_manager.
         $couponView  = ['filter' => 'role:super_admin,sales_manager,seller_manager'];
