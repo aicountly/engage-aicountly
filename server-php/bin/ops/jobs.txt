@@ -26,3 +26,7 @@ entitlements-reconcile  | 41 4 * * *  | {php} spark engage:entitlements-reconcil
 # Coupons (docs/COUPONS.md §5): release lapsed quote reservations, expire old quotes and ended coupons. Hourly, offset
 # from the other jobs; reports itself to Console as engage.coupons_expire.
 coupons-expire          | 41 * * * *  | {php} spark engage:coupons-expire
+# Token conversions (docs/TOKEN_CONVERSIONS.md): send AI Pulse the rate card — one effective multiplier per model,
+# already resolved. Hourly, offset from the others. Pulse keeps the last card it was given, so a failed push leaves
+# pricing unchanged. Reports itself to Console as engage.token_rates_push; inert until PULSE_API_BASE_URL is set.
+token-rates-push        | 11 * * * *  | {php} spark engage:token-rates-push
