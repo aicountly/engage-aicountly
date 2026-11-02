@@ -134,6 +134,9 @@ $routes->group('v1', static function ($routes) {
 
     // finance.aicountly.org → Engage: payout status per item (X-Finance-Key = ENGAGE_INBOUND_FINANCE_KEY).
     $routes->post('inbound/finance/payout-status', 'Inbound\\FinanceController::payoutStatus', ['filter' => 'finance-inbound']);
+    // Finance → Engage: a payment it has re-read from the provider and invoiced. For a
+    // token order this is the signal that tokens may be granted.
+    $routes->post('inbound/finance/payment-events', 'Inbound\\FinanceController::paymentEvents', ['filter' => 'finance-inbound']);
 
     // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
     // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
@@ -143,6 +146,17 @@ $routes->group('v1', static function ($routes) {
     // key gets 403 route_not_allowed_for_key anywhere else.
     $routes->post('manage/coupons/preview',  'Inbound\\ManageCouponsController::preview', ['filter' => 'aic-s2s:manage,quote']);
     $routes->post('manage/upgrade-requests', 'Inbound\\ManageCouponsController::upgradeRequest', ['filter' => 'aic-s2s:manage,quote']);
+    // Buying AI tokens (docs/TOKEN_CONVERSIONS.md §12). Same quote-scoped key: Manage's
+    // SERVER calls these, having already established who is signed in and which company
+    // they are in — its browser never reaches Engage. No card number passes through
+    // here and nothing here grants tokens; money moves on the gateway's own page and a
+    // grant follows only Finance's confirmation.
+    $T = 'Inbound\\ManageTokenOrdersController::';
+    $routes->post('manage/token-orders/quote',               $T . 'quote',  ['filter' => 'aic-s2s:manage,quote']);
+    $routes->post('manage/token-orders',                     $T . 'create', ['filter' => 'aic-s2s:manage,quote']);
+    $routes->get('manage/token-orders',                      $T . 'index',  ['filter' => 'aic-s2s:manage,quote']);
+    $routes->post('manage/token-orders/(:segment)/cancel',   $T . 'cancel/$1', ['filter' => 'aic-s2s:manage,quote']);
+    $routes->post('manage/token-vouchers/redeem',            $T . 'redeemVoucher', ['filter' => 'aic-s2s:manage,quote']);
     $routes->group('manage', ['filter' => 'aic-s2s:manage,read,issue'], static function ($routes) {
         $M = 'Inbound\\ManageLicensingController::';
         $routes->get('companies/(:segment)/licences',                    $M . 'licences/$1');
