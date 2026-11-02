@@ -31,6 +31,10 @@ export default function Offers() {
   const products = useQuery({ queryKey: ['products'], queryFn: () => api.get('/v1/products').then(pickRows) })
   const plans = useQuery({ queryKey: ['plans'], queryFn: () => api.get('/v1/plans').then(pickRows) })
   const types = useQuery({ queryKey: ['licence-types'], queryFn: () => api.get('/v1/licence-types').then((r) => r.data?.data?.items || []) })
+  // Which products still have no published Basic. Every signed-up person is meant to hold the
+  // free Basic of every app (D-L1), but provisioning can only issue a Basic that exists: a
+  // product without one is skipped silently and every sign-up since is short a licence.
+  const readiness = useQuery({ queryKey: ['offers', 'basic-readiness'], queryFn: () => api.get('/v1/offers/basic-readiness').then((r) => r.data?.data) })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['offers'] })
 
   const grouped = useMemo(() => {
@@ -88,6 +92,7 @@ export default function Offers() {
         </>}
       />
       <ErrorNote error={!draft ? error : null} />
+      <BasicReadinessNote data={readiness.data} />
       {!offers.isLoading && grouped.length === 0 ? (
         <div className="engage-card text-sm text-neutral-600">
           No offers yet. {canEdit ? 'Create a licence type first, then an offer on it. Nothing is sold until an offer is published.' : 'An administrator or sales manager publishes offers.'}
@@ -203,5 +208,44 @@ export default function Offers() {
         </> : null}
       </Drawer>
     </>
+  )
+}
+
+/**
+ * Products with no published Basic. Not an error — nothing is broken — but every day it stands,
+ * every new sign-up is short a licence for those products and nothing else says so.
+ *
+ * Drafts are called out separately because they need a different action: someone has already run
+ * `engage:basic-offers` and left the entitlements empty, so the work is to fill them in and
+ * publish, not to start.
+ */
+function BasicReadinessNote({ data }) {
+  if (!data || data.ready) return null
+  const { missing, counts } = data
+  const show = missing.slice(0, 12)
+  return (
+    <div className="engage-card border-amber-300 bg-amber-50 text-sm text-amber-900">
+      <p className="font-medium">
+        {counts.missing} product{counts.missing === 1 ? '' : 's'} ha{counts.missing === 1 ? 's' : 've'} no published Basic offer.
+      </p>
+      <p className="mt-1">
+        Provisioning can only issue a Basic that exists, so every person who signs up holds no licence
+        at all for {counts.missing === 1 ? 'this product' : 'these products'} — and the call still
+        succeeds, so nothing else reports it.
+        {counts.draft > 0 ? ` ${counts.draft} already ha${counts.draft === 1 ? 's' : 've'} a draft waiting: fill in the entitlements and publish.` : ''}
+      </p>
+      <p className="mt-2 flex flex-wrap gap-1">
+        {show.map((p) => (
+          <span key={p.code} className="rounded bg-amber-100 px-1.5 py-0.5 text-xs" title={p.draft ? 'Draft default offer waiting to be published' : 'No default offer at all'}>
+            {p.name}{p.draft ? ' (draft)' : ''}
+          </span>
+        ))}
+        {missing.length > show.length ? <span className="text-xs">and {missing.length - show.length} more</span> : null}
+      </p>
+      <p className="mt-2 text-xs">
+        <code>php spark engage:basic-offers --apply</code> drafts the missing ones; publish each, then
+        <code> php spark engage:provision-basic --pending</code> tops up the holders who missed out.
+      </p>
+    </div>
   )
 }

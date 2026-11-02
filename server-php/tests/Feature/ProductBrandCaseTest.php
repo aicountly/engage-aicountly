@@ -19,8 +19,14 @@ final class ProductBrandCaseTest extends DatabaseTestCase
         $db = Database::connect('tests');
         $this->assertSame('Aicountly Books', $db->table('engage_products')->where('code', 'books')->get()->getRow()->name, 'fresh seed');
 
-        // A database seeded before the change, with one name edited by staff.
-        $db->query("UPDATE engage_products SET name = 'AICOUNTLY ' || SUBSTRING(name FROM 11) WHERE name LIKE 'Aicountly %' AND category <> 'Academy'");
+        // A database seeded before the change, with one name edited by staff. Only the products
+        // that migration was written for are given the old name: it is a dated, completed
+        // correction, and a product added to the catalogue AFTER it ran (the 2026-10 beta
+        // line-up) never carried an "AICOUNTLY " name in any real database, so giving it one
+        // here would be testing a situation that cannot occur.
+        $codes = "'" . implode("','", array_keys(RenameProductBrandCase::PRODUCTS)) . "'";
+        $db->query("UPDATE engage_products SET name = 'AICOUNTLY ' || SUBSTRING(name FROM 11)
+                     WHERE name LIKE 'Aicountly %' AND category <> 'Academy' AND code IN ({$codes})");
         $db->table('engage_products')->where('code', 'vault')->update(['name' => 'Vault (staff name)']);
         (new RenameProductBrandCase(Database::forge('tests')))->up();
         $names = array_column($db->table('engage_products')->get()->getResultArray(), 'name', 'code');
@@ -29,6 +35,8 @@ final class ProductBrandCaseTest extends DatabaseTestCase
         $this->assertSame('Vault (staff name)', $names['vault']);
         $this->assertSame('Other / Custom', $names['other']);
         $this->assertSame([], array_filter($names, static fn ($n) => str_contains((string) $n, 'AICOUNTLY')));
+        // A product added after the migration is seeded with the right case to begin with.
+        $this->assertSame('Aicountly Stay', $names['stay']);
     }
 
     public function testStoredDescriptionsUseTheMixedCaseBrand(): void

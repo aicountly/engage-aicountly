@@ -14,6 +14,7 @@ use Config\Services;
  *   DELETE v1/offers/{id}                  discard a draft
  *   POST   v1/offers/{id}/publish | retire | new-version
  *   POST   v1/offers/{id}/default  {is_default: bool}   the product's Basic (draft or published; one published per product)
+ *   GET    v1/offers/basic-readiness       which products still have no published Basic
  */
 class OffersController extends LicensingBaseController
 {
@@ -22,6 +23,32 @@ class OffersController extends LicensingBaseController
         $q = $this->request->getGet();
 
         return $this->ok(['items' => Services::offers()->list(is_array($q) ? $q : [])]);
+    }
+
+    /**
+     * Which licensable products still have no published default (Basic) offer.
+     *
+     * Every signed-up person is meant to hold the free Basic of every app (D-L1), but
+     * provisioning can only issue a Basic that EXISTS: a product without a published default
+     * offer is skipped, the call still answers 200, and nobody is told. This is the endpoint
+     * that tells them — Engage shows a banner from it and Console raises a warning.
+     *
+     * `draft` separates the two cases that need different sentences: someone ran
+     * `engage:basic-offers`, filled nothing in and never published (draft), versus nobody has
+     * started at all.
+     */
+    public function basicReadiness()
+    {
+        $missing = Services::offers()->productsWithoutDefaultOffer();
+
+        return $this->ok([
+            'ready'   => $missing === [],
+            'missing' => $missing,
+            'counts'  => [
+                'missing' => count($missing),
+                'draft'   => count(array_filter($missing, static fn (array $p): bool => $p['draft'])),
+            ],
+        ]);
     }
 
     public function show($id = null)

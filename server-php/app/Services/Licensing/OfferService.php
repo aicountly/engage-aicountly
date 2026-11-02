@@ -677,6 +677,60 @@ class OfferService
             ORDER BY o.product_code')->getResultArray();
     }
 
+    /**
+     * Licensable products with NO published default offer on sale — the Basic nobody can be given.
+     *
+     * Provisioning (ProvisioningService) iterates defaultOffers(), so a product that is missing from
+     * it is simply never reached: the holder is provisioned, the call answers 200, and that product
+     * is silently left without a licence. Every sign-up since is short one Basic, and nothing says
+     * so. This is the query that lets Engage and Console say so.
+     *
+     * Course products (Academy, Edge, Aspire) are never licensed and are not a gap. Products whose
+     * code Manage does not hold a plan for are excluded too: Engage deliberately never publishes an
+     * offer for them (ManageAppRegistry::planKey), so their absence is correct, not a gap.
+     *
+     * A product that has a default offer still in DRAFT is reported with draft = true: that is the
+     * common case right after `engage:basic-offers`, and it needs a different sentence — someone
+     * started the work and has not published it.
+     *
+     * @return list<array{code:string, name:string, draft:bool}>
+     */
+    public function productsWithoutDefaultOffer(): array
+    {
+        $rows = $this->db()->query(
+            "SELECT p.code, p.name,
+                    EXISTS (SELECT 1 FROM engage_offers d
+                             WHERE d.product_code = p.code AND d.is_default AND d.status = 'draft') AS has_draft
+               FROM engage_products p
+              WHERE p.is_active
+                AND LOWER(COALESCE(p.category, '')) <> 'academy'
+                AND p.code NOT IN (" . ManageAppRegistry::courseKeysSql() . ")
+                AND NOT EXISTS (
+                    SELECT 1 FROM engage_offers o
+                      JOIN engage_licence_types t ON t.code = o.licence_type_code
+                     WHERE o.product_code = p.code AND o.is_default AND o.status = 'published' AND t.active
+                       AND (o.valid_from IS NULL OR o.valid_from <= NOW())
+                       AND (o.valid_to   IS NULL OR o.valid_to   >  NOW()))
+              ORDER BY p.code"
+        )->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            // Engage never publishes an offer for a code Manage holds no plan for, so its absence
+            // is by design rather than an oversight.
+            if (ManageAppRegistry::planKey((string) $r['code']) === null) {
+                continue;
+            }
+            $out[] = [
+                'code'  => (string) $r['code'],
+                'name'  => (string) $r['name'],
+                'draft' => in_array($r['has_draft'], [true, 't', '1', 1], true),
+            ];
+        }
+
+        return $out;
+    }
+
     /** Immutable copy kept on a licence (what was sold, even if labels change later). */
     public static function snapshot(array $o): array
     {

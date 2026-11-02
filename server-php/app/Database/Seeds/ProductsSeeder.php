@@ -57,6 +57,18 @@ class ProductsSeeder extends Seeder
             ['code' => 'capital',      'name' => 'Aicountly Capital',      'category' => 'finance'],
             ['code' => 'apis',         'name' => 'Aicountly APIs',         'category' => 'developer'],
             ['code' => 'community',    'name' => 'Aicountly Community',    'category' => 'community'],
+            // The 2026-10 beta line-up. These are in ManageAppRegistry::CATALOG_KEYS and in Manage's
+            // launcher and metering sources, but had no product row here — so they could never be
+            // given a Basic offer, and therefore never licensed to anyone. Catalogue identity only:
+            // no price, no offer. Categories follow the existing lowercase vocabulary in this file
+            // rather than Manage's display labels (Manage: Stay/Library/Pharma/Campus = Business,
+            // Me = Productivity, Slip = Finance).
+            ['code' => 'stay',         'name' => 'Aicountly Stay',         'category' => 'hospitality'],
+            ['code' => 'library',      'name' => 'Aicountly Library',      'category' => 'education'],
+            ['code' => 'pharma',       'name' => 'Aicountly Pharma',       'category' => 'healthcare'],
+            ['code' => 'me',           'name' => 'Aicountly Me',           'category' => 'productivity'],
+            ['code' => 'campus',       'name' => 'Aicountly Campus',       'category' => 'education'],
+            ['code' => 'slip',         'name' => 'Aicountly Slip',         'category' => 'finance'],
             // Legacy codes kept as they were (not Manage keys; ourpeople folds onto hrms).
             ['code' => 'ourpeople',    'name' => 'Aicountly OurPeople',   'category' => 'hr'],
             ['code' => 'flow',         'name' => 'Aicountly Flow',        'category' => 'internal'],
