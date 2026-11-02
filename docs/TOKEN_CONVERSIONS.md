@@ -145,3 +145,79 @@ empty model list would be a lie that invites someone to type them all in again.
   that charges add up across calls, and that an unknown model is never free.
 - `tests/Feature/TokenRateLifecycleTest.php` — the rights, four eyes, immutability, one live rate
   per model, and that the screen survives Console being down.
+
+---
+
+## 10. Token grants and vouchers
+
+Two ways tokens reach a customer's wallet, and one way they are delivered.
+
+### 10.1 A voucher is not a coupon
+
+| | Coupon (`docs/COUPONS.md`) | Token voucher |
+|---|---|---|
+| What it is | a discount **rule** applied to a price | a **value**: "worth N tokens" |
+| Needs a sale | yes — it reduces one | no |
+| Has a balance | **no**, by design | **yes** |
+| Can go to zero | no (`net_paise >= 100`) | not applicable: nothing is being priced |
+| Leftover | cannot exist | `rollback`: `keep_balance` or `no_rollback` |
+| Money | reduces an invoice | **no invoice, no GST** — a free supply |
+
+This is why "here is ₹1,000 of credit, with the unused part kept (or forfeited)" is a
+voucher and not a 100%-off coupon. A coupon structurally cannot do it: it has nothing to
+hold a balance in, and a ₹0 invoice is both meaningless and refused by Finance
+(`total_paise > 0`).
+
+A voucher's value may be entered in rupees; it is converted at the token price **on the day
+it is created** and that rate is frozen onto the row, so a voucher handed out as "₹1,000 of
+credit" stays worth 1,000,000 tokens even if the price changes before anyone redeems it.
+
+`keep_balance` is allowed only on a single-use voucher. On a shared one it would be a single
+pot drained first-come-first-served, which is a different product.
+
+### 10.2 The rules
+
+Same standard as a coupon, because a voucher gives away real value:
+
+- created as a **draft**, which grants nothing;
+- **four eyes** — whoever created it cannot activate it;
+- once active its value and rules are **frozen** by `engage_token_vouchers_guard`: an active
+  voucher cannot quietly become worth less than what customers were told;
+- the redemption ledger is **append-only**;
+- a single-use code is redeemed once, whatever races it (partial unique index + an advisory
+  lock on the code).
+
+### 10.3 Delivery
+
+Tokens are **never handed over inside the request that creates them**. A redemption (or a
+confirmed purchase) writes a row to `engage_token_grants`, and
+`php spark engage:token-grants-push` (every minute) delivers it to Pulse
+`POST /v1/inbound/engage/token-grants`, AIC-S2S v1 signed.
+
+Two reasons: a customer's credit must not depend on Pulse being reachable at that instant,
+and a push that times out must be safe to repeat. Pulse is idempotent on `grant_ref`, so a
+retry credits once and answers `duplicate: true`.
+
+Back-off doubles from a minute and caps at six hours; after 12 attempts the grant is `dead`
+and the job reports an error, because a dead grant names a customer who is owed tokens and
+nobody is coming unless somebody is told. Nothing is lost — it is waiting, and
+`TokenGrantPusher::requeue()` puts it back once the cause is fixed.
+
+### 10.4 The ₹1,000 test, end to end
+
+`server-php/tests/integration/rs1000_credit_e2e.php` runs the whole path against two real
+databases — Engage's and Pulse's, as in production — and asserts each step:
+
+```
+Rs 1.00 / 1,000 tokens  →  Rs 1,000 = 1,000,000 tokens
+staff create the voucher (draft)  →  a second person activates it
+an active voucher cannot be re-valued
+customer redeems WELCOME1000      →  grant queued, ledger append-only
+Pulse credits the wallet          →  a retry does NOT credit twice
+a Sonnet 5 call: 1,000 in + 500 out at 10x = 15,000 billable
+wallet: 1,000,000 − 15,000 = 985,000, and the ledger nets to the balance
+```
+
+It also states the contrast the decision rests on: the same credit **bought** would be
+₹1,000 taxable + ₹180 GST = **₹1,180 collected**; as a voucher it is a free supply with no
+invoice and no GST.

@@ -30,3 +30,6 @@ coupons-expire          | 41 * * * *  | {php} spark engage:coupons-expire
 # already resolved. Hourly, offset from the others. Pulse keeps the last card it was given, so a failed push leaves
 # pricing unchanged. Reports itself to Console as engage.token_rates_push; inert until PULSE_API_BASE_URL is set.
 token-rates-push        | 11 * * * *  | {php} spark engage:token-rates-push
+# Token grants (docs/TOKEN_CONVERSIONS.md §10): deliver queued grants — vouchers and purchases — to AI Pulse. Every
+# minute, because a customer who has just redeemed a voucher is watching for the tokens. Idempotent on grant_ref.
+token-grants-push       | * * * * *   | {php} spark engage:token-grants-push
