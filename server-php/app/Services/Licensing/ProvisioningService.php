@@ -127,7 +127,22 @@ class ProvisioningService
             throw $e;
         }
 
-        return ['holder_uuid' => $holder['holder_uuid'], 'licences' => $out, 'created' => $created];
+        // Products that could not be given a Basic because none is published. The loop above
+        // iterates defaultOffers(), so these were never reached and nothing in the answer named
+        // them: a 200 with a short list used to be indistinguishable from a 200 with a complete
+        // one. my.aicountly logs this, and the same list is what Engage's readiness banner and
+        // Console's warning are built from.
+        $missing = (new OfferService($db))->productsWithoutDefaultOffer();
+
+        return [
+            'holder_uuid' => $holder['holder_uuid'],
+            'licences'    => $out,
+            'created'     => $created,
+            'not_issued'  => array_map(static fn (array $p): array => [
+                'product_code' => $p['code'],
+                'reason'       => $p['draft'] ? 'default_offer_draft' : 'no_default_offer',
+            ], $missing),
+        ];
     }
 
     /** @return array{licence_ref:string, product_code:string, plan:array{code:string,label:string}, status:string} */

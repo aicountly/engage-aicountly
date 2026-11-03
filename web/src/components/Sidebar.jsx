@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import { useAuth } from '../lib/auth.jsx'
 import { KYC_REVIEW, PAYOUT_VIEW, SELLER_VIEW } from '../lib/sellerRoles.js'
 import { COUPON_VIEW } from '../lib/coupons.js'
+import { TOKEN_VIEW } from '../lib/tokens.js'
 
 const groups = [
   {
@@ -75,6 +76,7 @@ const groups = [
   {
     title: 'Credits',
     items: [
+      { to: '/token-conversions', label: 'Token conversions', roles: TOKEN_VIEW },
       { to: '/credit-ledger', label: 'Credit ledger' },
     ],
   },

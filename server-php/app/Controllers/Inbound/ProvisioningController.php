@@ -46,9 +46,27 @@ class ProvisioningController extends Controller
             'actor_role'   => 'service:myaicountly',
             'subject_kind' => 'holder',
             'subject_id'   => $holder['holder_uuid'],
-            'metadata'     => ['created' => $r['created'], 'licences' => count($r['licences']), 'request_id' => $rid, 'body_request_id' => $holder['request_id'], 'key_id' => $ctx['key_id'] ?? null],
+            'metadata'     => ['created' => $r['created'], 'licences' => count($r['licences']), 'request_id' => $rid, 'body_request_id' => $holder['request_id'], 'key_id' => $ctx['key_id'] ?? null,
+                // The products this holder could NOT be given, and why. Without this an
+                // under-provisioned holder and a fully provisioned one leave the same audit row.
+                'not_issued'   => array_column($r['not_issued'], 'product_code'),
+            ],
         ]);
+        if ($r['not_issued'] !== []) {
+            log_message('warning', 'Basic provisioning: {n} product(s) have no published default offer, so {holder} holds no Basic for them: {codes}', [
+                'n'      => count($r['not_issued']),
+                'holder' => $holder['holder_uuid'],
+                'codes'  => implode(', ', array_column($r['not_issued'], 'product_code')),
+            ]);
+        }
 
-        return AicS2sResponse::success($this->response, ['holder_uuid' => $r['holder_uuid'], 'licences' => $r['licences']], null, $rid);
+        return AicS2sResponse::success($this->response, [
+            'holder_uuid' => $r['holder_uuid'],
+            'licences'    => $r['licences'],
+            // my.aicountly stores this against the account, so a holder that was provisioned
+            // while a product had no Basic can be found and topped up later
+            // (php spark engage:provision-basic --pending).
+            'not_issued'  => $r['not_issued'],
+        ], null, $rid);
     }
 }

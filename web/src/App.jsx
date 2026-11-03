@@ -57,6 +57,7 @@ const Licences = lazy(() => import('./pages/licensing/Licences.jsx'))
 const LicenceDetail = lazy(() => import('./pages/licensing/LicenceDetail.jsx'))
 const ManageSync = lazy(() => import('./pages/licensing/ManageSync.jsx'))
 // Coupons and quotes (docs/COUPONS.md).
+const TokenConversions = lazy(() => import('./pages/tokens/TokenConversions.jsx'))
 const Coupons = lazy(() => import('./pages/coupons/Coupons.jsx'))
 const CouponDetail = lazy(() => import('./pages/coupons/CouponDetail.jsx'))
 const Quotes = lazy(() => import('./pages/coupons/Quotes.jsx'))
@@ -104,6 +105,7 @@ export default function App() {
         <Route path="/seller-payouts" element={<Payouts />} />
         <Route path="/lead-sources" element={<LeadSources />} />
         <Route path="/campaigns" element={<Campaigns />} />
+        <Route path="/token-conversions" element={lazyPage(<TokenConversions />)} />
         <Route path="/coupons" element={lazyPage(<Coupons />)} />
         <Route path="/coupons/:id" element={lazyPage(<CouponDetail />)} />
         <Route path="/quotes" element={lazyPage(<Quotes />)} />

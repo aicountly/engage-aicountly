@@ -15,6 +15,9 @@ declare(strict_types=1);
  *   f) expiry (engage:licences-expire, past end) → Basic pushed → Manage falls back to Basic, ghm_subscription untouched
  *   g) Manage coupon preview and upgrade request against live Engage (quote key)
  *   h) Manage plans_sync pulls the Basic defaults from Engage's catalogue; reconcile reports no drift
+ *   i–n) AI credits (tests/e2e/credits.php): a Basic for EVERY product, the token rate card pushed to a real
+ *      AI Pulse, the ₹1,000 coupon in its four shapes, the purchase through Finance's contract, the grant
+ *      credited once and spent product by product, and the transaction seen from Engage, Manage and the invoice
  *
  * See tests/e2e/README.md. Skips (exit 0) when the environment is not set up; exit 1 on any failure.
  */
@@ -155,7 +158,7 @@ if (!$myaicHasPort && $pgPort !== 5432 && !file_exists("{$pgSocket}/.s.PGSQL.543
     $madeLink = "{$pgSocket}/.s.PGSQL.5432";
 }
 $procs = [];
-register_shutdown_function(static function () use (&$procs, $admin, $dbs, $tmp, &$madeLink): void {
+register_shutdown_function(static function () use (&$procs, $admin, &$dbs, $tmp, &$madeLink): void {
     foreach ($procs as $p) {
         $st = proc_get_status($p);
         if ($st['running']) {
@@ -449,6 +452,11 @@ $r = http('GET', "{$manageUrl}/v1/me/plan?app=books", $sess($M));
 eq(['books-basic', 'licence'], [$r['json']['data']['plan']['code'] ?? null, $r['json']['data']['plan']['source'] ?? null], 'the provisioned member: their pushed Basic (source licence)');
 [$c, $out] = cli([PHP_BINARY, 'spark', 'engage:entitlements-reconcile'], $engageDir, $engageEnv);
 ok($c === 0 && str_contains($out, ' 0 drift, 0 error(s)'), 'engage:entitlements-reconcile: Engage and Manage agree (read key)', $out);
+
+// ------------------------------------------------------------------------------------------------ i–n)
+// AI credits, which needs AI Pulse and two stubs of its own. Skips itself when there is no
+// pulse-aicountly checkout to run.
+require __DIR__ . '/credits.php';
 
 echo "\n{$passed} passed, {$failed} failed\n";
 if (getenv('E2E_TRANSCRIPT')) {
