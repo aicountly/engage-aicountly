@@ -232,23 +232,107 @@ final class TokenOrderLifecycleTest extends LicensingTestCase
         $this->assertSame('coupon_invalid', $q['code']);
     }
 
-    /** @param array<string,mixed>|null $appliesTo */
-    private function activeCoupon(string $code, int $flatPaise, ?array $appliesTo = null): void
+    // ── the coupon is actually spent ───────────────────────────────────────
+    //
+    // engage_coupon_redemptions is the estate's one record of who used which coupon: it is
+    // what enforces "once per customer", what makes a campaign run out, and what sales reads
+    // to see what a campaign cost. Token purchases used to write the code onto the order and
+    // nothing else, so a single-use coupon could be used on every purchase a customer made.
+
+    public function testAnOrderHoldsTheCouponAndThePaymentSpendsIt(): void
+    {
+        $this->activeCoupon('HOLDME', 20000, null, ['max_redemptions_per_holder' => 1]);
+        $o = $this->svc()->create(['tokens' => 1000000, 'coupon_code' => 'HOLDME'], 'holder-hold-1', self::CMP, $this->payer());
+        $ref = $o['data']['order_ref'];
+
+        $r = $this->db()->table('engage_coupon_redemptions')->where('idempotency_key', 'token_order:' . $ref)->get()->getRowArray();
+        $this->assertNotNull($r, 'the coupon is held the moment the order exists');
+        $this->assertSame('reserved', $r['state'], 'held, not spent: an abandoned checkout must not burn it');
+        $this->assertSame([80000, 20000], [(int) $r['net_paise'], (int) $r['discount_paise']]);
+        $this->assertSame($ref, $r['order_ref']);
+        $this->assertNull($r['licence_ref'], 'a purchase of tokens is not a licence');
+
+        $this->svc()->settle($ref, ['payment_ref' => 'pay_HOLD']);
+        $r = $this->db()->table('engage_coupon_redemptions')->where('idempotency_key', 'token_order:' . $ref)->get()->getRowArray();
+        $this->assertSame('committed', $r['state'], 'the money arriving is what spends it');
+    }
+
+    public function testACouponUsableOnceCannotBeUsedTwice(): void
+    {
+        $this->activeCoupon('ONLYONCE', 20000, null, ['max_redemptions_per_holder' => 1]);
+        $ref = $this->svc()->create(['tokens' => 1000000, 'coupon_code' => 'ONLYONCE'], 'holder-once-1', self::CMP, $this->payer())['data']['order_ref'];
+        $this->svc()->settle($ref, ['payment_ref' => 'pay_ONCE']);
+
+        $again = $this->svc()->quote(['tokens' => 1000000, 'coupon_code' => 'ONLYONCE'], 'holder-once-1');
+
+        $this->assertSame(422, $again['status'], 'the customer is told at the quote, before they fill anything in');
+        $this->assertSame('coupon_invalid', $again['code']);
+    }
+
+    /** Somebody halfway through a checkout holds it; a second tab must not be given it too. */
+    public function testALiveReservationCountsTowardsTheLimit(): void
+    {
+        $this->activeCoupon('ONEOPEN', 20000, null, ['max_redemptions_per_holder' => 1]);
+        $this->svc()->create(['tokens' => 1000000, 'coupon_code' => 'ONEOPEN'], 'holder-open-1', self::CMP, $this->payer());
+
+        $this->assertSame(422, $this->svc()->quote(['tokens' => 2000000, 'coupon_code' => 'ONEOPEN'], 'holder-open-1')['status']);
+    }
+
+    public function testCancellingGivesTheCouponBack(): void
+    {
+        $this->activeCoupon('GIVEBACK', 20000, null, ['max_redemptions_per_holder' => 1]);
+        $ref = $this->svc()->create(['tokens' => 1000000, 'coupon_code' => 'GIVEBACK'], 'holder-back-1', self::CMP, $this->payer())['data']['order_ref'];
+
+        $this->svc()->cancel($ref, 'Changed my mind');
+
+        $r = $this->db()->table('engage_coupon_redemptions')->where('idempotency_key', 'token_order:' . $ref)->get()->getRowArray();
+        $this->assertSame('released', $r['state'], 'changing their mind must not cost them the coupon');
+        $this->assertSame(200, $this->svc()->quote(['tokens' => 1000000, 'coupon_code' => 'GIVEBACK'], 'holder-back-1')['status'], 'and they can use it again');
+    }
+
+    public function testACampaignWithATotalCapRunsOut(): void
+    {
+        $this->activeCoupon('CAPPED', 20000, null, ['max_redemptions_total' => 1]);
+        $ref = $this->svc()->create(['tokens' => 1000000, 'coupon_code' => 'CAPPED'], 'holder-cap-1', self::CMP, $this->payer())['data']['order_ref'];
+        $this->svc()->settle($ref, ['payment_ref' => 'pay_CAP']);
+
+        $this->assertSame('exhausted', $this->db()->table('engage_coupons')->where('label', 'CAPPED')->get()->getRowArray()['status'],
+            'the cap is reached, so it stops being offered to anybody');
+        $this->assertSame(422, $this->svc()->quote(['tokens' => 1000000, 'coupon_code' => 'CAPPED'], 'holder-cap-2')['status']);
+    }
+
+    public function testASingleUseCodeIsMarkedRedeemedWhenItIsPaidFor(): void
+    {
+        $this->activeCoupon('SINGLE1', 20000, null, [], 'single_use');
+        $ref = $this->svc()->create(['tokens' => 1000000, 'coupon_code' => 'SINGLE1'], 'holder-single-1', self::CMP, $this->payer())['data']['order_ref'];
+        $this->assertSame('reserved', $this->db()->table('engage_coupon_codes')->where('code', 'SINGLE1')->get()->getRowArray()['status']);
+
+        $this->svc()->settle($ref, ['payment_ref' => 'pay_SINGLE']);
+
+        $this->assertSame('redeemed', $this->db()->table('engage_coupon_codes')->where('code', 'SINGLE1')->get()->getRowArray()['status']);
+        $this->assertSame(422, $this->svc()->quote(['tokens' => 1000000, 'coupon_code' => 'SINGLE1'], 'holder-single-2')['status'], 'a used single-use code is gone');
+    }
+
+    /**
+     * @param array<string,mixed>|null $appliesTo
+     * @param array<string,mixed> $limits
+     */
+    private function activeCoupon(string $code, int $flatPaise, ?array $appliesTo = null, array $limits = [], string $codeKind = 'shared'): void
     {
         $db = $this->db();
         $ref = 'CPN-' . substr(md5($code), 0, 6);
         $db->table('engage_coupons')->insert([
             'coupon_ref'    => $ref,
-            'code_kind'     => 'shared',
+            'code_kind'     => $codeKind,
             'label'         => $code,
             'discount_type' => 'flat',
             'flat_paise'    => $flatPaise,
             'applies_to'    => json_encode($appliesTo ?? ['product_codes' => [], 'offer_codes' => [], 'licence_type_codes' => []]),
             'status'        => 'active',
             'approved_at'   => date('Y-m-d H:i:sP'),
-        ]);
+        ] + $limits);
         $db->table('engage_coupon_codes')->insert([
-            'coupon_id' => (int) $db->insertID(), 'code' => $code, 'kind' => 'shared', 'status' => 'available',
+            'coupon_id' => (int) $db->insertID(), 'code' => $code, 'kind' => $codeKind, 'status' => 'available',
         ]);
     }
 }

@@ -145,6 +145,19 @@ empty model list would be a lie that invites someone to type them all in again.
   that charges add up across calls, and that an unknown model is never free.
 - `tests/Feature/TokenRateLifecycleTest.php` — the rights, four eyes, immutability, one live rate
   per model, and that the screen survives Console being down.
+- `tests/Feature/TokenOrderLifecycleTest.php` — quote, order, price frozen at quote, one open
+  order per holder, settlement, and the coupon actually being held and spent (§12.3).
+- `tests/Feature/ManageTokenApiTest.php` — **the wire**: the envelope Manage reads, the error
+  object, and which key scope may call which route. This is the one that would have caught the
+  bug where every route worked and nothing could be bought.
+- `tests/e2e/run.php` steps i–n (`tests/e2e/credits.php`) — the whole thing across every
+  product, with a real AI Pulse: see `tests/e2e/README.md`.
+
+> Three bugs reached this point past the unit and integration tests, and all three were found by
+> the end-to-end run. Pulse's schema splitter cut PL/pgSQL bodies in half, so `php spark migrate`
+> never created the wallet tables; `17_token_alerts.sql` had no migration class at all; and these
+> routes answered in Engage's internal `{ok:true}` envelope, which Manage's client reads as the
+> service being down. None of them is visible from inside one repository.
 
 ---
 
@@ -303,3 +316,69 @@ somebody's decision, not a deploy's side effect.
 |---|---|---|
 | `pulse:token-alerts` | Pulse | hourly at :29 — works out who should be warned |
 | `engage:token-alerts-send` | Engage | every 15 min — collects and delivers |
+
+---
+
+## 12. Buying credits
+
+What a customer buys is tokens. ₹1 per 1,000 tokens, **exclusive of GST**, so ₹1,000 of credits
+collects ₹1,180. Bought tokens go to a separate bucket that does not expire and is spent only
+after the plan's own monthly allowance is used up.
+
+```
+Manage (the owner)  ──quote──▶  Engage prices it            rate × tokens, coupon, GST on the net
+                    ──order──▶  Engage freezes that price   and asks Finance for a payment link
+                    ◀──link───  the gateway's hosted page   (no card detail ever reaches us)
+                                     ⋮ the customer pays at the gateway
+Finance  ──payment.succeeded──▶  Engage: order paid, grant queued, coupon spent — one transaction
+Engage   ──token-grants-push──▶  Pulse credits the wallet, once, keyed on the grant reference
+```
+
+### 12.1 Nothing is granted by anything but a confirmed payment
+
+`settle()` marks the order paid and writes the grant row in the **same transaction**, because an
+order marked paid with no grant is a customer who has been charged and given nothing. It is
+idempotent on the payment reference: Finance retrying is correct behaviour, and an error would
+make it retry for ever. Pulse is idempotent again on the grant reference, so a redelivered push
+credits once.
+
+### 12.2 The price is frozen at the quote
+
+Every money column is fixed when the order is created. A customer who opens a payment link on
+Tuesday and pays on Friday gets Tuesday's price — the only defensible answer, and the one the
+invoice already states. A paid order cannot be re-priced: a database trigger refuses it.
+
+### 12.3 A coupon on a purchase is a coupon, not a discount field
+
+The order carries `coupon_code`, but the fact that the coupon was **used** lives in
+`engage_coupon_redemptions` beside every licence redemption — because that table is what
+enforces "once per customer", what makes a campaign run out, and what sales reads to see what a
+campaign cost. A token order holds the coupon when the order is created (`reserved`), spends it
+when the money arrives (`committed`), and gives it back if the order is cancelled (`released`);
+the reservation lapses on its own, so an abandoned checkout costs the customer nothing.
+`order_ref` records what it was committed to, since a purchase of tokens is not a licence.
+
+There is a floor under every discount (`PricingService::MIN_NET_PAISE`, ₹1): a coupon can take a
+purchase down to ₹1 and no further, because a ₹0 invoice is meaningless and Finance refuses one.
+A genuinely free grant is a **voucher** (§10), which is a free supply with no invoice and no GST.
+
+### 12.4 The envelope is the contract
+
+Everything Manage calls answers through `AicS2sResponse` — `{success, data, request_id}` or
+`{success:false, error:{code, message, details, retryable}}`. Engage's own internal `{ok:true}`
+shape is read by Manage's `S2sClient` as "not the AIC-S2S success envelope" and reported to the
+customer as Engage being down, whatever it actually said.
+
+Scopes: the **quote** key (POST only, by `AicS2sConfig::SCOPE_METHODS`) prices, orders, cancels
+and redeems; the **read** key serves the purchase history, because reading what somebody has
+already bought is a read like any other. Widening the quote scope to allow GET would widen it for
+everything the quote key can do.
+
+| Route | Key | What it does |
+|---|---|---|
+| `POST v1/manage/token-orders/quote` | quote | prices it; creates nothing |
+| `POST v1/manage/token-orders` | quote | creates the order and raises the payment link |
+| `GET  v1/manage/token-orders` | read | the holder's purchases, newest first |
+| `POST v1/manage/token-orders/{ref}/cancel` | quote | only while unpaid |
+| `POST v1/manage/token-vouchers/redeem` | quote | a credit code into the wallet |
+| `POST v1/inbound/finance/payment-events` | `X-Finance-Key` | the only thing that turns money into tokens |

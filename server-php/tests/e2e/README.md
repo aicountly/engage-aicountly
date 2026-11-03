@@ -1,7 +1,7 @@
-# End-to-end: Engage ⇄ Manage ⇄ my.aicountly (plans, licensing, coupons)
+# End-to-end: Engage ⇄ Manage ⇄ my.aicountly ⇄ AI Pulse (plans, licensing, coupons, AI credits)
 
 `tests/e2e/run.php` proves the whole chain with real servers, a real PostgreSQL, real AIC-S2S signatures and the
-real command-line jobs. It is not part of `phpunit` (it starts processes and needs three checkouts); run it by hand
+real command-line jobs. It is not part of `phpunit` (it starts processes and needs several checkouts); run it by hand
 before activating the chain in an environment, or after changing any side of it.
 
 | Step | What is proven |
@@ -14,6 +14,12 @@ before activating the chain in an environment, or after changing any side of it.
 | f | Past end → `php spark engage:licences-expire` → Basic reactivated and pushed → Manage back on Basic, company lifecycle still `active`, `ghm_subscription` untouched, nothing deleted |
 | g | Manage `POST /api/billing/coupons/preview` and `/upgrade-requests` → live Engage (quote key) |
 | h | Manage `php scripts/plans_sync.php` stores the Basic defaults from Engage's catalogue (no `cmp_id`); `engage:entitlements-reconcile` (read key) reports 0 drift |
+| i | **AI credits** (`tests/e2e/credits.php`): `engage:basic-offers --apply` → a Basic offer for EVERY product Manage knows, published, and `engage:provision-basic` gives the holder one licence each (42 products, 41 app keys — `ourpeople` rides on `hrms`) |
+| j | The token rate card: rates set and activated four-eyes in Engage, every model Console knows priced (model rate → provider default → Console tier → fallback), `engage:token-rates-push` → **a real AI Pulse** over signed AIC-S2S v1; an unsigned push is refused and changes nothing |
+| k | The **₹1,000 coupon in four shapes** through Manage's own routes: flat / percent, with and without a minimum, single and multiple use; GST on the discounted price; a full discount still leaves ₹1 to invoice (never a ₹0 invoice); a purchase too small to charge for is refused and points at the voucher instrument |
+| l | The purchase: order → Finance's payment-link contract (signature verified by an independent verifier, request body asserted) → `payment.succeeded` into Engage's real inbound route → order paid, grant queued, coupon redemption committed; a retry is a success and grants nothing twice; an unsigned payment event grants nothing |
+| m | `engage:token-grants-push` → Pulse credits the wallet once (idempotent on the grant reference), then all 42 products each make a charged AI call against the one shared balance; the ledger nets to the balance and every charge records the multiplier it applied |
+| n | The one transaction from three sides: Engage's order and redemption rows, Manage's `GET /api/billing/token-orders` (read key — the quote scope is POST-only), and the invoice number carried through |
 
 ## Run
 
@@ -26,6 +32,8 @@ export E2E_PG_HOST=127.0.0.1 E2E_PG_PORT=5432 E2E_PG_USER=postgres E2E_PG_PASSWO
 
 # 3. the other two checkouts (integration branch claude/rectify-2026-10 or later)
 export E2E_MANAGE_DIR=/path/to/manage-aicountly E2E_MYAIC_DIR=/path/to/my-aicountly-com
+# for steps i–n (AI credits); without it those steps print SKIP and the rest still runs
+export E2E_PULSE_DIR=/path/to/pulse-aicountly   # needs its own composer install
 
 php engage-aicountly/server-php/tests/e2e/run.php      # exit 0 = all passed, 1 = a failure
 ```
@@ -38,6 +46,28 @@ php engage-aicountly/server-php/tests/e2e/run.php      # exit 0 = all passed, 1 
   databases (`e2e<random>_engage|_manage|_myaic`) and the temp folder for inspection.
 - Missing prerequisites (no `E2E_MANAGE_DIR` / `E2E_MYAIC_DIR`, no `vendor/`, no `pdo_pgsql`, database unreachable)
   print `SKIP …` and exit 0.
+
+### What stands in for a real service, and why
+
+Engage, Manage, my.aicountly and **AI Pulse** are the real applications against real PostgreSQL,
+and every hop between them is a real signed AIC-S2S v1 request over HTTP. Two things are stubbed,
+both deliberately:
+
+- **Console's model catalogue**, which is one read-only `GET /portal/ai-models`. The stub serves
+  the shape Console serves and checks the bearer token.
+- **Finance**, whose own half of this — the GST invoice, the gateway, the payment it re-reads from
+  the provider — is proven by finance-aicountly's own suite (`tests/academy-db.php` covers the
+  token-purchase payment link against a stubbed Razorpay). Here Finance is a stub that **verifies
+  Engage's signature with an independent implementation** of the canonical string, asserts the
+  request Engage sent, and then posts a real payment event back into Engage's real inbound route.
+  So steps l–n prove Engage's side of the Finance contract, not Finance's bookkeeping.
+
+Nothing else is faked. Steps i–n found three bugs that every unit and integration test had
+missed, which is the reason they exist: Pulse's schema splitter cut PL/pgSQL function bodies in
+half so `php spark migrate` never created the wallet tables; one schema file had no migration at
+all; and Engage's buy-credits routes answered in Engage's internal `{ok:true}` shape, which
+Manage's client reads as "the service is down" — so nothing could be bought, while both sides'
+own tests passed.
 
 ## What it sets up (nothing is written to any repository)
 

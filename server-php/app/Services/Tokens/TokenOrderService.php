@@ -76,10 +76,12 @@ class TokenOrderService
 
         $code = strtoupper(trim((string) ($in['coupon_code'] ?? '')));
         if ($code !== '') {
-            $c = $this->coupon($code);
-            if ($c === null) {
-                return self::fail(422, 'coupon_invalid', 'That coupon cannot be used for a token purchase.', ['coupon_code' => 'Not recognised, or not active.']);
+            $found = $this->coupon($code, $holderUuid);
+            if ($found === null) {
+                return self::fail(422, 'coupon_invalid', 'That coupon cannot be used for a token purchase.',
+                    ['coupon_code' => 'Not recognised, no longer active, or already used as many times as it allows.']);
             }
+            $c = $found['coupon'];
             // The same arithmetic a licence quote uses, including its floor: a coupon
             // can never take the price to zero, because a zero invoice is meaningless
             // and Finance refuses one. A free grant is a voucher, not a coupon.
@@ -165,32 +167,45 @@ class TokenOrderService
         }
 
         $ref = 'TKO-' . str_pad((string) $db->query("SELECT nextval('engage_token_order_ref_seq') AS n")->getRow()->n, 6, '0', STR_PAD_LEFT);
-        $db->table('engage_token_orders')->insert([
-            'order_ref'            => $ref,
-            'holder_uuid'          => $holderUuid,
-            'cmp_id'               => $cmpId,
-            'tokens'               => $d['tokens'],
-            'price_paise_per_1000' => $d['price_paise_per_1000'],
-            'list_paise'           => $d['list_paise'],
-            'discount_paise'       => $d['discount_paise'],
-            'net_paise'            => $d['net_paise'],
-            'gst_rate'             => $d['gst_rate'],
-            'gst_paise'            => $d['gst_paise'],
-            'total_paise'          => $d['total_paise'],
-            'sac'                  => $d['sac'],
-            'coupon_code'          => $d['coupon_code'],
-            'coupon_id'            => $d['coupon_id'],
-            'payer_name'           => mb_substr($name, 0, 120),
-            'payer_email'          => trim((string) ($payer['email'] ?? '')) ?: null,
-            'payer_mobile'         => trim((string) ($payer['mobile'] ?? '')) ?: null,
-            'payer_state_code'     => $state,
-            'payer_address'        => trim((string) ($payer['address'] ?? '')) ?: null,
-            'payer_pincode'        => trim((string) ($payer['pincode'] ?? '')) ?: null,
-            'buyer_gstin'          => strtoupper(trim((string) ($payer['gstin'] ?? ''))) ?: null,
-            'status'               => 'quoted',
-            'source'               => $source,
-        ]);
-        $id = (int) $db->insertID();
+        // The order and the hold on the coupon go together: an order carrying a discount
+        // nobody recorded is a coupon that can be used for ever.
+        $db->transBegin();
+        try {
+            $db->table('engage_token_orders')->insert([
+                'order_ref'            => $ref,
+                'holder_uuid'          => $holderUuid,
+                'cmp_id'               => $cmpId,
+                'tokens'               => $d['tokens'],
+                'price_paise_per_1000' => $d['price_paise_per_1000'],
+                'list_paise'           => $d['list_paise'],
+                'discount_paise'       => $d['discount_paise'],
+                'net_paise'            => $d['net_paise'],
+                'gst_rate'             => $d['gst_rate'],
+                'gst_paise'            => $d['gst_paise'],
+                'total_paise'          => $d['total_paise'],
+                'sac'                  => $d['sac'],
+                'coupon_code'          => $d['coupon_code'],
+                'coupon_id'            => $d['coupon_id'],
+                'payer_name'           => mb_substr($name, 0, 120),
+                'payer_email'          => trim((string) ($payer['email'] ?? '')) ?: null,
+                'payer_mobile'         => trim((string) ($payer['mobile'] ?? '')) ?: null,
+                'payer_state_code'     => $state,
+                'payer_address'        => trim((string) ($payer['address'] ?? '')) ?: null,
+                'payer_pincode'        => trim((string) ($payer['pincode'] ?? '')) ?: null,
+                'buyer_gstin'          => strtoupper(trim((string) ($payer['gstin'] ?? ''))) ?: null,
+                'status'               => 'quoted',
+                'source'               => $source,
+            ]);
+            $id = (int) $db->insertID();
+            if (($d['coupon_code'] ?? null) !== null) {
+                $this->reserveCoupon($d, $ref, $holderUuid, $cmpId, $source);
+            }
+            $db->transCommit();
+        } catch (\Throwable $e) {
+            $db->transRollback();
+
+            throw $e;
+        }
         $this->audit('token_order.create', $id, ['order_ref' => $ref, 'tokens' => $d['tokens'], 'total_paise' => $d['total_paise'], 'coupon' => $d['coupon_code']]);
 
         return ['status' => 201, 'data' => $this->find($id)];
@@ -312,7 +327,7 @@ class TokenOrderService
                 'grant_ref'   => $grantRef,
                 'holder_uuid' => (string) $o['holder_uuid'],
                 'tokens'      => (int) $o['tokens'],
-                'reason'      => 'Purchase ' . $orderRef . ($o['invoice_no'] ?? '' ? '' : ''),
+                'reason'      => 'Purchase ' . $orderRef,
                 'origin'      => 'purchase',
                 'origin_ref'  => $orderRef,
                 'status'      => 'pending',
@@ -321,11 +336,7 @@ class TokenOrderService
             // A coupon used on a purchase is spent when the money arrives, not when the
             // customer typed it: an abandoned checkout must not burn their coupon.
             if (($o['coupon_id'] ?? null) !== null) {
-                $db->query(
-                    "UPDATE engage_coupon_redemptions SET state = 'committed', committed_at = NOW(), updated_at = NOW()
-                      WHERE idempotency_key = ? AND state = 'reserved'",
-                    ['token_order:' . $orderRef]
-                );
+                $this->commitCoupon($orderRef);
             }
 
             $db->transCommit();
@@ -351,10 +362,22 @@ class TokenOrderService
         if (in_array($o['status'], ['paid', 'granted'], true)) {
             return self::fail(409, 'already_paid', 'That order is paid. Refund it rather than cancelling it.');
         }
-        $this->db()->table('engage_token_orders')->where('id', (int) $o['id'])->update([
-            'status' => 'cancelled', 'cancelled_at' => date('Y-m-d H:i:sP'),
-            'cancel_reason' => mb_substr($reason, 0, 255), 'updated_at' => date('Y-m-d H:i:sP'),
-        ]);
+        $db = $this->db();
+        $db->transBegin();
+        try {
+            $db->table('engage_token_orders')->where('id', (int) $o['id'])->update([
+                'status' => 'cancelled', 'cancelled_at' => date('Y-m-d H:i:sP'),
+                'cancel_reason' => mb_substr($reason, 0, 255), 'updated_at' => date('Y-m-d H:i:sP'),
+            ]);
+            // The coupon goes back to the customer. Changing their mind must not cost them
+            // a single-use code.
+            $this->releaseCoupon($orderRef, 'The token order was cancelled: ' . mb_substr($reason, 0, 180));
+            $db->transCommit();
+        } catch (\Throwable $e) {
+            $db->transRollback();
+
+            throw $e;
+        }
         $this->audit('token_order.cancel', (int) $o['id'], ['order_ref' => $orderRef, 'reason' => $reason]);
 
         return ['status' => 200, 'data' => $this->find((int) $o['id'])];
@@ -387,11 +410,20 @@ class TokenOrderService
 
     // --------------------------------------------------------------- helpers
 
-    /** An active coupon that may be used on a token purchase. */
-    private function coupon(string $code): ?array
+    /**
+     * An active coupon that may be used on a token purchase, with its code row.
+     *
+     * The limits are checked HERE rather than at the order, so the customer is told at the
+     * quote — before they have filled in billing details — that their coupon is spent.
+     *
+     * @return array{coupon:array<string,mixed>, code:array<string,mixed>}|null
+     */
+    private function coupon(string $code, ?string $holderUuid = null): ?array
     {
-        $r = $this->db()->query(
-            "SELECT c.* FROM engage_coupon_codes k JOIN engage_coupons c ON c.id = k.coupon_id
+        $db = $this->db();
+        $r = $db->query(
+            "SELECT c.*, k.id AS code_id, k.kind AS code_row_kind, k.status AS code_status
+               FROM engage_coupon_codes k JOIN engage_coupons c ON c.id = k.coupon_id
               WHERE k.code = ? AND k.status = 'available' AND c.status = 'active'
                 AND (c.valid_from IS NULL OR c.valid_from <= NOW())
                 AND (c.valid_to   IS NULL OR c.valid_to   >  NOW())",
@@ -409,8 +441,112 @@ class TokenOrderService
                 return null;
             }
         }
+        // How many times it has been used, counting a live reservation: somebody halfway
+        // through a checkout has it, and a second tab must not be given it as well.
+        $used = static fn (string $where, array $args): int => (int) $db->query(
+            "SELECT COUNT(*) AS n FROM engage_coupon_redemptions
+              WHERE {$where} AND (state = 'committed' OR (state = 'reserved' AND reserved_until > NOW()))",
+            $args
+        )->getRow()->n;
+        if ($r['max_redemptions_total'] !== null && $used('coupon_id = ?', [(int) $r['id']]) >= (int) $r['max_redemptions_total']) {
+            return null;
+        }
+        if ($holderUuid !== null && $r['max_redemptions_per_holder'] !== null
+            && $used('coupon_id = ? AND holder_uuid = ?', [(int) $r['id'], $holderUuid]) >= (int) $r['max_redemptions_per_holder']) {
+            return null;
+        }
 
-        return $r;
+        return ['coupon' => $r, 'code' => ['id' => (int) $r['code_id'], 'kind' => (string) $r['code_row_kind']]];
+    }
+
+    /**
+     * Hold the coupon for this order: a `reserved` redemption, released if the order is
+     * cancelled and committed when the money arrives.
+     *
+     * A token purchase is not a licence, so `offer_code` / `product_code` say `tokens` and
+     * `order_ref` carries what it is held against. The reservation lapses on its own
+     * (engage:coupons-expire releases stale ones), so an abandoned checkout gives the
+     * coupon back without anybody doing anything.
+     *
+     * @param array<string,mixed> $d the quote
+     */
+    private function reserveCoupon(array $d, string $orderRef, string $holderUuid, int $cmpId, string $source): void
+    {
+        $db = $this->db();
+        $c = $this->coupon((string) $d['coupon_code'], $holderUuid);
+        if ($c === null) {
+            // Taken between the quote and the order. The order is priced from the quote,
+            // so refusing here would lose a correct price; the discount simply is not
+            // recorded as a redemption and sales sees the order's own coupon_code.
+            log_message('warning', 'token order {o}: coupon {c} was no longer available when the order was created', ['o' => $orderRef, 'c' => $d['coupon_code']]);
+
+            return;
+        }
+        $db->query(
+            "INSERT INTO engage_coupon_redemptions (coupon_id, code_id, code, single_use, holder_uuid, cmp_id, holder_key, kind,
+                offer_code, offer_version, product_code, price_basis, gst_rate, order_ref, list_paise, discount_paise, net_paise,
+                taxable_paise, gst_paise, total_paise, state, reserved_until, idempotency_key, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'new', 'tokens', 1, 'tokens', 'exclusive', CAST(? AS NUMERIC), ?, ?, ?, ?, ?, ?, ?, 'reserved',
+                NOW() + INTERVAL '14 days', ?, ?)
+             ON CONFLICT (idempotency_key) DO NOTHING",
+            [
+                (int) $c['coupon']['id'], $c['code']['id'], (string) $d['coupon_code'], $c['code']['kind'] === 'single_use' ? 't' : 'f',
+                $holderUuid, $cmpId, 'holder:' . $holderUuid, (string) $d['gst_rate'], $orderRef,
+                (int) $d['list_paise'], (int) $d['discount_paise'], (int) $d['net_paise'],
+                (int) $d['net_paise'], (int) $d['gst_paise'], (int) $d['total_paise'],
+                'token_order:' . $orderRef, $source === 'staff' ? 'staff' : 'manage',
+            ]
+        );
+        if ($c['code']['kind'] === 'single_use') {
+            $db->query("UPDATE engage_coupon_codes SET status = 'reserved', updated_at = NOW() WHERE id = ? AND status = 'available'", [$c['code']['id']]);
+        }
+    }
+
+    /**
+     * reserved → committed. Runs inside settle()'s transaction.
+     *
+     * A single-use code is marked redeemed and a coupon that has now reached its total is
+     * marked exhausted, exactly as a licence redemption does — otherwise a campaign with a
+     * cap would keep giving money away through the credits screen.
+     */
+    private function commitCoupon(string $orderRef): void
+    {
+        $db = $this->db();
+        $r = $db->query("SELECT * FROM engage_coupon_redemptions WHERE idempotency_key = ? FOR UPDATE", ['token_order:' . $orderRef])->getRowArray();
+        if ($r === null || $r['state'] !== 'reserved') {
+            return;
+        }
+        $db->query(
+            "UPDATE engage_coupon_redemptions SET state = 'committed', committed_at = NOW(), order_ref = ?, updated_at = NOW() WHERE id = ?",
+            [$orderRef, (int) $r['id']]
+        );
+        if ($r['single_use'] === true || $r['single_use'] === 't') {
+            $db->query("UPDATE engage_coupon_codes SET status = 'redeemed', updated_at = NOW() WHERE id = ?", [(int) $r['code_id']]);
+        }
+        $c = $db->query('SELECT * FROM engage_coupons WHERE id = ?', [(int) $r['coupon_id']])->getRowArray();
+        if ($c !== null && $c['max_redemptions_total'] !== null && in_array($c['status'], ['active', 'paused'], true)) {
+            $n = (int) $db->query("SELECT COUNT(*) AS n FROM engage_coupon_redemptions WHERE coupon_id = ? AND state = 'committed'", [(int) $c['id']])->getRow()->n;
+            if ($n >= (int) $c['max_redemptions_total']) {
+                $db->query("UPDATE engage_coupons SET status = 'exhausted', ended_at = NOW(), version = version + 1, updated_at = NOW() WHERE id = ?", [(int) $c['id']]);
+            }
+        }
+    }
+
+    /** reserved → released: the customer gets the coupon back. */
+    private function releaseCoupon(string $orderRef, string $reason): void
+    {
+        $db = $this->db();
+        $r = $db->query("SELECT * FROM engage_coupon_redemptions WHERE idempotency_key = ? FOR UPDATE", ['token_order:' . $orderRef])->getRowArray();
+        if ($r === null || $r['state'] !== 'reserved') {
+            return;
+        }
+        $db->query(
+            "UPDATE engage_coupon_redemptions SET state = 'released', released_at = NOW(), release_reason = ?, updated_at = NOW() WHERE id = ?",
+            [mb_substr($reason, 0, 255), (int) $r['id']]
+        );
+        if ($r['single_use'] === true || $r['single_use'] === 't') {
+            $db->query("UPDATE engage_coupon_codes SET status = 'available', updated_at = NOW() WHERE id = ? AND status = 'reserved'", [(int) $r['code_id']]);
+        }
     }
 
     private static function view(array $r): array

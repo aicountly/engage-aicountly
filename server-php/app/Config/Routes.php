@@ -154,7 +154,10 @@ $routes->group('v1', static function ($routes) {
     $T = 'Inbound\\ManageTokenOrdersController::';
     $routes->post('manage/token-orders/quote',               $T . 'quote',  ['filter' => 'aic-s2s:manage,quote']);
     $routes->post('manage/token-orders',                     $T . 'create', ['filter' => 'aic-s2s:manage,quote']);
-    $routes->get('manage/token-orders',                      $T . 'index',  ['filter' => 'aic-s2s:manage,quote']);
+    // Reading a customer's own purchases is a read, so it takes the READ key: the quote
+    // scope is POST-only (AicS2sConfig::SCOPE_METHODS), and widening that for one listing
+    // would widen it for everything the quote key can do.
+    $routes->get('manage/token-orders',                      $T . 'index',  ['filter' => 'aic-s2s:manage,read']);
     $routes->post('manage/token-orders/(:segment)/cancel',   $T . 'cancel/$1', ['filter' => 'aic-s2s:manage,quote']);
     $routes->post('manage/token-vouchers/redeem',            $T . 'redeemVoucher', ['filter' => 'aic-s2s:manage,quote']);
     $routes->group('manage', ['filter' => 'aic-s2s:manage,read,issue'], static function ($routes) {
