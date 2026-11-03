@@ -305,17 +305,42 @@ gives a real denominator, and whichever is worse wins.
 Defaults: low at 20% or 7 days, critical at 5% or 2 days, spike at 5× the daily average.
 All in `buddy_settings`, all changeable without a deploy.
 
-### 11.5 Off by default
+### 11.5 The customer can refuse some of these, and not others
+
+Console holds the message preferences and enforces them at the send gate
+(console-react-app `docs/NOTIFICATION_PREFERENCES.md`, migrations 084/085). These triggers are
+classified by what they actually are:
+
+| Trigger | Category | Refusable? |
+|---|---|---|
+| `credits.balance_low`, `credits.balance_critical`, `credits.usage_spike` | `service_updates` | yes |
+| `credits.balance_exhausted`, `credits.purchase_failed` | `service_alerts` | **no** |
+| `credits.purchase_receipt`, `credits.voucher_issued`, `credits.voucher_redeemed`, `plan.changed` | `transactional` | **no** |
+
+Running out is not refusable because it is the only notice before work starts being turned
+away, and a credits system that can refuse work is only fair if the person hears about it.
+Running *low* is refusable, because somebody who would rather watch their own balance is
+entitled to.
+
+A refusal comes back from Console as `200 {sent:false, skipped_reason:"opted_out"}`, and Pulse
+disarms that alert rather than re-queueing it every hour (`TokenAlerts::SETTLED_REFUSALS`) —
+re-asking somebody who has said no is the system arguing with them.
+
+### 11.6 Off by default
 
 `token_alerts_enabled` ships as `0`. A customer's first balance warning should be
 somebody's decision, not a deploy's side effect.
 
-### 11.6 Jobs
+### 11.7 Jobs
 
 | Job | Where | When |
 |---|---|---|
 | `pulse:token-alerts` | Pulse | hourly at :29 — works out who should be warned |
 | `engage:token-alerts-send` | Engage | every 15 min — collects and delivers |
+
+
+> **Switching all of this on:** [`CREDITS_GO_LIVE.md`](CREDITS_GO_LIVE.md) has the order, the
+> verification for each step, and the blockers that are not code.
 
 ---
 
