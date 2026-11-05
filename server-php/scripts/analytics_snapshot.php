@@ -41,6 +41,14 @@ declare(strict_types=1);
  *                 >> ~/logs/engage-analytics-snapshot.log 2>&1
  */
 
+// Operator scripts run from the command line only. Before ANYTHING else, including the require
+// below: a script that loads half an application before deciding it should not have been reached
+// over HTTP has already done the work an attacker wanted.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 require_once __DIR__ . '/../app/ThirdParty/AicountlyAnalytics/analytics-platform-snapshot.php';
 
 const SOURCE = 'engage';
@@ -83,14 +91,21 @@ $envPath = is_string($o['env'] ?? null) && $o['env'] !== '' ? $o['env'] : dirnam
 $env     = aic_analytics_read_env($envPath);
 $get     = static fn (string $k, string $d = ''): string => $env[$k] ?? (string) (getenv($k) ?: $d);
 
-$prefix = is_string($o['db'] ?? null) && $o['db'] !== '' ? $o['db'] : 'DB';
+// ENGAGE_DB_*, not DB_*: Engage's app/Config/Database.php reads ENGAGE_DB_HOST / _PORT /
+// _NAME / _USER / _PASSWORD, and a collector reading DB_NAME here would find nothing and
+// report that the database was not configured on a host where it plainly is.
+$prefix = is_string($o['db'] ?? null) && $o['db'] !== '' ? $o['db'] : 'ENGAGE_DB';
 try {
     $dsn = sprintf('pgsql:host=%s;port=%s;dbname=%s',
         $get($prefix . '_HOST', '127.0.0.1'), $get($prefix . '_PORT', '5432'), $get($prefix . '_NAME'));
     if ($get($prefix . '_SSLMODE') !== '') {
         $dsn .= ';sslmode=' . $get($prefix . '_SSLMODE');
     }
-    $db = new PDO($dsn, $get($prefix . '_USER'), $get($prefix . '_PASS'), [
+    // _PASSWORD is Engage's spelling; _PASS is the estate's elsewhere. Try both rather than
+    // guessing, because the wrong one fails as 'authentication failed' and sends whoever
+    // reads that to check a password this script never looked at.
+    $pass = $get($prefix . '_PASSWORD') !== '' ? $get($prefix . '_PASSWORD') : $get($prefix . '_PASS');
+    $db = new PDO($dsn, $get($prefix . '_USER'), $pass, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     ]);
 } catch (Throwable $e) {

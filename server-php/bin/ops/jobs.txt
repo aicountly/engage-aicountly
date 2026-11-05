@@ -52,6 +52,6 @@ token-alerts-send       | */15 * * * * | {php} spark engage:token-alerts-send
 # the database reports them (analytics docs/08). Minutes are staggered per product so forty hosts do
 # not all wake together.
 analytics-flush         | * * * * *   | {php} app/ThirdParty/AicountlyAnalytics/analytics-flush.php --env=.env
-analytics-platform      | 47 1 * * *  | {php} app/ThirdParty/AicountlyAnalytics/analytics-platform-snapshot.php --env=.env --push
+analytics-platform      | 47 1 * * *  | {php} app/ThirdParty/AicountlyAnalytics/analytics-platform-collect.php --env=.env --push
 # This product also OWNS facts nothing else can report: commercial figures (paying and free customers, money collected, token balances).
 analytics-snapshot      | 49 1 * * *  | {php} scripts/analytics_snapshot.php --env=.env --push
