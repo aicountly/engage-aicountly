@@ -37,3 +37,21 @@ token-grants-push       | * * * * *   | {php} spark engage:token-grants-push
 # Console's notification hub. Every 15 minutes — a customer running out of tokens should hear within the hour, and
 # Pulse only queues on a threshold crossing so there is rarely anything to collect.
 token-alerts-send       | */15 * * * * | {php} spark engage:token-alerts-send
+# Estate analytics (analytics-aicountly sdk/README.md). BOTH jobs are inert until
+# AICOUNTLY_ANALYTICS_ENABLED=1 in .env: the flush exits 0 immediately and the snapshot prints one
+# line and exits 0. That is why they are safe to install on every product, enabled or not — a job
+# that mailed an error nightly until somebody configured it is a job the operator would filter, and
+# then nobody would see the night it broke for a real reason.
+# NOTE: this block asks install-jobs.sh for `pgsql` (CodeIgniter's Postgre driver). The analytics
+# jobs use PDO and need pdo_pgsql as well; the server normally has both. If it does not, the job
+# says so and exits 3 rather than failing obscurely — point it at a CLI that has both with
+# `bash bin/ops/install-jobs.sh --php=/path/to/php --apply`.
+# The flush drains anything the after-response send could not deliver (Analytics briefly down, a CLI
+# process, a request that died before shutdown). The snapshot reports this product's own database
+# size, tables and row counts once a day — events can never answer those, so the product that owns
+# the database reports them (analytics docs/08). Minutes are staggered per product so forty hosts do
+# not all wake together.
+analytics-flush         | * * * * *   | {php} app/ThirdParty/AicountlyAnalytics/analytics-flush.php --env=.env
+analytics-platform      | 47 1 * * *  | {php} app/ThirdParty/AicountlyAnalytics/analytics-platform-collect.php --env=.env --push
+# This product also OWNS facts nothing else can report: commercial figures (paying and free customers, money collected, token balances).
+analytics-snapshot      | 49 1 * * *  | {php} scripts/analytics_snapshot.php --env=.env --push
