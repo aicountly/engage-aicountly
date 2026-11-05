@@ -196,6 +196,15 @@ if (!$push) {
     exit(0);
 }
 
+// Installed into the crontab by the deploy, including where analytics is not switched on yet.
+// Exit QUIETLY there: a job that mails an error every night is a job the operator filters, and
+// then nobody sees the night it breaks for a real reason.
+$enabled = $get('AICOUNTLY_ANALYTICS_ENABLED', '0');
+if (!in_array(strtolower($enabled), ['1', 'true', 'yes', 'on'], true)) {
+    echo "analytics is not enabled for this product (AICOUNTLY_ANALYTICS_ENABLED={$enabled}); nothing sent.\n";
+    exit(0);
+}
+
 $key = $get('AICOUNTLY_ANALYTICS_KEY');
 if ($key === '') {
     fwrite(STDERR, "AICOUNTLY_ANALYTICS_KEY is not set in {$envPath}; nothing sent.\n");
