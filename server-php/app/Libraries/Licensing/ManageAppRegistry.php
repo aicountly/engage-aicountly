@@ -36,14 +36,18 @@ final class ManageAppRegistry
         'remote', 'messaging', 'voice', 'email', 'receptionist',
         'fr', 'secretarial', 'advisor',
         'integrate', 'apis', 'buddy',
-        'stay', 'library', 'pharma', 'me', 'campus', 'slip',
+        'stay', 'library', 'pharma', 'campus', 'slip',
     ];
 
     /** @var list<string> Manage CompanyAppRegistry::COMPANY_LEVEL_KEYS. */
     public const COMPANY_LEVEL_KEYS = ['manage', 'auditor'];
 
-    /** @var list<string> Catalogued at GET /api/apps with no company (Manage CompanyAppRegistry::PLAN_ONLY_KEYS). */
-    public const CATALOG_ONLY_KEYS = ['community'];
+    /**
+     * @var list<string> Catalogued at GET /api/apps with no company (Manage CompanyAppRegistry::PLAN_ONLY_KEYS).
+     * `me` is a person's own product (Manage PERSONAL_APP_KEYS): catalogued and licensed per person like any
+     * other, but never granted on a company, so it is not an APP_KEY.
+     */
+    public const CATALOG_ONLY_KEYS = ['community', 'me'];
 
     /**
      * @var list<string> Manage AppCatalogService ids, in catalog (launcher) order — every product Engage licenses
@@ -69,7 +73,7 @@ final class ManageAppRegistry
 
     /**
      * @var list<string> Keys Manage holds a plan for (CompanyAppRegistry::hasPlan): APP_KEYS + PLAN_ONLY_KEYS
-     * (auditor, community). Never `manage`.
+     * (auditor, community, me). Never `manage`.
      */
     public const PLAN_KEYS = [
         'books', 'inventory', 'sales', 'purchases', 'billing', 'pos', 'pay', 'contacts',
@@ -78,8 +82,8 @@ final class ManageAppRegistry
         'remote', 'messaging', 'voice', 'email', 'receptionist',
         'fr', 'secretarial', 'advisor',
         'integrate', 'apis', 'buddy',
-        'stay', 'library', 'pharma', 'me', 'campus', 'slip',
-        'auditor', 'community',
+        'stay', 'library', 'pharma', 'campus', 'slip',
+        'auditor', 'community', 'me',
     ];
 
     /** @var array<string,string> Manage CompanyAppRegistry::ALIASES. */
