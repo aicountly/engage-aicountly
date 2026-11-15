@@ -42,6 +42,8 @@ class Filters extends BaseFilters
         'seller-session'    => SellerSessionFilter::class,
         'idempotency'       => IdempotencyFilter::class,
         'finance-inbound'   => FinanceInboundFilter::class,
+        // Finance payment events: AIC-S2S (client finance) when signed, else X-Finance-Key (FinancePaymentEventsFilter).
+        'finance-events'    => \App\Filters\FinancePaymentEventsFilter::class,
         // AIC-S2S v1 inbound (commerce contract §0.1); argument = calling client, e.g. 'aic-s2s:manage'.
         'aic-s2s'           => AicS2sFilter::class,
     ];

@@ -137,7 +137,8 @@ $routes->group('v1', static function ($routes) {
     $routes->post('inbound/finance/payout-status', 'Inbound\\FinanceController::payoutStatus', ['filter' => 'finance-inbound']);
     // Finance → Engage: a payment it has re-read from the provider and invoiced. For a
     // token order this is the signal that tokens may be granted.
-    $routes->post('inbound/finance/payment-events', 'Inbound\\FinanceController::paymentEvents', ['filter' => 'finance-inbound']);
+    // Finance signs these with AIC-S2S as client `finance` (its EngagePaymentEventOutbox); X-Finance-Key is still accepted.
+    $routes->post('inbound/finance/payment-events', 'Inbound\\FinanceController::paymentEvents', ['filter' => 'finance-events']);
 
     // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
     // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
