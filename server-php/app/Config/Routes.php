@@ -296,6 +296,7 @@ $routes->group('v1', static function ($routes) {
         $routes->get('entitlement-codes',                     $L . 'EntitlementCodesController::index');
         $routes->get('offers',                                $L . 'OffersController::index');
         $routes->get('offers/basic-readiness',                $L . 'OffersController::basicReadiness');
+        $routes->get('offers/price-history/(:segment)',       $L . 'OffersController::priceHistory/$1');
         $routes->get('offers/(:num)',                         $L . 'OffersController::show/$1');
         $routes->post('offers',                               $L . 'OffersController::create', $licAdmin);
         $routes->put('offers/(:num)',                         $L . 'OffersController::update/$1', $licAdmin);
@@ -304,6 +305,10 @@ $routes->group('v1', static function ($routes) {
         $routes->post('offers/(:num)/retire',                 $L . 'OffersController::retire/$1', $licAdmin);
         $routes->post('offers/(:num)/new-version',            $L . 'OffersController::newVersion/$1', $licAdmin);
         $routes->post('offers/(:num)/default',                $L . 'OffersController::setDefault/$1', $licAdmin);
+        // Price revisions "with effect from" and sales channels (docs/SELLING_LICENCES.md §4, §5).
+        $routes->post('offers/(:num)/revise',                 $L . 'OffersController::revise/$1', $licAdmin);
+        $routes->post('offers/(:num)/cancel-schedule',        $L . 'OffersController::cancelSchedule/$1', $licAdmin);
+        $routes->post('offers/(:num)/channels',               $L . 'OffersController::channels/$1', $licAdmin);
         $routes->get('holders',                               $L . 'HoldersController::index');
         $routes->get('holders/(:segment)',                    $L . 'HoldersController::show/$1');
         $routes->get('entitlements/outbox',                   $L . 'EntitlementsController::outbox');

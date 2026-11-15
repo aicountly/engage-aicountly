@@ -13,6 +13,13 @@ use Config\Services;
  *   PUT    v1/offers/{id}                  draft only (published versions are immutable)
  *   DELETE v1/offers/{id}                  discard a draft
  *   POST   v1/offers/{id}/publish | retire | new-version
+ *                                          publish: a draft whose valid_from is still ahead is SCHEDULED (a price revision
+ *                                          with an effective date); otherwise it goes on sale now
+ *   POST   v1/offers/{id}/revise   {price_paise, price_basis?, gst_rate?, effective_from, note}
+ *                                          price revision "with effect from" of the version in effect now (201)
+ *   POST   v1/offers/{id}/cancel-schedule {reason}   withdraw a scheduled revision before it takes effect
+ *   POST   v1/offers/{id}/channels {channels: [website|manage|seller…]}   where this version is sold
+ *   GET    v1/offers/price-history/{offer_code}      every version with the period its price applied
  *   POST   v1/offers/{id}/default  {is_default: bool}   the product's Basic (draft or published; one published per product)
  *   GET    v1/offers/basic-readiness       which products still have no published Basic
  */
@@ -86,6 +93,33 @@ class OffersController extends LicensingBaseController
     public function newVersion($id = null)
     {
         return $this->result(Services::offers()->newVersion((int) $id, $this->user()));
+    }
+
+    public function revise($id = null)
+    {
+        return $this->result(Services::offers()->revise((int) $id, $this->input(), $this->user()));
+    }
+
+    public function cancelSchedule($id = null)
+    {
+        return $this->result(Services::offers()->cancelScheduled((int) $id, (string) ($this->input()['reason'] ?? ''), $this->user()));
+    }
+
+    public function channels($id = null)
+    {
+        $in = $this->input();
+        if (! array_key_exists('channels', $in)) {
+            return $this->fail('Send channels: a list of website, manage, seller (empty = staff only).', 422, ['channels' => 'Required.']);
+        }
+
+        return $this->result(Services::offers()->setChannels((int) $id, $in['channels'], $this->user()));
+    }
+
+    public function priceHistory($code = null)
+    {
+        $h = Services::offers()->history((string) $code);
+
+        return $h ? $this->ok($h) : $this->fail('Offer not found.', 404);
     }
 
     public function setDefault($id = null)

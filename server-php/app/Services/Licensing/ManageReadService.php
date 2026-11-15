@@ -125,7 +125,10 @@ class ManageReadService
      */
     public function catalogue(?int $cmpId = null): array
     {
-        return array_map(static function (array $o): array {
+        $offers = new OfferService($this->db());
+        $pending = $offers->pendingRevisions();
+
+        return array_map(static function (array $o) use ($pending): array {
             $v = OfferService::view($o);
             $display = (array) $v['display'];
             $attributes = [];
@@ -154,8 +157,24 @@ class ManageReadService
                 'display'      => $v['display'],
                 'valid_from'   => $v['valid_from'],
                 'valid_to'     => $v['valid_to'],
+                // Additive: a price revision scheduled for this offer (docs/SELLING_LICENCES.md §4). Never a second card —
+                // the offer above stays the one on sale until effective_from.
+                'upcoming'     => isset($pending[$v['offer_code']]) ? self::upcomingView($pending[$v['offer_code']]) : null,
             ];
-        }, array_values(array_filter((new OfferService($this->db()))->onSale(), static fn (array $o): bool => ! LicenceService::coversCourse($o))));
+        }, array_values(array_filter($offers->onSale(), static fn (array $o): bool => ! LicenceService::coversCourse($o)
+            // Manage's channel; a product's Basic is always there (Manage's plans_sync reads the defaults from here).
+            && (EntitlementProjector::bool($o['is_default'] ?? false) || in_array('manage', OfferService::channelsOf($o), true)))));
+    }
+
+    /** {version, effective_from, price} of a scheduled revision. @param array<string,mixed> $o an offer row */
+    public static function upcomingView(array $o): array
+    {
+        return [
+            'version'        => (int) $o['version'],
+            'effective_from' => S::iso((string) $o['valid_from']),
+            'price'          => ['amount_paise' => (int) $o['price_paise'], 'currency' => (string) $o['currency'], 'basis' => (string) $o['price_basis'],
+                'gst_rate' => OfferService::rate((string) $o['gst_rate']), 'sac' => $o['sac']],
+        ];
     }
 
     /** @return list<array<string,mixed>> */

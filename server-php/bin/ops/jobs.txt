@@ -23,6 +23,10 @@ console-audit-deliver   | */5 * * * * | {php} spark engage:console-audit-deliver
 licences-expire         | 23 * * * *  | {php} spark engage:licences-expire
 entitlements-push       | * * * * *   | {php} spark engage:entitlements-push
 entitlements-reconcile  | 41 4 * * *  | {php} spark engage:entitlements-reconcile
+# Price revisions "with effect from" (docs/SELLING_LICENCES.md §4): record each scheduled offer version whose effective
+# date has come (reads already treat it as on sale) and re-project Basic holders when the revision is a Basic. Every
+# minute; reports itself to Console as engage.offers_activate.
+offers-activate         | * * * * *   | {php} spark engage:offers-activate
 # Coupons (docs/COUPONS.md §5): release lapsed quote reservations, expire old quotes and ended coupons. Hourly, offset
 # from the other jobs; reports itself to Console as engage.coupons_expire.
 coupons-expire          | 41 * * * *  | {php} spark engage:coupons-expire

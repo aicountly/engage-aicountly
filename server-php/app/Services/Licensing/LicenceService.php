@@ -355,13 +355,14 @@ class LicenceService
             return self::invalid(['holder_note' => 'Engage has not heard of this holder yet (no my.aicountly sign-up received). Check the uuid with the customer and say how you verified it.']);
         }
         $offers = new OfferService($this->db());
-        $offer = isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
+        $quoted = $this->quotedVersion($offers, $in, $code);
+        $offer = $quoted ?? (isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
             ? $offers->findVersion($code, (int) $in['offer_version'])
-            : $offers->publishedVersion($code);
+            : $offers->publishedVersion($code));
         if ($offer && self::coversCourse($offer)) {
             return self::invalid(['offer_code' => 'That offer is for an Aicountly Academy course (' . $offer['product_code'] . '): courses are not licensed.']);
         }
-        if (! $offer || ! OfferService::isOnSale($offer)) {
+        if (! $offer || ($quoted === null && ! OfferService::isOnSale($offer))) {
             return self::invalid(['offer_code' => 'That offer version is not published and on sale.']);
         }
         $type = (new LicenceTypeService($this->db()))->findByCode($offer['licence_type_code']);
@@ -542,6 +543,28 @@ class LicenceService
         return is_string($q) && preg_match('/\A[A-Za-z0-9_.:\-]{1,64}\z/', $q) ? null : 'quote_ref must be a quote reference (1–64 letters, digits, _ . : -).';
     }
 
+    /**
+     * The offer version an open, unexpired quote for $code was priced on, when the request carries one (and names no
+     * explicit offer_version). A quote is a written price: it holds until it expires, even across a price revision
+     * that took effect meanwhile (docs/SELLING_LICENCES.md §2.2). Only a version that went on sale counts — never a
+     * draft or a revision still waiting for its date. The coupon hook still checks the quote itself.
+     */
+    private function quotedVersion(OfferService $offers, array $in, string $code): ?array
+    {
+        $ref = $in['quote_ref'] ?? null;
+        if (! is_string($ref) || trim($ref) === '' || (isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null)) {
+            return null;
+        }
+        $q = $this->db()->query("SELECT offer_code, offer_version FROM engage_quotes WHERE quote_ref = ? AND status = 'open' AND expires_at > NOW()",
+            [strtoupper(trim($ref))])->getRowArray();
+        if (! $q || $q['offer_code'] !== $code) {
+            return null;
+        }
+        $o = $offers->findVersion($code, (int) $q['offer_version']);
+
+        return $o !== null && ($o['published_at'] !== null || ($o['status'] === 'scheduled' && strtotime((string) $o['valid_from']) <= time())) ? $o : null;
+    }
+
     // ------------------------------------------------------------------ transitions
 
     public function activate(string $ref, array $in, array $staff): array
@@ -639,9 +662,10 @@ class LicenceService
             if (isset($in['offer_code']) && $in['offer_code'] !== '' && $in['offer_code'] !== $code) {
                 return self::invalid(['offer_code' => 'A renewal keeps the same offer. Moving to another offer is an upgrade (not available yet).']);
             }
-            $offer = isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
-                ? $offers->findVersion($code, (int) $in['offer_version']) : $offers->publishedVersion($code);
-            if (! $offer || ! OfferService::isOnSale($offer)) {
+            $quoted = $this->quotedVersion($offers, $in, $code);
+            $offer = $quoted ?? (isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
+                ? $offers->findVersion($code, (int) $in['offer_version']) : $offers->publishedVersion($code));
+            if (! $offer || ($quoted === null && ! OfferService::isOnSale($offer))) {
                 return self::invalid(['offer_version' => "Offer {$code} has no published version on sale to renew with."]);
             }
             if ((int) $offer['term_months'] === 0 && (int) $offer['term_days'] === 0) {
@@ -716,9 +740,10 @@ class LicenceService
             if ($code === $l['offer_code']) {
                 return self::invalid(['offer_code' => 'That is the current offer. Use Renew to add a term or take its newer version.']);
             }
-            $offer = isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
-                ? $offers->findVersion($code, (int) $in['offer_version']) : $offers->publishedVersion($code);
-            if (! $offer || ! OfferService::isOnSale($offer)) {
+            $quoted = $this->quotedVersion($offers, $in, $code);
+            $offer = $quoted ?? (isset($in['offer_version']) && $in['offer_version'] !== '' && $in['offer_version'] !== null
+                ? $offers->findVersion($code, (int) $in['offer_version']) : $offers->publishedVersion($code));
+            if (! $offer || ($quoted === null && ! OfferService::isOnSale($offer))) {
                 return self::invalid(['offer_code' => "Offer {$code} has no published version on sale."]);
             }
             if ($offer['product_code'] !== $l['product_code']) {

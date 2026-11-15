@@ -3,7 +3,6 @@
 namespace App\Commands;
 
 use App\Services\Licensing\EntitlementOutbox;
-use App\Services\Licensing\EntitlementProjector;
 use App\Libraries\Licensing\CommandOptions;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
@@ -30,34 +29,11 @@ class EntitlementsReproject extends BaseCommand
         $dry = self::opt($params, 'dry-run') !== null;
         $holder = self::opt($params, 'holder');
         $product = self::opt($params, 'product');
-        $where = ['holder_uuid IS NOT NULL'];
-        $binds = [];
-        if (is_string($holder) && $holder !== '') {
-            $where[] = 'holder_uuid = ?';
-            $binds[] = $holder;
+        $r = EntitlementOutbox::reproject($db, is_string($holder) ? $holder : null, is_string($product) ? $product : null, $dry);
+        foreach ($r['errors'] as $err) {
+            CLI::error('  ' . $err);
         }
-        if (is_string($product) && $product !== '') {
-            $where[] = 'product_code = ?';
-            $binds[] = $product;
-        }
-        $holders = array_column($db->query('SELECT DISTINCT holder_uuid FROM engage_licences WHERE ' . implode(' AND ', $where) . ' ORDER BY holder_uuid', $binds)->getResultArray(), 'holder_uuid');
-        $queued = 0;
-        foreach ($holders as $h) {
-            $db->transException(true)->transBegin();
-            try {
-                $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['provision-holder:' . $h]);
-                $keys = (new EntitlementProjector($db))->appKeysOfSubject($h, null);
-                $queued += count((new EntitlementOutbox($db))->enqueue($h, null, $keys, 'reproject'));
-                $dry ? $db->transRollback() : $db->transCommit();
-            } catch (\Throwable $e) {
-                $db->transRollback();
-                CLI::error("  {$h}: " . $e->getMessage());
-            } finally {
-                $db->transException(false);
-                $db->resetTransStatus();
-            }
-        }
-        CLI::write(($dry ? 'Dry run: would queue ' : 'Queued ') . "{$queued} changed state(s) for " . count($holders) . ' holder(s).');
+        CLI::write(($dry ? 'Dry run: would queue ' : 'Queued ') . "{$r['queued']} changed state(s) for {$r['holders']} holder(s).");
 
         return EXIT_SUCCESS;
     }
