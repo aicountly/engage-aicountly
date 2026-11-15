@@ -9,6 +9,7 @@ use Config\Services;
 /**
  * Staff: sellers.
  *   GET  v1/sellers                          ?status= &kyc_status= &q=
+ *   POST v1/sellers                          add a seller directly {name, email, mobile, business_name?, entity_type?, city?, state?, note?}
  *   GET  v1/sellers/{id}                     detail (KYC masked, leads, commission totals, agreements)
  *   POST v1/sellers/{id}/suspend|reactivate|terminate   {reason}
  *   POST v1/sellers/{id}/resend-activation | reset-password | unlock
@@ -24,6 +25,11 @@ class SellersController extends BaseApiController
         [$page, $limit, $offset] = $this->paging();
 
         return $this->ok(Services::sellerAdmin()->list((array) $this->request->getGet(), $limit, $offset) + ['page' => $page, 'limit' => $limit]);
+    }
+
+    public function create()
+    {
+        return $this->respondWithCode(Services::sellerAdmin()->createDirect($this->input(), $this->user()));
     }
 
     public function show($id = null)
@@ -108,5 +114,22 @@ class SellersController extends BaseApiController
         $total = $b->countAllResults(false);
 
         return $this->ok(['items' => $b->orderBy('k.submitted_at', 'ASC')->limit($limit, $offset)->get()->getResultArray(), 'total' => $total, 'page' => $page, 'limit' => $limit]);
+    }
+
+    /** respondWith() plus the machine `code` of an error (seller_exists, application_open, validation_failed). */
+    private function respondWithCode(array $r)
+    {
+        $status = (int) ($r['status'] ?? 500);
+        if ($status >= 200 && $status < 300) {
+            return $this->ok($r['data'] ?? [], $status);
+        }
+        $body = ['ok' => false, 'error' => (string) ($r['error'] ?? 'Request failed.')];
+        foreach (['code', 'details'] as $k) {
+            if (isset($r[$k])) {
+                $body[$k] = $r[$k];
+            }
+        }
+
+        return $this->response->setStatusCode($status)->setJSON($body);
     }
 }

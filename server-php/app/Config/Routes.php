@@ -65,6 +65,7 @@ $routes->get('/health', static function () {
             'finance_payouts'     => \Config\Services::financePayouts()->status(),
             'manage_inbound'      => \App\Libraries\AicS2s\AicS2sConfig::forClient('manage')->status(),
             'myaicountly_inbound' => \App\Libraries\AicS2s\AicS2sConfig::forClient('myaicountly')->status(),
+            'website_inbound'     => \App\Libraries\AicS2s\AicS2sConfig::forClient('website')->status(),
             'manage_outbound'     => \Config\Services::entitlementOutbox()->client()->status(),
             'entitlement_outbox'  => \Config\Services::entitlementOutbox()->status(),
             'finance_inbound_key' => strlen(trim((string) env('ENGAGE_INBOUND_FINANCE_KEY', ''))) >= 32 ? 'ok' : 'ENGAGE_INBOUND_FINANCE_KEY missing or shorter than 32 characters — Finance payout status updates get 503',
@@ -171,6 +172,10 @@ $routes->group('v1', static function ($routes) {
         $routes->match(['POST', 'PUT', 'PATCH', 'DELETE'], '(:any)',     $M . 'noRoute');
     });
 
+    // www.aicountly.com (its PHP server) → Engage: the plans to show against each product (docs/SELLING_LICENCES.md §6).
+    // AIC-S2S v1, client website, read key; 503 inbound_not_configured until ENGAGE_INBOUND_WEBSITE_* is set.
+    $routes->get('website/catalogue', 'Inbound\\WebsiteCatalogueController::catalogue', ['filter' => 'aic-s2s:website,read']);
+
     // my.aicountly (server side) → Engage: Basic provisioning after sign-up (contract §3.2, docs/LICENSING.md §5b).
     // AIC-S2S v1, client myaicountly, key scope issue only (503 inbound_not_configured until
     // ENGAGE_INBOUND_MYAICOUNTLY_* is set).
@@ -239,6 +244,7 @@ $routes->group('v1', static function ($routes) {
         $routes->post('seller-applications/(:num)/reject',  $S . 'SellerApplicationsController::reject/$1', $sellerAdmin);
 
         $routes->get('sellers',                              $S . 'SellersController::index', $sellerView);
+        $routes->post('sellers',                             $S . 'SellersController::create', $sellerAdmin);
         $routes->get('sellers/(:num)',                       $S . 'SellersController::show/$1', $sellerView);
         $routes->post('sellers/(:num)/suspend',              $S . 'SellersController::suspend/$1', $sellerAdmin);
         $routes->post('sellers/(:num)/reactivate',           $S . 'SellersController::reactivate/$1', $sellerAdmin);
