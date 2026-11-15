@@ -35,8 +35,27 @@ class ManageReadService
      */
     public function licences(int $cmpId, array $filters, int $limit, ?array $cursor): array
     {
-        $where = ['l.cmp_id = ?', self::notCourseLicenceSql('l')];
-        $binds = [$cmpId];
+        return $this->licencesWhere('l.cmp_id = ?', $cmpId, $filters, $limit, $cursor);
+    }
+
+    /**
+     * Licences a person holds (holder_uuid — the my.aicountly uuid of the owner, D-L2): the Basic of each app, plans
+     * staff issued to them and plans sold to them through a seller. Same shape, filters and paging as the company list.
+     *
+     * @param array{status?:?string, product_code?:?string} $filters
+     * @param array{d:string,id:int}|null $cursor
+     * @return array{items: list<array<string,mixed>>, next_cursor: ?string}
+     */
+    public function holderLicences(string $holder, array $filters, int $limit, ?array $cursor): array
+    {
+        return $this->licencesWhere('l.holder_uuid = ?', $holder, $filters, $limit, $cursor);
+    }
+
+    /** @return array{items: list<array<string,mixed>>, next_cursor: ?string} */
+    private function licencesWhere(string $subjectSql, int|string $subject, array $filters, int $limit, ?array $cursor): array
+    {
+        $where = [$subjectSql, self::notCourseLicenceSql('l')];
+        $binds = [$subject];
         if (! empty($filters['status'])) {
             // Filter on the status Manage is shown (a live licence past its end reads "expired").
             if ($filters['status'] === 'expired') {
@@ -60,13 +79,64 @@ class ManageReadService
         }
         $binds[] = $limit + 1;
         $rows = $this->db()->query(
-            'SELECT l.*, to_jsonb(l.app_keys) AS app_keys_json, to_jsonb(l.invoice_refs) AS invoice_refs_json, ' . S::cursorExpr('l.created_at') . ' AS cursor_d,
+            "SELECT l.*, to_jsonb(l.app_keys) AS app_keys_json, to_jsonb(l.invoice_refs) AS invoice_refs_json, " . S::cursorExpr('l.created_at') . " AS cursor_d,
+                sl.seller_code AS sold_by_code, COALESCE(NULLIF(sl.organization, ''), sl.name) AS sold_by_name,
                 (SELECT COUNT(*) FROM engage_licence_seats s WHERE s.licence_id = l.id AND s.released_at IS NULL) AS seats_assigned
-             FROM engage_licences l WHERE ' . implode(' AND ', $where) . ' ORDER BY l.created_at DESC, l.id DESC LIMIT ?',
+             FROM engage_licences l LEFT JOIN engage_sellers sl ON sl.id = l.seller_id WHERE " . implode(' AND ', $where) . ' ORDER BY l.created_at DESC, l.id DESC LIMIT ?',
             $binds
         )->getResultArray();
 
         return $this->page($rows, $limit, [LicenceService::class, 'contractView']);
+    }
+
+    /** One licence the holder holds; another holder's answers exactly like a missing one. */
+    public function holderLicence(string $holder, string $ref): ?array
+    {
+        $l = (new LicenceService($this->db()))->findForHolder($holder, $ref);
+
+        return $l && ! LicenceService::coversCourse($l) ? LicenceService::contractView($l) : null;
+    }
+
+    /** @return array<string,mixed>|null */
+    public function holderSeats(string $holder, string $ref): ?array
+    {
+        $svc = new LicenceService($this->db());
+        $l = $svc->findForHolder($holder, $ref);
+        if (! $l || LicenceService::coversCourse($l)) {
+            return null;
+        }
+
+        return [
+            'licence_ref' => $l['licence_ref'],
+            'total'       => $l['seats_total'] !== null ? (int) $l['seats_total'] : null,
+            'assigned'    => (int) $l['seats_assigned'],
+            'items'       => array_map([LicenceService::class, 'seatView'], $svc->seatsForLicence((int) $l['id'], false)),
+        ];
+    }
+
+    /**
+     * Activity of every licence the holder holds, newest first (events are numbered per company, or per holder for a
+     * licence without one, so `seq` is informational here; the cursor orders the feed).
+     *
+     * @return array{items: list<array<string,mixed>>, next_cursor: ?string}
+     */
+    public function holderActivity(string $holder, int $limit, ?array $cursor): array
+    {
+        $where = ['e.licence_id IN (SELECT hl.id FROM engage_licences hl WHERE hl.holder_uuid = ? AND ' . self::notCourseLicenceSql('hl') . ')'];
+        $binds = [$holder];
+        if ($cursor !== null) {
+            $where[] = '(e.occurred_at, e.id) < (?::timestamptz, ?)';
+            $binds[] = $cursor['d'];
+            $binds[] = $cursor['id'];
+        }
+        $binds[] = $limit + 1;
+        $rows = $this->db()->query(
+            'SELECT e.*, ' . S::cursorExpr('e.occurred_at') . ' AS cursor_d FROM engage_licence_events e WHERE ' . implode(' AND ', $where)
+            . ' ORDER BY e.occurred_at DESC, e.id DESC LIMIT ?',
+            $binds
+        )->getResultArray();
+
+        return $this->page($rows, $limit, [LicenceService::class, 'contractEvent']);
     }
 
     public function licence(int $cmpId, string $ref): ?array

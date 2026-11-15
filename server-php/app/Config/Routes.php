@@ -131,6 +131,17 @@ $routes->group('v1', static function ($routes) {
         $routes->get('payouts',                       $P . 'EarningsController::payouts', $session);
         $routes->get('payouts/(:segment)',            $P . 'EarningsController::payout/$1', $session);
         $routes->get('payouts/(:segment)/statement',  $P . 'EarningsController::statement/$1', $session);
+        // Licences: buy, keep in stock, apply to a customer (docs/SELLING_LICENCES.md §7).
+        $routes->get('licence-catalogue',                       $P . 'LicencesController::catalogue', $session);
+        $routes->get('licence-orders',                          $P . 'LicencesController::index', $session);
+        $routes->post('licence-orders',                         $P . 'LicencesController::create', $sessionIdem);
+        $routes->get('licence-orders/(:segment)',               $P . 'LicencesController::show/$1', $session);
+        $routes->post('licence-orders/(:segment)/cancel',       $P . 'LicencesController::cancel/$1', $sessionIdem);
+        $routes->post('licence-orders/(:segment)/payment-link', $P . 'LicencesController::paymentLink/$1', $session);
+        $routes->get('licence-stock',                           $P . 'LicencesController::stock', $session);
+        $routes->post('licence-stock/(:segment)/apply',         $P . 'LicencesController::apply/$1', $sessionIdem);
+        $routes->post('customers/lookup',                       $P . 'LicencesController::lookup', $session);
+        $routes->get('customer-licences',                       $P . 'LicencesController::customerLicences', $session);
     });
 
     // finance.aicountly.org → Engage: payout status per item (X-Finance-Key = ENGAGE_INBOUND_FINANCE_KEY).
@@ -168,6 +179,11 @@ $routes->group('v1', static function ($routes) {
         $routes->get('companies/(:segment)/licences/(:segment)',         $M . 'licence/$1/$2');
         $routes->get('companies/(:segment)/licences/(:segment)/seats',   $M . 'seats/$1/$2');
         $routes->get('companies/(:segment)/activity',                    $M . 'activity/$1');
+        // The licences a person holds (D-L2; docs/SELLING_LICENCES.md §8).
+        $routes->get('holders/(:segment)/licences',                      $M . 'holderLicences/$1');
+        $routes->get('holders/(:segment)/licences/(:segment)',           $M . 'holderLicence/$1/$2');
+        $routes->get('holders/(:segment)/licences/(:segment)/seats',     $M . 'holderSeats/$1/$2');
+        $routes->get('holders/(:segment)/activity',                      $M . 'holderActivity/$1');
         $routes->get('catalogue',                                        $M . 'catalogue');
         $routes->get('licence-types',                                    $M . 'licenceTypes');
         $routes->match(['POST', 'PUT', 'PATCH', 'DELETE'], '(:any)',     $M . 'noRoute');
@@ -281,6 +297,17 @@ $routes->group('v1', static function ($routes) {
         $routes->get('lead-payments/by-product',             $S . 'CommissionEntriesController::revenueByProduct', $commission);
         $routes->post('leads/(:num)/seller',                 $S . 'CommissionEntriesController::attribute/$1', ['filter' => 'role:super_admin,sales_manager,seller_manager']);
         $routes->get('status/reach-outcomes',                $S . 'CommissionEntriesController::outboxStatus');
+
+        // Licences sellers bought (docs/SELLING_LICENCES.md §7). View: super_admin | sales_manager | seller_manager;
+        // confirm an offline payment, cancel, withdraw an unused licence: super_admin | sales_manager.
+        $sloView  = ['filter' => 'role:super_admin,sales_manager,seller_manager'];
+        $sloAdmin = ['filter' => 'role:super_admin,sales_manager'];
+        $routes->get('seller-licence-orders',                            $S . 'SellerLicenceOrdersController::index', $sloView);
+        $routes->get('seller-licence-orders/(:segment)',                 $S . 'SellerLicenceOrdersController::show/$1', $sloView);
+        $routes->post('seller-licence-orders/(:segment)/confirm-payment', $S . 'SellerLicenceOrdersController::confirmPayment/$1', $sloAdmin);
+        $routes->post('seller-licence-orders/(:segment)/cancel',         $S . 'SellerLicenceOrdersController::cancel/$1', $sloAdmin);
+        $routes->get('seller-licence-units',                             $S . 'SellerLicenceOrdersController::units', $sloView);
+        $routes->post('seller-licence-units/(:segment)/void',            $S . 'SellerLicenceOrdersController::voidUnit/$1', $sloAdmin);
 
         // Weekly payouts (drafts for finance.aicountly.org). View: super_admin | sales_manager; run / re-send / cancel: super_admin.
         $payoutView  = ['filter' => 'role:super_admin,sales_manager'];

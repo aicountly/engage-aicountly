@@ -313,7 +313,48 @@ class CommissionService
             'discount_paise' => isset($p['discount_paise']) ? (int) $p['discount_paise'] : null,
             'basis_paise'    => isset($p['basis_paise']) ? (int) $p['basis_paise'] : null,
             'basis_kind'     => $p['basis_kind'] ?? null,
+            // A seller licence sale (docs/SELLING_LICENCES.md §7): the seller who sold it and the licence unit.
+            'source'         => $p['source'] ?? 'staff',
+            'seller_id'      => isset($p['seller_id']) ? (int) $p['seller_id'] : null,
+            'licence_unit_id' => isset($p['licence_unit_id']) ? (int) $p['licence_unit_id'] : null,
+            'commission_sequence' => isset($p['commission_sequence']) ? (int) $p['commission_sequence'] : null,
         ];
+    }
+
+    /**
+     * A seller applied a licence unit to a customer (SellerLicenceApplyService): record the sale on the customer's lead
+     * as a confirmed payment made through that seller — the amount the seller paid for the unit, commission basis its
+     * taxable value (D-C1: net before GST) — and evaluate it for commission. MUST run inside the caller's transaction.
+     *
+     * The plan rules see a per-product sequence: the first licence sale of this product to this customer is payment #1
+     * (so percent_of_first_payment pays on every new customer licence), each renewal the next.
+     *
+     * @param array<string,mixed> $unit  engage_seller_licence_units row (unit_ref, product_code, taxable_paise, total_paise)
+     * @return array{payment_id:int, accrual:array{accrued:int, notes:list<string>}, entry:?array<string,mixed>}
+     */
+    public function recordSellerLicenceSale(int $leadId, array $unit, int $sellerId, int $listPaise, string $paidAt, string $orderRef): array
+    {
+        $db = $this->db();
+        $db->query('SELECT id FROM engage_leads WHERE id = ? FOR UPDATE', [$leadId]);
+        $seq = (int) $db->query('SELECT COUNT(*) AS n FROM engage_lead_payments WHERE lead_id = ?', [$leadId])->getRow()->n + 1;
+        $productSeq = (int) $db->query("SELECT COUNT(*) AS n FROM engage_lead_payments WHERE lead_id = ? AND source = 'seller_licence' AND product_code = ?",
+            [$leadId, (string) $unit['product_code']])->getRow()->n + 1;
+        $db->query(
+            "INSERT INTO engage_lead_payments (lead_id, payment_ref, sequence_no, amount, product_code, paid_at, notes, confirmed_by,
+                list_paise, discount_paise, basis_paise, basis_kind, seller_id, commission_sequence, source, licence_unit_id)
+             VALUES (?, ?, ?, CAST(? AS NUMERIC), ?, ?, ?, NULL, ?, 0, ?, 'net_before_gst', ?, ?, 'seller_licence', ?)",
+            [$leadId, (string) $unit['unit_ref'], $seq, Money::format((int) $unit['total_paise']), (string) $unit['product_code'], $paidAt,
+                "Licence sold through a seller ({$orderRef} / {$unit['unit_ref']})", $listPaise, max(1, (int) $unit['taxable_paise']), $sellerId, $productSeq, (int) $unit['id']]
+        );
+        $paymentId = (int) $db->query('SELECT id FROM engage_lead_payments WHERE licence_unit_id = ?', [(int) $unit['id']])->getRow()->id;
+        (new LeadActivitiesModel())->record($leadId, 'payment_confirmed', 'Licence sold through a seller: INR ' . Money::format((int) $unit['total_paise']) . " ({$unit['unit_ref']})", null, [
+            'author_kind' => 'system', 'metadata' => ['payment_id' => $paymentId, 'sequence_no' => $seq, 'licence_unit' => $unit['unit_ref'], 'order_ref' => $orderRef],
+        ]);
+        $lead = (new LeadsModel())->find($leadId);
+        Services::reachOutcomes()->paymentConfirmed($lead, $db->table('engage_lead_payments')->where('id', $paymentId)->get()->getRowArray());
+        $accrual = $this->accrueForLead($leadId);
+
+        return ['payment_id' => $paymentId, 'accrual' => $accrual, 'entry' => $this->entryForPayment($paymentId)];
     }
 
     /** @return list<array<string,mixed>> */
@@ -507,9 +548,22 @@ class CommissionService
         if ($pending === []) {
             return ['accrued' => 0, 'notes' => ['No confirmed payment waiting for commission.']];
         }
-        $seller = ! empty($lead['seller_id']) ? $db->table('engage_sellers')->where('id', (int) $lead['seller_id'])->get()->getRowArray() : null;
+        $sellers = [];
+        $sellerOf = static function (?int $id) use ($db, &$sellers): ?array {
+            if ($id === null || $id < 1) {
+                return null;
+            }
+
+            return $sellers[$id] ??= ($db->table('engage_sellers')->where('id', $id)->get()->getRowArray() ?: null);
+        };
         $accrued = 0;
         foreach ($pending as $pay) {
+            // A seller licence sale names the seller who made it (docs/SELLING_LICENCES.md §7); any other payment is
+            // the lead's seller's.
+            $seller = $sellerOf(! empty($pay['seller_id']) ? (int) $pay['seller_id'] : (! empty($lead['seller_id']) ? (int) $lead['seller_id'] : null));
+            // The payment number the plan rules see: per product for a licence sale (each new customer licence is a
+            // first payment, a renewal the next), else the lead's own sequence.
+            $sequence = (int) ($pay['commission_sequence'] ?? 0) >= 1 ? (int) $pay['commission_sequence'] : (int) $pay['sequence_no'];
             $note = null;
             if (! $seller) {
                 $note = 'No seller attributed to this lead.';
@@ -523,9 +577,9 @@ class CommissionService
             $calc = null;
             if ($note === null) {
                 $basis = isset($pay['basis_paise']) && $pay['basis_paise'] !== null ? (int) $pay['basis_paise'] : Money::toPaise((string) $pay['amount']);
-                $calc = CommissionRules::calculate($plan['rules'], (int) $pay['sequence_no'], $basis);
+                $calc = CommissionRules::calculate($plan['rules'], $sequence, $basis);
                 if ($calc === null || $calc['amount_paise'] <= 0) {
-                    $note = "Plan {$plan['plan_code']} v{$plan['version']} pays nothing on payment #{$pay['sequence_no']}.";
+                    $note = "Plan {$plan['plan_code']} v{$plan['version']} pays nothing on payment #{$sequence}.";
                 }
             }
             // Claim the payment for evaluation (once, race-safe).
@@ -547,8 +601,9 @@ class CommissionService
                 [(int) $seller['id'], $leadId, (int) $pay['id'], $plan['id'], $plan['plan_code'], $plan['version'], $plan['rules']['type'],
                     $pay['product_code'] ?? $lead['interested_product'], Money::format($basis),
                     $calc['rate_e4'] !== null ? Money::formatPercentE4($calc['rate_e4']) : null, Money::format($calc['amount_paise']),
-                    json_encode(['explain' => $calc['explain'], 'payment_sequence' => (int) $pay['sequence_no'], 'rules' => $plan['rules'],
-                        'basis_kind' => $pay['basis_kind'] ?? 'payment_amount', 'quote_ref' => $pay['quote_ref'] ?? null]), (int) $plan['hold_days'],
+                    json_encode(['explain' => $calc['explain'], 'payment_sequence' => $sequence, 'rules' => $plan['rules'],
+                        'basis_kind' => $pay['basis_kind'] ?? 'payment_amount', 'quote_ref' => $pay['quote_ref'] ?? null,
+                        'source' => $pay['source'] ?? 'staff']), (int) $plan['hold_days'],
                     $pay['basis_kind'] ?? 'payment_amount']
             );
             if ($db->affectedRows() === 1) {

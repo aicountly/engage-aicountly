@@ -27,6 +27,9 @@ entitlements-reconcile  | 41 4 * * *  | {php} spark engage:entitlements-reconcil
 # date has come (reads already treat it as on sale) and re-project Basic holders when the revision is a Basic. Every
 # minute; reports itself to Console as engage.offers_activate.
 offers-activate         | * * * * *   | {php} spark engage:offers-activate
+# Sellers' licence orders (docs/SELLING_LICENCES.md §7): unpaid orders past their validity become expired. Hourly;
+# reports itself to Console as engage.seller_orders_expire.
+seller-orders-expire    | 53 * * * *  | {php} spark engage:seller-orders-expire
 # Coupons (docs/COUPONS.md §5): release lapsed quote reservations, expire old quotes and ended coupons. Hourly, offset
 # from the other jobs; reports itself to Console as engage.coupons_expire.
 coupons-expire          | 41 * * * *  | {php} spark engage:coupons-expire

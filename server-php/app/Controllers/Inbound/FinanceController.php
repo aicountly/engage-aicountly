@@ -21,6 +21,8 @@ use Config\Services;
  *   → 200 {…, event_id}. Finance counts an event delivered only when the answer echoes its event_id, so it is echoed
  *   for every event Engage acted on (a repeat answers the same, duplicate: true) and for none it did not.
  *     TKO-…  a token order: payment.succeeded grants the tokens (TokenOrderService::settle)
+ *     SLO-…  a seller's licence order: payment.succeeded creates the seller's licence stock
+ *            (SellerLicenceOrderService::settle); payment.refunded is recorded for staff to withdraw unused licences
  *   The amount must be the order's total: anything else is 409 amount_mismatch and nothing is granted.
  *   Any other reference (e.g. an Academy fee on a lead) is acknowledged without event_id: Engage does not act on it.
  */
@@ -50,6 +52,9 @@ class FinanceController extends BaseApiController
         $amount = isset($in['amount_paise']) && (is_int($in['amount_paise']) || (is_string($in['amount_paise']) && ctype_digit($in['amount_paise'])))
             ? (int) $in['amount_paise'] : null;
 
+        if (str_starts_with($orderRef, 'SLO-')) {
+            return $this->sellerLicenceOrderEvent($orderRef, $type, $in, $eventId, $amount);
+        }
         if (! str_starts_with($orderRef, 'TKO-')) {
             // Not an order Engage holds (e.g. an Academy fee on a lead): acknowledged, not acted on, and no event_id —
             // Finance keeps it visible as undelivered rather than believing Engage did something with it.
@@ -79,6 +84,33 @@ class FinanceController extends BaseApiController
         ]);
 
         return $this->relay($r, $eventId);
+    }
+
+    /** payment.succeeded settles a seller's licence order; payment.refunded is recorded for staff. */
+    private function sellerLicenceOrderEvent(string $ref, string $type, array $in, ?string $eventId, ?int $amount)
+    {
+        $orders = new \App\Services\SellerLicences\SellerLicenceOrderService();
+        if ($type === 'payment.refunded') {
+            $o = $orders->byRef($ref);
+            Services::auditService()->log('seller.licence_order_refund_reported', [
+                'actor_email' => 'system:finance', 'actor_role' => 'system', 'subject_kind' => 'seller_licence_order', 'subject_id' => $o['id'] ?? null,
+                'metadata' => ['order_ref' => $ref, 'payment_ref' => $in['payment_ref'] ?? null, 'refund' => $in['refund'] ?? null], 'fanout_console' => true,
+            ]);
+            log_message('critical', 'seller licence order {o}: Finance reports a refund — withdraw its unused licences (Sellers → Licence orders).', ['o' => $ref]);
+
+            return $this->ok(['handled' => false, 'reason' => 'refund_recorded_for_staff', 'order_ref' => $ref] + ($eventId !== null ? ['event_id' => $eventId] : []));
+        }
+        if ($type !== 'payment.succeeded') {
+            return $this->ok(['handled' => false, 'reason' => 'event_not_actionable', 'event_type' => $type]);
+        }
+
+        return $this->relay($orders->settle($ref, [
+            'payment_ref'  => (string) ($in['payment_ref'] ?? ''),
+            'amount_paise' => $amount,
+            'invoice_no'   => $in['invoice_no'] ?? null,
+            'invoice_date' => $in['invoice_date'] ?? null,
+            'paid_at'      => $in['paid_at'] ?? null,
+        ], 'finance'), $eventId);
     }
 
     /** @param array<string,mixed> $r */

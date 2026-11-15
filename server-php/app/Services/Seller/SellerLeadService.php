@@ -194,6 +194,86 @@ class SellerLeadService
         return ['status' => 201, 'data' => ['lead' => self::registeredView($leads->find($leadId)), 'result' => 'created']];
     }
 
+    /**
+     * May $seller sell a licence to the customer with this email? Lead protection is respected exactly as for lead
+     * registration (docs/SELLING_LICENCES.md §2.7): a contact protected for ANOTHER seller is refused, with the same
+     * generic answer (never says who). Read-only; null when allowed.
+     */
+    public function licenceSaleBlock(array $seller, string $email): ?array
+    {
+        [$existing] = (new LeadsModel())->findDuplicate($email, null);
+        if ($existing && self::isProtected($existing) && (int) $existing['seller_id'] !== (int) $seller['id']) {
+            return self::protectedAnswer();
+        }
+
+        return null;
+    }
+
+    /**
+     * The customer's lead for a licence sale by $seller, INSIDE the caller's transaction: the existing lead (email,
+     * case-insensitive) or a new one; attributed to the seller (`licence_sale`, a fresh protection window) unless it
+     * is protected for another seller (licenceSaleBlock refused that already); moved to converted / won when it was
+     * not. The caller runs LeadLifecycleService::stageChanged() when `stage_from` is not null, after recording the sale.
+     *
+     * @return array{lead_id:int, stage_from:?string, created:bool}
+     */
+    public function attachForLicenceSale(array $seller, string $email, ?string $name, string $productCode): array
+    {
+        $db = $this->accounts->db();
+        $email = strtolower(trim($email));
+        $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['lead-email:' . $email]);
+        $leads = new LeadsModel();
+        [$existing] = $leads->findDuplicate($email, null);
+        $until = Clock::at(time() + self::protectionDays() * 86400);
+        $product = (new ProductsModel())->resolve($productCode);
+        if ($existing) {
+            $id = (int) $existing['id'];
+            $set = [];
+            if (! self::isProtected($existing) || (int) $existing['seller_id'] === (int) $seller['id']) {
+                $set += ['seller_id' => (int) $seller['id'], 'seller_attribution' => 'licence_sale', 'seller_attributed_at' => Clock::now(), 'seller_protection_expires_at' => $until];
+            }
+            $from = null;
+            if (! self::isClosedWon($existing)) {
+                $from = (string) ($existing['stage'] ?? 'new');
+                $set += ['stage' => 'converted', 'sales_status' => 'won'];
+            }
+            if ($set !== []) {
+                $leads->update($id, $set);
+            }
+            (new LeadActivitiesModel())->record($id, 'seller_licence_sale', 'Licence sold by seller ' . $seller['seller_code'], null, [
+                'author_kind' => 'seller', 'metadata' => ['seller_id' => (int) $seller['id'], 'product_code' => $productCode, 'protected_until' => $until],
+            ]);
+
+            return ['lead_id' => $id, 'stage_from' => $from, 'created' => false];
+        }
+        $source = (new LeadSourcesModel())->where('code', 'seller')->first();
+        $id = (int) $leads->insert([
+            'lead_code'             => $leads->generateLeadCode(),
+            'name'                  => $name !== null && trim($name) !== '' ? mb_substr(trim($name), 0, 191) : strstr($email, '@', true),
+            'email'                 => $email,
+            'source_portal'         => 'seller.aicountly.com',
+            'source_campaign'       => $seller['seller_code'],
+            'source_type'           => 'seller',
+            'lead_source_id'        => $source['id'] ?? null,
+            'interested_product'    => $product['code'] ?? $productCode,
+            'interested_product_id' => $product['id'] ?? null,
+            'stage'                 => 'new',
+            'priority'              => 'normal',
+            'sales_status'          => 'open',
+            'seller_id'             => (int) $seller['id'],
+            'seller_attribution'    => 'licence_sale',
+            'seller_attributed_at'  => Clock::now(),
+            'seller_protection_expires_at' => $until,
+            'metadata'              => ['seller_licence_sale' => ['product_code' => $productCode]],
+        ], true);
+        $leads->update($id, ['stage' => 'converted', 'sales_status' => 'won']);
+        (new LeadActivitiesModel())->record($id, 'seller_licence_sale', 'Licence sold by seller ' . $seller['seller_code'], null, [
+            'author_kind' => 'seller', 'metadata' => ['seller_id' => (int) $seller['id'], 'product_code' => $productCode, 'protected_until' => $until],
+        ]);
+
+        return ['lead_id' => $id, 'stage_from' => 'new', 'created' => true];
+    }
+
     private function attach(int $leadId, int $sellerId, string $how, string $until): void
     {
         (new LeadsModel())->update($leadId, [

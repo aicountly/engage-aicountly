@@ -102,9 +102,9 @@ class LicenceService
     }
 
     private const SELECT = "SELECT l.*, to_jsonb(l.app_keys) AS app_keys_json, to_jsonb(l.invoice_refs) AS invoice_refs_json,
-            a.name AS account_name,
+            a.name AS account_name, sl.seller_code AS sold_by_code, COALESCE(NULLIF(sl.organization, ''), sl.name) AS sold_by_name,
             (SELECT COUNT(*) FROM engage_licence_seats s WHERE s.licence_id = l.id AND s.released_at IS NULL) AS seats_assigned
-        FROM engage_licences l LEFT JOIN engage_accounts a ON a.id = l.account_id";
+        FROM engage_licences l LEFT JOIN engage_accounts a ON a.id = l.account_id LEFT JOIN engage_sellers sl ON sl.id = l.seller_id";
 
     // ------------------------------------------------------------------ views
 
@@ -132,6 +132,11 @@ class LicenceService
                 $attributes[] = ['label' => (string) $a['label'], 'value' => $a['value'] ?? null];
             }
         }
+        $soldBy = self::soldBy($l);
+        if ($soldBy !== null) {
+            // Manage lists attributes under "Details" today, so the customer sees whom to call without a Manage change.
+            $attributes[] = ['label' => 'Sold by', 'value' => $soldBy['name'] . ' (' . $soldBy['seller_code'] . ')'];
+        }
 
         return [
             'licence_ref'  => $l['licence_ref'],
@@ -151,7 +156,19 @@ class LicenceService
             'issued_at'    => S::iso($l['created_at']),
             'updated_at'   => S::iso($l['updated_at']),
             'version'      => (int) $l['version'],
+            // Additive (docs/SELLING_LICENCES.md §8): the Aicountly seller this licence was sold through, or null.
+            'sold_by'      => $soldBy,
         ];
+    }
+
+    /** {kind: seller, seller_code, name} of the seller a licence was sold through, or null. */
+    public static function soldBy(array $l): ?array
+    {
+        if (empty($l['seller_id']) || empty($l['sold_by_code'])) {
+            return null;
+        }
+
+        return ['kind' => 'seller', 'seller_code' => (string) $l['sold_by_code'], 'name' => (string) ($l['sold_by_name'] ?? $l['sold_by_code'])];
     }
 
     /** Staff view: the contract shape plus internal fields. */
@@ -169,6 +186,7 @@ class LicenceService
             'stored_status'  => $l['status'],
             'status_reason'  => $l['status_reason'],
             'source'         => $l['source'],
+            'seller_id'      => isset($l['seller_id']) && $l['seller_id'] !== null ? (int) $l['seller_id'] : null,
             'order_ref'      => $l['order_ref'],
             'notes'          => $l['notes'],
             'offer_snapshot' => S::json($l['offer_snapshot']),
@@ -183,9 +201,11 @@ class LicenceService
     public static function contractEvent(array $e): array
     {
         $actor = match ($e['actor_kind']) {
-            'staff' => 'Aicountly team',
-            'order' => 'Online order',
-            default => 'Aicountly',
+            'staff'  => 'Aicountly team',
+            'order'  => 'Online order',
+            // A seller is the customer's own vendor: their trade name and code, as stored with the event.
+            'seller' => (string) $e['actor_display'],
+            default  => 'Aicountly',
         };
 
         return [
@@ -233,6 +253,12 @@ class LicenceService
     public function findForCompany(int $cmpId, string $ref): ?array
     {
         return $this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND l.cmp_id = ?', [$ref, $cmpId])->getRowArray() ?: null;
+    }
+
+    /** Scoped read: another holder's licence is indistinguishable from a missing one. */
+    public function findForHolder(string $holder, string $ref): ?array
+    {
+        return $this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND l.holder_uuid = ?', [$ref, $holder])->getRowArray() ?: null;
     }
 
     /** @return list<array<string,mixed>> */
@@ -1097,6 +1123,150 @@ class LicenceService
         $this->reconcileBasic($holder, (string) $offer['product_code'], $actor);
 
         return $db->query(self::SELECT . ' WHERE l.id = ?', [$id])->getRowArray();
+    }
+
+    // ------------------------------------------------------------------ licences sold through a seller
+
+    /**
+     * A seller applies one licence they bought (a unit) to a holder — docs/SELLING_LICENCES.md §7 — INSIDE the
+     * caller's transaction (SellerLicenceApplyService):
+     *
+     *   - the holder's licence of the SAME offer — live, or the latest one that has ended — is renewed by one term of the
+     *     unit (from its current end, or from now when it has ended); it moves to the unit's version only when that is
+     *     newer, so a renewal never takes anything away;
+     *   - a live licence of ANOTHER offer of the same product is refused (409 plan_conflict) — staff change plans;
+     *   - a suspended, or not yet activated, licence of the offer is refused — staff decide those;
+     *   - otherwise a new licence is issued: source seller, no Engage account, order_ref = the unit.
+     *
+     * The holder's Basic is superseded and Manage told, in the same transaction (afterWrite). Events name the seller.
+     *
+     * @param array<string,mixed> $unit   engage_seller_licence_units row (unit_ref)
+     * @param array<string,mixed> $offer  the version bought, an OfferService row (OfferService::findRow)
+     * @param array<string,mixed> $seller engage_sellers row
+     * @return array{status:int, kind?:string, licence_ref?:string, code?:string, error?:string, details?:array<string,mixed>}
+     */
+    public function applySellerUnitTx(array $unit, array $offer, string $holder, array $seller, ?string $invoiceRef): array
+    {
+        $db = $this->db();
+        $product = (string) $offer['product_code'];
+        $code = (string) $offer['offer_code'];
+        $actor = self::sellerActor($seller);
+        $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:' . $holder . ':' . $product]);
+        $liveSql = " AND NOT l.is_basic AND l.status IN ('issued','active','suspended') AND (l.ends_at IS NULL OR l.ends_at > NOW())";
+        $same = $db->query(self::SELECT . ' WHERE l.holder_uuid = ? AND l.offer_code = ?' . $liveSql . ' ORDER BY l.ends_at DESC NULLS FIRST, l.id DESC LIMIT 1 FOR UPDATE OF l',
+            [$holder, $code])->getRowArray();
+        if (! $same) {
+            $other = $db->query(self::SELECT . ' WHERE l.holder_uuid = ? AND l.product_code = ?' . $liveSql . ' ORDER BY l.ends_at DESC NULLS FIRST, l.id DESC LIMIT 1',
+                [$holder, $product])->getRowArray();
+            if ($other) {
+                $label = S::json($other['offer_snapshot'])['label'] ?? $other['offer_code'];
+
+                return ['status' => 409, 'code' => 'plan_conflict', 'error' => "This customer already has {$label} ({$other['licence_ref']})"
+                    . ($other['ends_at'] !== null ? ' until ' . S::displayDate(self::lastDay((string) $other['ends_at'])) : '')
+                    . '. Apply a licence of that plan to renew it, or ask Aicountly to change the plan.',
+                    'details' => ['licence_ref' => $other['licence_ref'], 'offer_code' => $other['offer_code']]];
+            }
+        }
+        $target = $same ?: ($db->query(self::SELECT . " WHERE l.holder_uuid = ? AND l.offer_code = ? AND NOT l.is_basic
+            AND (l.status = 'expired' OR (l.status IN ('issued','active') AND l.ends_at IS NOT NULL AND l.ends_at <= NOW()))
+            ORDER BY l.ends_at DESC, l.id DESC LIMIT 1 FOR UPDATE OF l", [$holder, $code])->getRowArray() ?: null);
+        if ($target === null) {
+            return $this->issueFromUnitTx($unit, $offer, $holder, $seller, $actor, $invoiceRef);
+        }
+        $live = $same !== null && $same !== [];
+        if ($live && $target['status'] === 'suspended') {
+            return ['status' => 409, 'code' => 'licence_suspended', 'error' => "This customer's licence {$target['licence_ref']} is suspended. Contact Aicountly.", 'details' => ['licence_ref' => $target['licence_ref']]];
+        }
+        if ($live && $target['status'] === 'issued') {
+            return ['status' => 409, 'code' => 'licence_not_active', 'error' => "This customer's licence {$target['licence_ref']} is waiting to be activated by Aicountly.", 'details' => ['licence_ref' => $target['licence_ref']]];
+        }
+        if (((int) $offer['term_months'] === 0 && (int) $offer['term_days'] === 0) || $target['ends_at'] === null) {
+            return ['status' => 409, 'code' => 'live_licence_exists', 'error' => "This customer already holds {$target['licence_ref']} with no end date: there is nothing to renew.", 'details' => ['licence_ref' => $target['licence_ref']]];
+        }
+
+        return $this->renewFromUnitTx($target, $unit, $offer, $seller, $actor, $invoiceRef);
+    }
+
+    /** @param array{kind:string,id:?int,display:string} $actor */
+    private function issueFromUnitTx(array $unit, array $offer, string $holder, array $seller, array $actor, ?string $invoiceRef): array
+    {
+        $db = $this->db();
+        $n = (int) $db->query("SELECT nextval('engage_licence_ref_seq') AS n")->getRow()->n;
+        $ref = 'LIC-' . str_pad((string) $n, 6, '0', STR_PAD_LEFT);
+        $now = gmdate('Y-m-d H:i:s') . '+00';
+        $endsAt = S::addTerm($now, (int) $offer['term_months'], (int) $offer['term_days']);
+        $seats = $offer['seats'] !== null ? (int) $offer['seats'] : null;
+        $invoiceRefs = $invoiceRef !== null && $invoiceRef !== '' ? [$invoiceRef] : [];
+        $id = (int) $db->query(
+            "INSERT INTO engage_licences (licence_ref, cmp_id, holder_uuid, account_id, offer_id, offer_code, offer_version, offer_snapshot, product_code,
+                licence_type_code, plan_code, app_keys, seats_total, starts_at, ends_at, status, invoice_refs, source, notes, version, activated_at,
+                created_by, is_basic, is_addon, seller_id, order_ref)
+             VALUES (?, NULL, ?, NULL, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, 'active', ?::text[], 'seller', ?, 1, ?, NULL, FALSE, FALSE, ?, ?) RETURNING id",
+            [$ref, $holder, (int) $offer['id'], $offer['offer_code'], (int) $offer['version'], json_encode(OfferService::snapshot($offer)), $offer['product_code'],
+                $offer['licence_type_code'], $offer['plan_code'], S::pgArray(S::fromJsonArray($offer['app_keys_json'])), $seats, $now, $endsAt,
+                S::pgArray($invoiceRefs), 'Sold by ' . $seller['seller_code'] . ' (' . $unit['unit_ref'] . ')', $now, (int) $seller['id'], (string) $unit['unit_ref']]
+        )->getRow()->id;
+        $termText = $endsAt ? ' from ' . S::displayDate($now) . ' to ' . S::displayDate(self::lastDay($endsAt)) : ' from ' . S::displayDate($now);
+        $this->event($id, $ref, null, $holder, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText . ' — sold by ' . $actor['display'], null, [
+            'offer' => ['code' => $offer['offer_code'], 'version' => (int) $offer['version']], 'starts_at' => S::iso($now), 'ends_at' => S::iso($endsAt),
+            'seats_total' => $seats, 'invoice_refs' => $invoiceRefs, 'licence_unit' => $unit['unit_ref'],
+        ], 1);
+        $this->event($id, $ref, null, $holder, 'activated', $actor, 'Licence activated', null, ['status' => ['from' => 'issued', 'to' => 'active']], 1);
+        $db->query("INSERT INTO engage_holders (holder_uuid, source) VALUES (?, 'staff') ON CONFLICT (holder_uuid) DO NOTHING", [$holder]);
+        $row = $db->query(self::SELECT . ' WHERE l.id = ?', [$id])->getRowArray();
+        $this->afterWrite([], $row, 'issue', [], $actor);
+
+        return ['status' => 201, 'kind' => 'new', 'licence_ref' => $ref];
+    }
+
+    /** @param array{kind:string,id:?int,display:string} $actor */
+    private function renewFromUnitTx(array $l, array $unit, array $offer, array $seller, array $actor, ?string $invoiceRef): array
+    {
+        $db = $this->db();
+        $now = gmdate('Y-m-d H:i:s') . '+00';
+        $base = strtotime((string) $l['ends_at']) > time() ? (string) $l['ends_at'] : $now;
+        $newEnd = S::addTerm($base, (int) $offer['term_months'], (int) $offer['term_days']);
+        $set = ['ends_at' => $newEnd, 'status' => 'active', 'expired_at' => null, 'status_reason' => null];
+        $changes = ['ends_at' => ['from' => S::iso($l['ends_at']), 'to' => S::iso($newEnd)], 'licence_unit' => $unit['unit_ref']];
+        if ($l['status'] !== 'active') {
+            $changes['status'] = ['from' => $l['status'], 'to' => 'active'];
+        }
+        if ((int) $offer['version'] > (int) $l['offer_version']) {
+            $changes['offer_version'] = ['from' => (int) $l['offer_version'], 'to' => (int) $offer['version']];
+            $set += ['offer_id' => (int) $offer['id'], 'offer_version' => (int) $offer['version'], 'offer_snapshot' => json_encode(OfferService::snapshot($offer)),
+                'plan_code' => $offer['plan_code'], 'app_keys' => S::fromJsonArray($offer['app_keys_json'])];
+        }
+        if ($invoiceRef !== null && $invoiceRef !== '') {
+            $set['invoice_refs'] = array_values(array_unique(array_merge(S::fromJsonArray($l['invoice_refs_json']), [$invoiceRef])));
+            $changes['invoice_refs_added'] = [$invoiceRef];
+        }
+        $sets = ['version = version + 1', 'updated_at = NOW()'];
+        $binds = [];
+        foreach ($set as $k => $v) {
+            if (in_array($k, ['app_keys', 'invoice_refs'], true)) {
+                $sets[] = "{$k} = ?::text[]";
+                $binds[] = S::pgArray($v);
+            } else {
+                $sets[] = $k === 'offer_snapshot' ? "{$k} = ?::jsonb" : "{$k} = ?";
+                $binds[] = $v;
+            }
+        }
+        $binds[] = (int) $l['id'];
+        $db->query('UPDATE engage_licences SET ' . implode(', ', $sets) . ' WHERE id = ?', $binds);
+        $this->event((int) $l['id'], $l['licence_ref'], $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null, $l['holder_uuid'], 'renewed', $actor,
+            'Licence renewed until ' . S::displayDate(self::lastDay($newEnd)) . ' — sold by ' . $actor['display'], null, $changes, (int) $l['version'] + 1);
+        $after = $db->query(self::SELECT . ' WHERE l.id = ?', [(int) $l['id']])->getRowArray();
+        $this->afterWrite($l, $after, 'renew', [], $actor);
+
+        return ['status' => 200, 'kind' => 'renewal', 'licence_ref' => (string) $l['licence_ref']];
+    }
+
+    /** @return array{kind:string,id:null,display:string} */
+    private static function sellerActor(array $seller): array
+    {
+        $name = trim((string) ($seller['organization'] ?? '')) !== '' ? trim((string) $seller['organization']) : (string) $seller['name'];
+
+        return ['kind' => 'seller', 'id' => null, 'display' => mb_substr($name . ', Aicountly seller ' . $seller['seller_code'], 0, 191)];
     }
 
     /** @param array{kind:string,id:?int,display:string} $actor */

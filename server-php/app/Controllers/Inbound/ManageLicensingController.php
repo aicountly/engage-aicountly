@@ -20,6 +20,13 @@ use Config\Services;
  *   GET v1/manage/companies/{cmp_id}/licences/{licence_ref}
  *   GET v1/manage/companies/{cmp_id}/licences/{licence_ref}/seats
  *   GET v1/manage/companies/{cmp_id}/activity ?limit=&cursor=
+ *   GET v1/manage/holders/{holder_uuid}/licences ?status=&product_code=&limit=&cursor=
+ *   GET v1/manage/holders/{holder_uuid}/licences/{licence_ref}
+ *   GET v1/manage/holders/{holder_uuid}/licences/{licence_ref}/seats
+ *   GET v1/manage/holders/{holder_uuid}/activity ?limit=&cursor=
+ *       the licences a PERSON holds (D-L2: a licence names its holder — every Basic, and plans issued or sold to them,
+ *       which the company routes never list). Manage asks only for the signed-in user's own uuid, as it asks only for
+ *       their own company today (docs/SELLING_LICENCES.md §8).
  *   GET v1/manage/catalogue ?cmp_id=   (cmp_id optional; every item carries is_default)
  *   GET v1/manage/licence-types
  *
@@ -81,6 +88,60 @@ class ManageLicensingController extends Controller
         });
     }
 
+    public function holderLicences($holder = null)
+    {
+        return $this->guard(function () use ($holder) {
+            $h = $this->holder($holder);
+            $status = $this->query('status');
+            if ($status !== null && ! in_array($status, LicenceService::STATUSES, true)) {
+                return $this->bad('status', 'status must be one of: ' . implode(', ', LicenceService::STATUSES) . '.');
+            }
+            $product = $this->query('product_code');
+            if ($product !== null && ! preg_match('/\A[a-z0-9][a-z0-9_\-]{0,63}\z/', $product)) {
+                return $this->bad('product_code', 'product_code is not valid.');
+            }
+            [$limit, $cursor] = $this->paging();
+            $r = Services::manageLicensing()->holderLicences($h, ['status' => $status, 'product_code' => $product], $limit, $cursor);
+            $this->auditHolder('manage.holder_licences.list', $h, ['count' => count($r['items']), 'status' => $status, 'product_code' => $product]);
+
+            return $this->okList($r, $limit);
+        });
+    }
+
+    public function holderLicence($holder = null, $ref = null)
+    {
+        return $this->guard(function () use ($holder, $ref) {
+            $h = $this->holder($holder);
+            $l = $this->validRef($ref) ? Services::manageLicensing()->holderLicence($h, (string) $ref) : null;
+            $this->auditHolder('manage.holder_licence.read', $h, ['licence_ref' => (string) $ref, 'found' => $l !== null]);
+
+            return $l === null ? $this->error(404, 'not_found', 'No such licence for this holder.') : $this->ok($l);
+        });
+    }
+
+    public function holderSeats($holder = null, $ref = null)
+    {
+        return $this->guard(function () use ($holder, $ref) {
+            $h = $this->holder($holder);
+            $r = $this->validRef($ref) ? Services::manageLicensing()->holderSeats($h, (string) $ref) : null;
+            $this->auditHolder('manage.holder_licence.seats', $h, ['licence_ref' => (string) $ref, 'found' => $r !== null]);
+
+            return $r === null ? $this->error(404, 'not_found', 'No such licence for this holder.') : $this->ok($r);
+        });
+    }
+
+    public function holderActivity($holder = null)
+    {
+        return $this->guard(function () use ($holder) {
+            $h = $this->holder($holder);
+            [$limit, $cursor] = $this->paging();
+            $r = Services::manageLicensing()->holderActivity($h, $limit, $cursor);
+            $this->auditHolder('manage.holder_activity.list', $h, ['count' => count($r['items'])]);
+
+            return $this->okList($r, $limit);
+        });
+    }
+
     public function catalogue()
     {
         return $this->guard(function () {
@@ -133,6 +194,33 @@ class ManageLicensingController extends Controller
         }
 
         return (int) $v;
+    }
+
+    private function holder(mixed $v): string
+    {
+        if (! is_string($v) || ! LicenceService::validHolder($v)) {
+            throw new BadRequest('holder_uuid', 'holder_uuid must be a my.aicountly uuid.');
+        }
+
+        return $v;
+    }
+
+    private function auditHolder(string $event, string $holder, array $meta): void
+    {
+        $ctx = $this->request->aicS2s ?? [];
+        Services::auditService()->log($event, [
+            'actor_id'     => null,
+            'actor_email'  => 'manage:' . ($ctx['actor'] ?? 'unknown'),
+            'actor_role'   => 'service:manage',
+            'subject_kind' => 'holder',
+            'subject_id'   => null,
+            'metadata'     => $meta + [
+                'holder_uuid' => $holder,
+                'request_id'  => $ctx['request_id'] ?? null,
+                'key_id'      => $ctx['key_id'] ?? null,
+                'path'        => '/' . ltrim((string) $this->request->getPath(), '/'),
+            ],
+        ]);
     }
 
     private function query(string $k): ?string
