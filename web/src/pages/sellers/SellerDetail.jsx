@@ -7,7 +7,7 @@ import OneTimeLink from '../../components/OneTimeLink.jsx'
 import { StageBadge, StatusBadge } from '../../components/Badges.jsx'
 import { formatDate, titleCase } from '../../lib/format.js'
 import { useAuth } from '../../lib/auth.jsx'
-import { KYC_REVIEW, PAYOUT_VIEW, SELLER_ADMIN, inr } from '../../lib/sellerRoles.js'
+import { KYC_REVIEW, PAYOUT_VIEW, SELLER_ADMIN, inr, SELLER_ORDER_VIEW } from '../../lib/sellerRoles.js'
 
 function Field({ label, children, mono }) {
   return (
@@ -159,6 +159,9 @@ export default function SellerDetail() {
           <Link className="text-xs text-aicountly-700 hover:underline" to={`/commission-entries?seller_id=${s.id}`}>All entries</Link>
           {hasRole(PAYOUT_VIEW) ? (
             <div className="mt-2"><Link className="text-xs text-aicountly-700 hover:underline" to={`/seller-payouts?seller_id=${s.id}`}>Weekly payouts</Link></div>
+          ) : null}
+          {hasRole(SELLER_ORDER_VIEW) ? (
+            <div className="mt-2"><Link className="text-xs text-aicountly-700 hover:underline" to={`/seller-licence-orders?seller_id=${s.id}`}>Licence orders and stock</Link></div>
           ) : null}
         </div>
       </div>
