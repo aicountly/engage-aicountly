@@ -19,6 +19,7 @@ use Config\Services;
  *   POST v1/licences/{ref}/seat-assignments/{id}/release {version}
  *   POST v1/licences/{ref}/invoice-refs {version, invoice_ref}
  *   POST v1/licences/{ref}/change-offer {version, offer_code, offer_version?, term_mode? keep|restart, seats_total?, reason?, quote_ref?}
+ *   POST v1/licences/{ref}/company {version, cmp_id | null, reason?}   a licence for one company: apply / move / take off
  */
 class LicencesController extends LicensingBaseController
 {
@@ -50,6 +51,11 @@ class LicencesController extends LicensingBaseController
     public function changeOffer($ref = null)
     {
         return $this->result(Services::licences()->changeOffer((string) $ref, $this->input(), $this->user()));
+    }
+
+    public function company($ref = null)
+    {
+        return $this->result(Services::licences()->changeCompany((string) $ref, $this->input(), $this->user()));
     }
 
     public function activate($ref = null)

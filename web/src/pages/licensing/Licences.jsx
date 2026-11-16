@@ -50,6 +50,7 @@ export default function Licences() {
           { key: 'holder', header: 'Holder', render: (l) => <span className="font-mono text-xs">{l.holder_uuid || '—'}</span> },
           { key: 'account', header: 'Account', render: (l) => l.account?.name || (l.source === 'provisioning' ? 'Sign-up' : '—') },
           { key: 'cmp_id', header: 'cmp_id', render: (l) => <span className="font-mono">{l.cmp_id ?? '—'}</span> },
+          { key: 'scope', header: 'Covers', render: (l) => (l.scope === 'company' ? (l.cmp_id ? 'One company' : 'One company · not applied') : 'Workspace') },
           { key: 'offer', header: 'Offer', render: (l) => <>{l.offer.label} <span className="font-mono text-xs text-neutral-500">v{l.offer.version}</span>{l.is_basic ? <span className="ml-1 text-xs text-aicountly-700">Basic</span> : null}{l.is_addon ? <span className="ml-1 text-xs text-neutral-500">add-on</span> : null}</> },
           { key: 'status', header: 'Status', render: (l) => <LicenceStatusBadge status={l.status} /> },
           { key: 'term', header: 'Term', nowrap: true, render: (l) => `${formatDateIN(l.term.starts_at)} – ${lastDayIN(l.term.ends_at)}` },

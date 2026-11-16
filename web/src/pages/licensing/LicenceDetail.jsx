@@ -22,6 +22,13 @@ const ACTIONS = {
   seats: { label: 'Change seats', from: ['issued', 'active', 'suspended'], fields: ['seats_total', 'reason_optional'] },
   'seat-assignments': { label: 'Assign a seat', from: ['issued', 'active'], fields: ['member'] },
   'invoice-refs': { label: 'Link invoice', from: ['issued', 'active', 'suspended', 'expired', 'revoked'], fields: ['invoice_ref'] },
+  company: { label: 'Move to another company', from: ['issued', 'active', 'suspended'], fields: ['company', 'reason_optional'], help: "A licence for one company: apply it to a company, move it to another, or take it off its company. The company must be mapped to the licence's account. The customer can do the same in Manage; Manage hears of it within a minute." },
+}
+
+// What a licence covers (docs/LICENSING.md §3.6).
+export function coversText(l) {
+  if (l.scope !== 'company') return 'Every company of the holder'
+  return l.cmp_id ? `One company: ${l.cmp_id}` : 'One company — not applied to a company yet'
 }
 
 export default function LicenceDetail() {
@@ -58,7 +65,7 @@ export default function LicenceDetail() {
   if (q.isLoading) return <div>Loading…</div>
   if (!l) return <div className="engage-card">Licence not found. <Link className="text-aicountly-700 hover:underline" to="/licences">Back to licences</Link></div>
 
-  const open = (action) => { setError(null); setForm({ action, reason: '', ends_at: '', seats_total: l.seats.total ?? '', unlimited: l.seats.total === null, invoice_refs: '', invoice_ref: '', member_ref: '', member_label: '', offer_code: '', term_mode: 'keep' }) }
+  const open = (action) => { setError(null); setForm({ action, reason: '', ends_at: '', seats_total: l.seats.total ?? '', unlimited: l.seats.total === null, invoice_refs: '', invoice_ref: '', member_ref: '', member_label: '', offer_code: '', term_mode: 'keep', cmp_id: '', unapply: false }) }
   const submit = () => {
     const a = ACTIONS[form.action]
     const body = {}
@@ -69,9 +76,11 @@ export default function LicenceDetail() {
     if (a.fields.includes('invoice_ref')) body.invoice_ref = form.invoice_ref
     if (a.fields.includes('member')) Object.assign(body, { member_ref: form.member_ref, member_label: form.member_label })
     if (a.fields.includes('offer')) Object.assign(body, { offer_code: form.offer_code, term_mode: form.term_mode })
+    if (a.fields.includes('company')) body.cmp_id = form.unapply ? null : (form.cmp_id === '' ? '' : Number(form.cmp_id))
     run.mutate({ action: form.action, body })
   }
-  const available = Object.entries(ACTIONS).filter(([k, a]) => a.from.includes(l.stored_status) && !(k === 'change-offer' && l.is_basic))
+  const available = Object.entries(ACTIONS).filter(([k, a]) => a.from.includes(l.stored_status) && !(k === 'change-offer' && l.is_basic)
+    && !(k === 'company' && (l.scope !== 'company' || l.is_basic)))
   const changeTargets = (offers.data || []).filter((o) => o.product.code === l.product.code && o.offer_code !== l.offer.code && !o.is_default)
   const snap = l.offer_snapshot || {}
 
@@ -102,7 +111,8 @@ export default function LicenceDetail() {
         <div className="engage-card lg:col-span-1 space-y-2 text-sm">
           <Field label="Holder">{l.holder_uuid ? <Link className="font-mono text-xs text-aicountly-700 hover:underline" to={`/licences?holder_uuid=${encodeURIComponent(l.holder_uuid)}`}>{l.holder_uuid}</Link> : <span className="text-neutral-500">— (company licence)</span>}{l.is_basic ? ' · Basic plan' : ''}{l.is_addon ? ' · add-on' : ''}</Field>
           {l.holder_note ? <Field label="Holder verified (internal)">{l.holder_note}</Field> : null}
-          <Field label="Manage company">{l.cmp_id ? <span className="font-mono">{l.cmp_id}</span> : '—'}</Field>
+          <Field label="Covers">{coversText(l)}</Field>
+          {l.scope !== 'company' && l.cmp_id ? <Field label="Sale recorded against company">{<span className="font-mono">{l.cmp_id}</span>}</Field> : null}
           <Field label="Product">{l.product.label}</Field>
           <Field label="Licence type">{l.licence_type.label} <span className="text-xs text-neutral-500">({l.licence_type.lifecycle_kind})</span></Field>
           {l.plan ? <Field label="Plan">{l.plan.label}</Field> : null}
@@ -184,6 +194,11 @@ export default function LicenceDetail() {
               <label className="flex items-center gap-2"><input type="radio" checked={form.term_mode === 'keep'} onChange={() => setForm({ ...form, term_mode: 'keep' })} /> Keep the end date ({lastDayIN(l.term.ends_at)})</label>
               <label className="flex items-center gap-2"><input type="radio" checked={form.term_mode === 'restart'} onChange={() => setForm({ ...form, term_mode: 'restart' })} /> Start the new offer's term today</label>
             </div>
+          </> : null}
+          {ACTIONS[form.action].fields.includes('company') ? <>
+            <div className="text-sm">Now: {coversText(l)}</div>
+            <div><div className="engage-label">Company (Manage cmp_id)</div><input className="engage-input font-mono" inputMode="numeric" disabled={form.unapply} value={form.cmp_id} onChange={(e) => setForm({ ...form, cmp_id: e.target.value.replace(/\D/g, '') })} /></div>
+            {l.holder_uuid ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.unapply} onChange={(e) => setForm({ ...form, unapply: e.target.checked })} /> Take it off its company instead (it grants nothing until applied again)</label> : null}
           </> : null}
           {ACTIONS[form.action].fields.includes('invoice_refs') ? <div><div className="engage-label">Invoice numbers for this renewal (optional)</div><input className="engage-input font-mono" value={form.invoice_refs} onChange={(e) => setForm({ ...form, invoice_refs: e.target.value })} /></div> : null}
           {ACTIONS[form.action].fields.includes('invoice_ref') ? <div><div className="engage-label">Invoice number</div><input className="engage-input font-mono" value={form.invoice_ref} onChange={(e) => setForm({ ...form, invoice_ref: e.target.value })} /></div> : null}

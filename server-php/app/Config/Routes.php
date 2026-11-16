@@ -177,6 +177,10 @@ $routes->group('v1', static function ($routes) {
     $routes->get('manage/token-orders',                      $T . 'index',  ['filter' => 'aic-s2s:manage,read']);
     $routes->post('manage/token-orders/(:segment)/cancel',   $T . 'cancel/$1', ['filter' => 'aic-s2s:manage,quote']);
     $routes->post('manage/token-vouchers/redeem',            $T . 'redeemVoucher', ['filter' => 'aic-s2s:manage,quote']);
+    // The holder applies a licence for one company to one of their companies, moves it, or takes it off (docs/LICENSING.md
+    // §3.6). Same quote-scoped key: Manage's server calls it after checking the signed-in person is the holder and owns
+    // the company. Registered before the group, whose POST catch-all would take it.
+    $routes->post('manage/holders/(:segment)/licences/(:segment)/company', 'Inbound\\ManageLicensingController::moveCompany/$1/$2', ['filter' => 'aic-s2s:manage,quote']);
     $routes->group('manage', ['filter' => 'aic-s2s:manage,read,issue'], static function ($routes) {
         $M = 'Inbound\\ManageLicensingController::';
         $routes->get('companies/(:segment)/licences',                    $M . 'licences/$1');
@@ -368,6 +372,7 @@ $routes->group('v1', static function ($routes) {
         $routes->post('licences/(:segment)/seat-assignments/(:num)/release', $L . 'LicencesController::releaseSeat/$1/$2', $licAdmin);
         $routes->post('licences/(:segment)/invoice-refs',     $L . 'LicencesController::invoiceRef/$1', $licAdmin);
         $routes->post('licences/(:segment)/change-offer',     $L . 'LicencesController::changeOffer/$1', $licAdmin);
+        $routes->post('licences/(:segment)/company',          $L . 'LicencesController::company/$1', $licAdmin);
 
         // Token conversion rates (docs/TOKEN_CONVERSIONS.md). What a model's tokens cost a customer:
         // view super_admin | sales_manager | seller_manager; create / edit / activate / retire and the

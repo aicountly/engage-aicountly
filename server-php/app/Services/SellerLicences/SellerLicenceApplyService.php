@@ -92,7 +92,7 @@ class SellerLicenceApplyService
         ]];
     }
 
-    /** @return list<array{product_code:string, plan:string, offer_code:string, status:string, ends_on:?string}> */
+    /** @return list<array{product_code:string, plan:string, offer_code:string, status:string, scope:string, ends_on:?string}> */
     private function plansFor(string $holder, int $sellerId): array
     {
         $rows = $this->db()->query("SELECT l.* FROM engage_licences l
@@ -102,7 +102,7 @@ class SellerLicenceApplyService
         $out = [];
         foreach ($rows as $l) {
             $out[] = ['product_code' => (string) $l['product_code'], 'plan' => (string) (S::json($l['offer_snapshot'])['label'] ?? $l['offer_code']),
-                'offer_code' => (string) $l['offer_code'], 'status' => LicenceService::effectiveStatus($l),
+                'offer_code' => (string) $l['offer_code'], 'status' => LicenceService::effectiveStatus($l), 'scope' => LicenceService::scopeOf($l),
                 'ends_on' => $l['ends_at'] !== null ? S::toDate((string) $l['ends_at'])->modify('-1 second')->format('Y-m-d') : null];
         }
 
@@ -236,8 +236,10 @@ class SellerLicenceApplyService
         return [
             'unit'       => self::unitView($unit),
             'kind'       => $unit['apply_kind'],
+            // scope company + cmp_id null: the customer applies it to one of their companies in Manage (Plans & billing →
+            // Licences); until then it grants nothing (docs/LICENSING.md §3.6).
             'licence'    => $v !== null ? ['licence_ref' => $v['licence_ref'], 'product' => $v['product'], 'plan' => $v['offer']['label'],
-                'status' => $v['status'], 'term' => $v['term']] : null,
+                'status' => $v['status'], 'term' => $v['term'], 'scope' => $v['scope'], 'cmp_id' => $v['cmp_id']] : null,
             'commission' => ['note' => $unit['commission_note']],
         ];
     }

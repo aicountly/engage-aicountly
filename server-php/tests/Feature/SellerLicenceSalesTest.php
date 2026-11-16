@@ -241,6 +241,37 @@ final class SellerLicenceSalesTest extends SellerTestCase
         $this->assertSame(['Books Pro', 'active'], [$cl['items'][0]['plan'], $cl['items'][0]['status']]);
     }
 
+    public function testALicenceForOneCompanyIsAppliedWithoutACompany(): void
+    {
+        // docs/LICENSING.md §3.6: the seller does not know the customer's companies — the customer chooses one in Manage.
+        $this->offer('books-one', ['label' => 'Books for one company', 'licence_scope' => 'company']);
+        $s = $this->verifiedSeller();
+        $this->customer();
+        $this->paidOrder($s['session'], 2, 'books-one');
+        [$u1, $u2] = array_column($this->units($s['session']), 'unit_ref');
+
+        $refs = [];
+        foreach ([$u1, $u2] as $i => $u) {
+            $r = $this->applyUnit($s['session'], $u, 'asha@example.com', 'apply-one-0000000' . $i);
+            $this->assertSame(200, $this->code($r), (string) $r->response()->getBody());
+            $d = $this->json($r)['data'];
+            $this->assertSame('new', $d['kind'], 'every licence for one company is a licence of its own');
+            $this->assertSame(['company', null], [$d['licence']['scope'], $d['licence']['cmp_id']]);
+            $refs[] = $d['licence']['licence_ref'];
+        }
+        $this->assertNotSame($refs[0], $refs[1]);
+        $this->assertSame('active', $this->db()->table('engage_licences')->where('holder_uuid', '10042')->where('is_basic', true)->get()->getRow()->status,
+            'a licence for one company does not replace Basic in the customer\'s other companies');
+        $this->assertSame(0, $this->db()->table('engage_entitlement_outbox')->whereIn('licence_ref', $refs)->countAllResults(),
+            'nothing is granted until the customer applies it to a company');
+        // A workspace licence of the same product is still sold to them as before; the lookup shows what each plan covers.
+        $this->paidOrder($s['session'], 1, 'books-pro', 'UTR0099');
+        $look = $this->json($this->portal('post', 'customers/lookup', ['email' => 'asha@example.com'], $s['session']))['data'];
+        $this->assertSame(['company', 'company'], array_column(array_values(array_filter($look['plans'], static fn ($p) => $p['offer_code'] === 'books-one')), 'scope'));
+        $pro = array_values(array_filter($this->units($s['session']), static fn ($u) => $u['offer_code'] === 'books-pro'))[0]['unit_ref'];
+        $this->assertSame(200, $this->code($this->applyUnit($s['session'], $pro, 'asha@example.com')));
+    }
+
     public function testAnotherSellersProtectedCustomerAndAPlanConflictAreRefused(): void
     {
         $a = $this->verifiedSeller('ravi@example.com');

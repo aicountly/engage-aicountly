@@ -63,7 +63,11 @@ class ManageReadService
      */
     private static function holderScope(string $a, string $holder, ?int $cmpId): array
     {
-        return $cmpId === null ? ["{$a}.holder_uuid = ?", [$holder]] : ["({$a}.holder_uuid = ? OR {$a}.cmp_id = ?)", [$holder, $cmpId]];
+        // With a company: what applies to it (docs/LICENSING.md §3.6) — the holder's workspace licences and the company
+        // licences applied to that company (the holder's, or legacy ones). Without: everything the holder holds,
+        // including company licences applied elsewhere or not applied to a company yet.
+        return $cmpId === null ? ["{$a}.holder_uuid = ?", [$holder]]
+            : ["(({$a}.holder_uuid = ? AND {$a}.scope = 'workspace') OR ({$a}.scope = 'company' AND {$a}.cmp_id = ?))", [$holder, $cmpId]];
     }
 
     /**
@@ -246,6 +250,8 @@ class ManageReadService
                 'price'        => ['amount_paise' => $v['price_paise'], 'currency' => $v['currency'], 'basis' => $v['price_basis'], 'gst_rate' => $v['gst_rate'], 'sac' => $v['sac']],
                 'term'         => ['months' => $v['term_months'], 'days' => $v['term_days'], 'cycle' => $cycle],
                 'seats'        => $v['seats'],
+                // Additive: every company the customer owns (workspace), or one company at a time (company).
+                'licence_scope' => $v['licence_scope'],
                 'app_keys'     => $v['app_keys'],
                 'is_default'   => $v['is_default'],
                 'entitlements' => $v['entitlements'],

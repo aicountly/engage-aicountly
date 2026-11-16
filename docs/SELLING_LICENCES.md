@@ -292,6 +292,11 @@ the customer's lead attributed to the seller → lead payment → commission ent
   - otherwise a **new licence** (`source = seller`, `seller_id`, starting now) to the customer's holder; their Basic of
     that product is superseded. The plan state is queued for Manage in the same transaction (Manage has it within a
     minute).
+  - **A licence for one company** (an offer with `licence_scope: company`, [LICENSING.md §3.6](LICENSING.md)) is always
+    a new licence, **not applied to a company yet** — the seller does not know the customer's companies. The customer
+    applies it to one in Manage (Plans & billing → Licences) and may move it later; it grants nothing until then and
+    never pauses their Basic. The answer's `licence.scope` is `company` and `licence.cmp_id` null, so the portal can
+    tell the seller to let the customer know; the lookup's plans carry `scope` too.
 - The licence's activity reads "‹organisation›, Aicountly seller SLR-…"; Manage's licence detail shows **Sold by**.
 - **Commission.** The customer's lead is attributed to the seller (`attribution = licence_sale`, converted / won),
   and the sale is recorded as a lead payment (`source = seller_licence`, the amount the seller paid for the unit,
@@ -331,6 +336,10 @@ What Engage now gives Manage (all `aic-s2s:manage`, read, same envelope, paging,
   `{label: "Sold by", value: "‹name› (SLR-…)"}` so Manage's generic attribute list shows it without a code change.
 - The catalogue lists only offers on the `manage` channel (and every Basic), each with `upcoming` (version,
   effective_from, price) when a revision is scheduled.
+- Licences for one company or the whole workspace ([LICENSING.md §3.6](LICENSING.md)): every licence answer adds
+  `scope` and `cmp_id`, catalogue items `licence_scope`; with `cmp_id`, the holder routes answer what applies to that
+  company (workspace licences + company licences applied to it). `POST holders/{holder_uuid}/licences/{licence_ref}/company`
+  (quote key) lets the holder apply a company licence to one of their companies, move it, or take it off.
 
 **In Manage** (manage-aicountly `src/Billing/EngageClient.php`, `docs/BILLING_INTEGRATION.md`):
 

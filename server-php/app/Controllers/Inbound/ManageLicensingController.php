@@ -32,6 +32,11 @@ use Config\Services;
  *       (docs/SELLING_LICENCES.md §8).
  *   GET v1/manage/catalogue ?cmp_id=   (cmp_id optional; every item carries is_default)
  *   GET v1/manage/licence-types
+ *   POST v1/manage/holders/{holder_uuid}/licences/{licence_ref}/company {cmp_id | null, company_name?, reason?, actor?{uuid}}
+ *       the one write: the holder applies a licence for one company to one of their companies, moves it, or takes it off
+ *       (docs/LICENSING.md §3.6). Quote-scoped key (filter aic-s2s:manage,quote). Manage has checked that the signed-in
+ *       person is the holder and owns cmp_id. 200 the licence as Manage shows it; 404 not_found; 409 not_company_licence |
+ *       basic_not_movable | licence_not_live | same_company | company_has_licence {licence_ref}; 422 validation_failed.
  *
  * Every answer uses the §0.2 envelope; every read is audited as manage:<X-AIC-Actor>.
  */
@@ -175,6 +180,50 @@ class ManageLicensingController extends Controller
             $this->audit('manage.licence_types.read', null, ['count' => count($items)]);
 
             return $this->ok($items);
+        });
+    }
+
+    public function moveCompany($holder = null, $ref = null)
+    {
+        return $this->guard(function () use ($holder, $ref) {
+            if (($this->request->aicS2s['scope'] ?? null) !== 'quote') {
+                return $this->error(403, 'route_not_allowed_for_key', 'This key may not call this route.');
+            }
+            $h = $this->holder($holder);
+            if (! $this->validRef($ref)) {
+                return $this->error(404, 'not_found', 'No such licence for this holder.');
+            }
+            $body = json_decode((string) $this->request->getBody(), true);
+            if (! is_array($body) || ($body !== [] && array_is_list($body))) {
+                return $this->bad('body', 'The body must be a JSON object.');
+            }
+            if (! array_key_exists('cmp_id', $body)) {
+                return $this->error(422, 'validation_failed', 'Say which company: cmp_id, or null to take the licence off its company.', false,
+                    ['cmp_id' => 'Required (null takes the licence off its company).']);
+            }
+            $by = is_array($body['actor'] ?? null) && is_string($body['actor']['uuid'] ?? null) && LicenceService::validHolder($body['actor']['uuid'])
+                ? $body['actor']['uuid'] : $h;
+            $svc = Services::licences();
+            $r = $svc->changeCompany((string) $ref, [
+                'cmp_id'       => $body['cmp_id'],
+                'company_name' => is_string($body['company_name'] ?? null) ? $body['company_name'] : null,
+                'reason'       => is_string($body['reason'] ?? null) ? mb_substr(trim($body['reason']), 0, 500) : null,
+            ], null, ['holder_uuid' => $h, 'uuid' => $by]);
+            $this->auditHolder('manage.holder_licence.company', $h, ['licence_ref' => (string) $ref, 'cmp_id' => $body['cmp_id'],
+                'by' => $by, 'status' => (int) $r['status'], 'code' => $r['code'] ?? null]);
+            if ((int) $r['status'] === 200) {
+                $l = $svc->findForHolder($h, (string) $ref);
+
+                return $l !== null ? $this->ok(LicenceService::contractView($l)) : $this->error(404, 'not_found', 'No such licence for this holder.');
+            }
+            $code = (string) ($r['code'] ?? 'error');
+            if (in_array($code, ['invalid_transition', 'course_not_licensable'], true)) {
+                // An expired, revoked or superseded licence (or one of a course): nothing to apply to a company any more.
+                return $this->error(409, 'licence_not_live', 'This licence has ended or was withdrawn: it cannot be applied to a company.');
+            }
+
+            return $this->error((int) $r['status'], $code, (string) ($r['error'] ?? 'Could not change the licence.'), (int) $r['status'] >= 500,
+                (array) ($r['details'] ?? []));
         });
     }
 

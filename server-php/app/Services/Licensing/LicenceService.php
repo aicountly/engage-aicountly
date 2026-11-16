@@ -60,13 +60,14 @@ class LicenceService
         'release'   => self::STATUSES,
         'invoice'   => self::STATUSES,
         'change-offer' => ['issued', 'active', 'suspended'],
+        'move'      => ['issued', 'active', 'suspended'],
     ];
 
     /**
      * Actions refused on a licence of an Aicountly Academy course (ManageAppRegistry::COURSE_KEYS): courses are never
      * licensed, so such a licence (issued before 2026-10-24) can only be wound down — suspend, revoke or expire.
      */
-    public const COURSE_BLOCKED = ['activate', 'renew', 'extend', 'change-offer'];
+    public const COURSE_BLOCKED = ['activate', 'renew', 'extend', 'change-offer', 'move'];
 
     /** True when an offer or licence row is for a course product or names a course app key. */
     public static function coversCourse(array $row): bool
@@ -89,7 +90,7 @@ class LicenceService
         'suspended' => 'Suspended', 'reinstated' => 'Reinstated', 'expired' => 'Expired', 'revoked' => 'Revoked',
         'seats_changed' => 'Seats changed', 'seat_assigned' => 'Seat assigned', 'seat_released' => 'Seat released',
         'invoice_linked' => 'Invoice linked', 'plan_changed' => 'Plan changed', 'superseded' => 'Superseded by a paid plan',
-        'reactivated' => 'Basic plan active again',
+        'reactivated' => 'Basic plan active again', 'company_changed' => 'Company changed',
     ];
 
     public function __construct(private ?BaseConnection $db = null)
@@ -160,7 +161,21 @@ class LicenceService
             // whether this is the free Basic plan of its app (D-L1), which Manage lists apart from licences bought.
             'sold_by'      => $soldBy,
             'is_basic'     => EntitlementProjector::bool($l['is_basic'] ?? false),
+            // Additive (docs/LICENSING.md §3.6): workspace = every company the holder owns; company = the one company in
+            // cmp_id, or not applied to a company yet when cmp_id is null (it grants nothing until the holder applies it).
+            'scope'        => self::scopeOf($l),
+            'cmp_id'       => self::scopeOf($l) === 'company' && $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null,
         ];
+    }
+
+    /** workspace | company — a licence with no holder has always been for its one company. */
+    public static function scopeOf(array $l): string
+    {
+        if (($l['holder_uuid'] ?? null) === null || $l['holder_uuid'] === '') {
+            return 'company';
+        }
+
+        return ($l['scope'] ?? 'workspace') === 'company' ? 'company' : 'workspace';
     }
 
     /** {kind: seller, seller_code, name} of the seller a licence was sold through, or null. */
@@ -176,9 +191,13 @@ class LicenceService
     /** Staff view: the contract shape plus internal fields. */
     public static function staffView(array $l): array
     {
-        return self::contractView($l) + [
+        $v = self::contractView($l);
+        // Staff see the stored company of every licence: for a workspace licence it is the company the sale was
+        // recorded against (information only); the contract view names a company only where the licence applies to it.
+        $v['cmp_id'] = $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null;
+
+        return $v + [
             'id'             => (int) $l['id'],
-            'cmp_id'         => $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null,
             'holder_uuid'    => $l['holder_uuid'] ?? null,
             'is_basic'       => EntitlementProjector::bool($l['is_basic'] ?? false),
             'is_addon'       => EntitlementProjector::bool($l['is_addon'] ?? false),
@@ -207,6 +226,8 @@ class LicenceService
             'order'  => 'Online order',
             // A seller is the customer's own vendor: their trade name and code, as stored with the event.
             'seller' => (string) $e['actor_display'],
+            // The holder, acting in Manage (a company licence applied or moved).
+            'customer' => 'Account owner',
             default  => 'Aicountly',
         };
 
@@ -263,7 +284,7 @@ class LicenceService
     {
         return $cmpId === null
             ? ($this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND l.holder_uuid = ?', [$ref, $holder])->getRowArray() ?: null)
-            : ($this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND (l.holder_uuid = ? OR l.cmp_id = ?)', [$ref, $holder, $cmpId])->getRowArray() ?: null);
+            : ($this->db()->query(self::SELECT . " WHERE l.licence_ref = ? AND (l.holder_uuid = ? OR (l.scope = 'company' AND l.cmp_id = ?))", [$ref, $holder, $cmpId])->getRowArray() ?: null);
     }
 
     /** @return list<array<string,mixed>> */
@@ -404,6 +425,9 @@ class LicenceService
         if ($isBasic && $holder === '') {
             return self::invalid(['holder_uuid' => 'The Basic plan is held by a person: give the holder_uuid.']);
         }
+        // What the licence covers comes from the offer (docs/LICENSING.md §3.6): every company the holder owns, or one
+        // company — the one in cmp_id, or none yet (the holder applies it in Manage). No holder: its one company.
+        $scope = $holder === '' ? 'company' : (($offer['licence_scope'] ?? 'workspace') === 'company' ? 'company' : 'workspace');
         $startsAt = array_key_exists('starts_at', $in) && $in['starts_at'] !== null && $in['starts_at'] !== ''
             ? S::parseInstant($in['starts_at']) : gmdate('Y-m-d H:i:s') . '+00';
         if ($startsAt === null) {
@@ -436,11 +460,11 @@ class LicenceService
         $db->transBegin();
         try {
             // Serialise issues for one subject + product (duplicate guard below is then race-free).
-            $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:' . ($holderOrNull ?? 'cmp:' . $cmpId) . ':' . $offer['product_code']]);
-            if (! $isAddon && ! $isBasic && ($dup = $this->liveDuplicate($holderOrNull, $cmpOrNull, (string) $offer['product_code'])) !== null) {
+            $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:' . self::lockSubject($scope, $holderOrNull, $cmpOrNull) . ':' . $offer['product_code']]);
+            if (! $isAddon && ! $isBasic && ($dup = $this->liveDuplicate($holderOrNull, $cmpOrNull, (string) $offer['product_code'], $scope)) !== null) {
                 $db->transRollback();
 
-                return ['status' => 409, 'code' => 'live_licence_exists', 'error' => "{$dup} is already live for this " . ($holderOrNull !== null ? 'holder' : 'company')
+                return ['status' => 409, 'code' => 'live_licence_exists', 'error' => "{$dup} is already live for this " . ($scope === 'company' ? 'company' : 'holder')
                     . " and product. Renew or change its plan instead, or tick \"add-on\" to issue a second licence on purpose.", 'details' => ['licence_ref' => $dup]];
             }
             if ($isBasic && ($b = $this->heldBasic($holder, (string) $offer['product_code'])) !== null) {
@@ -454,18 +478,18 @@ class LicenceService
             $id = (int) $db->query(
                 'INSERT INTO engage_licences (licence_ref, cmp_id, holder_uuid, account_id, offer_id, offer_code, offer_version, offer_snapshot, product_code,
                     licence_type_code, plan_code, app_keys, seats_total, starts_at, ends_at, status, invoice_refs, source, notes, version,
-                    activated_at, created_by, is_basic, is_addon, idempotency_key, request_hash, holder_note)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, ?, ?::text[], ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+                    activated_at, created_by, is_basic, is_addon, idempotency_key, request_hash, holder_note, scope)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, ?, ?::text[], ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
                 [$ref, $cmpOrNull, $holderOrNull, $accountId, (int) $offer['id'], $offer['offer_code'], (int) $offer['version'], json_encode($snapshot),
                     $offer['product_code'], $offer['licence_type_code'], $offer['plan_code'], S::pgArray($appKeys), $seats, $startsAt, $endsAt,
                     $activate ? 'active' : 'issued', S::pgArray($invoiceRefs), 'staff', $notes, $activate ? $now : null, (int) $staff['id'],
-                    $isBasic, $isAddon, $idem, $idem !== null ? $requestHash : null, $holderNote]
+                    $isBasic, $isAddon, $idem, $idem !== null ? $requestHash : null, $holderNote, $scope]
             )->getRow()->id;
             $termText = $endsAt ? ' from ' . S::displayDate($startsAt) . ' to ' . S::displayDate(self::lastDay($endsAt)) : ' from ' . S::displayDate($startsAt);
-            $this->event($id, $ref, $cmpOrNull, $holderOrNull, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText, null, [
+            $this->event($id, $ref, $cmpOrNull, $holderOrNull, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText . self::scopeText($scope, $cmpOrNull), null, [
                 'offer' => ['code' => $offer['offer_code'], 'version' => (int) $offer['version']],
                 'starts_at' => S::iso($startsAt), 'ends_at' => S::iso($endsAt), 'seats_total' => $seats,
-                'invoice_refs' => $invoiceRefs,
+                'invoice_refs' => $invoiceRefs, 'scope' => $scope,
             ], 1);
             if ($activate) {
                 $this->event($id, $ref, $cmpOrNull, $holderOrNull, 'activated', $actor, 'Licence activated', null, ['status' => ['from' => 'issued', 'to' => 'active']], 1);
@@ -492,7 +516,7 @@ class LicenceService
 
             return ['status' => 500, 'error' => 'Could not issue the licence.'];
         }
-        $this->audit('licence.issued', $ref, ['cmp_id' => $cmpOrNull, 'holder_uuid' => $holderOrNull, 'account_id' => $accountId, 'offer_code' => $offer['offer_code'],
+        $this->audit('licence.issued', $ref, ['cmp_id' => $cmpOrNull, 'holder_uuid' => $holderOrNull, 'account_id' => $accountId, 'scope' => $scope, 'offer_code' => $offer['offer_code'],
             'offer_version' => (int) $offer['version'], 'activated' => $activate, 'is_addon' => $isAddon, 'is_basic' => $isBasic]);
 
         return ['status' => 201, 'data' => $this->staffDetail($ref)];
@@ -512,23 +536,58 @@ class LicenceService
         return ['status' => 200, 'data' => ($this->staffDetail($prev['licence_ref']) ?? []) + ['replayed' => true]];
     }
 
-    /** licence_ref of a live paid licence of the product for the holder or company, else null. */
-    private function liveDuplicate(?string $holder, ?int $cmpId, string $product): ?string
+    /**
+     * licence_ref of a live paid licence of the product that the new one would clash with, else null: among the holder's
+     * workspace licences, or among the company licences applied to that company (docs/LICENSING.md §3.6). A company
+     * licence not applied to a company yet clashes with nothing; a workspace licence and a company licence of the same
+     * product may both be live (the company licence applies to its company).
+     */
+    private function liveDuplicate(?string $holder, ?int $cmpId, string $product, string $scope = 'workspace', ?string $except = null): ?string
     {
-        $or = [];
-        $binds = [$product];
-        if ($holder !== null) {
-            $or[] = 'holder_uuid = ?';
-            $binds[] = $holder;
+        if ($scope === 'company') {
+            if ($cmpId === null) {
+                return null;
+            }
+            $where = "scope = 'company' AND cmp_id = ?";
+            $binds = [$product, $cmpId];
+        } else {
+            if ($holder === null) {
+                return null;
+            }
+            $where = "scope = 'workspace' AND holder_uuid = ?";
+            $binds = [$product, $holder];
         }
-        if ($cmpId !== null) {
-            $or[] = 'cmp_id = ?';
-            $binds[] = $cmpId;
-        }
+        $binds[] = $except ?? '';
         $r = $this->db()->query("SELECT licence_ref FROM engage_licences WHERE product_code = ? AND NOT is_basic
-            AND status IN ('issued','active','suspended') AND (ends_at IS NULL OR ends_at > NOW()) AND (" . implode(' OR ', $or) . ') ORDER BY id LIMIT 1', $binds)->getRowArray();
+            AND status IN ('issued','active','suspended') AND (ends_at IS NULL OR ends_at > NOW()) AND {$where} AND licence_ref <> ? ORDER BY id LIMIT 1", $binds)->getRowArray();
 
         return $r['licence_ref'] ?? null;
+    }
+
+    /** The advisory-lock subject that serialises writes which could clash (liveDuplicate). */
+    private static function lockSubject(string $scope, ?string $holder, ?int $cmpId): string
+    {
+        return $scope === 'company' && $cmpId !== null ? 'cmp:' . $cmpId : (string) ($holder ?? ('cmp:' . (int) $cmpId));
+    }
+
+    /** " — for one company (…)" for an event summary; nothing for a workspace licence. */
+    private static function scopeText(string $scope, ?int $cmpId, ?string $companyName = null): string
+    {
+        if ($scope !== 'company') {
+            return '';
+        }
+
+        return $cmpId === null ? ' — for one company, not applied to a company yet' : ' — for ' . self::companyText($cmpId, $companyName) . ' only';
+    }
+
+    private static function companyText(?int $cmpId, ?string $name = null): string
+    {
+        if ($cmpId === null) {
+            return 'no company';
+        }
+        $name = trim((string) $name);
+
+        return $name !== '' ? $name . ' (company ' . $cmpId . ')' : 'company ' . $cmpId;
     }
 
     /** The holder's held Basic for a product (issued / active / suspended / superseded), else null. */
@@ -780,6 +839,11 @@ class LicenceService
             if ($offer['product_code'] !== $l['product_code']) {
                 return self::invalid(['offer_code' => "Choose an offer of the same product ({$l['product_code']}). A different product is a new licence."]);
             }
+            if (! empty($l['holder_uuid']) && ($offer['licence_scope'] ?? 'workspace') !== self::scopeOf($l)) {
+                return self::invalid(['offer_code' => self::scopeOf($l) === 'company'
+                    ? 'This licence is for one company: choose an offer for one company too (a licence for every company is a new licence).'
+                    : 'This licence covers every company of the holder: choose an offer that does too (a licence for one company is a new licence).']);
+            }
             if (EntitlementProjector::bool($offer['is_default'] ?? false)) {
                 return self::invalid(['offer_code' => 'That is the Basic plan. To move the holder back to Basic, revoke this licence: Basic comes back on its own.']);
             }
@@ -855,6 +919,98 @@ class LicenceService
                 [['seats_changed', 'Seats changed from ' . $fmt($old) . ' to ' . $fmt($new), ['seats_total' => ['from' => $old, 'to' => $new]], self::reason($in)]],
             ];
         });
+    }
+
+    /**
+     * Apply a company licence to a company, move it to another, or take it off its company (docs/LICENSING.md §3.6).
+     *
+     * Body {cmp_id: int | null, company_name?, reason?, version}. null takes a holder's licence off its company: it then
+     * grants nothing until applied again (a licence with no holder always names its company). Staff (with $staff), or the
+     * holder acting in Manage (with $customer = {holder_uuid, uuid?}) — Manage has checked that they own the company; a
+     * licence of anyone else answers like a missing one. Refused: a workspace licence (409 not_company_licence — it
+     * covers every company already), a Basic (409 basic_not_movable), one that has ended or was revoked (409
+     * licence_not_live), the company it is already on (409 same_company), a company that already has a live company
+     * licence of the product (409 company_has_licence, details.licence_ref) unless this one is an add-on. Staff may move a
+     * licence of an Engage account only to a company mapped to that account, as when issuing it.
+     *
+     * @param array{holder_uuid:string, uuid?:?string}|null $customer
+     */
+    public function changeCompany(string $ref, array $in, ?array $staff, ?array $customer = null): array
+    {
+        $raw = array_key_exists('cmp_id', $in) ? $in['cmp_id'] : 'missing';
+        if ($raw === '' ) {
+            $raw = null;
+        }
+        if ($raw === 'missing' || ($raw !== null && ! ((is_int($raw) || (is_string($raw) && ctype_digit($raw))) && (int) $raw > 0 && (int) $raw <= PHP_INT_MAX))) {
+            return self::invalid(['cmp_id' => 'cmp_id: the company to apply the licence to, or null to take it off its company.']);
+        }
+        $target = $raw === null ? null : (int) $raw;
+        // What kind of licence it is decides before its state does: a Basic or a workspace licence has nothing to move,
+        // whatever its status (a superseded Basic included).
+        $row = $this->findByRef($ref);
+        if ($row && ($customer === null || ($row['holder_uuid'] ?? null) === $customer['holder_uuid'])) {
+            if (EntitlementProjector::bool($row['is_basic'] ?? false)) {
+                return ['status' => 409, 'code' => 'basic_not_movable', 'error' => 'The Basic plan covers every company of its holder: there is nothing to move.'];
+            }
+            if (self::scopeOf($row) !== 'company') {
+                return ['status' => 409, 'code' => 'not_company_licence', 'error' => 'This licence covers every company of its holder: there is nothing to move.'];
+            }
+        }
+        $name = trim((string) ($in['company_name'] ?? ''));
+        $name = $name !== '' ? mb_substr($name, 0, 200) : null;
+        $actor = null;
+        if ($customer !== null) {
+            $actor = ['kind' => 'customer', 'id' => null, 'display' => 'Account owner (in Manage)', 'uuid' => $customer['uuid'] ?? $customer['holder_uuid']];
+            // The holder acts on the licence as it stands: no optimistic lock to send, the row lock below decides.
+            $cur = $this->db()->query('SELECT version FROM engage_licences WHERE licence_ref = ? AND holder_uuid = ?', [$ref, $customer['holder_uuid']])->getRowArray();
+            if (! $cur) {
+                return ['status' => 404, 'code' => 'not_found', 'error' => 'No such licence for this holder.'];
+            }
+            $in['version'] = (int) $cur['version'];
+        }
+
+        return $this->mutate($ref, $in, 'move', $staff, function (array $l) use ($target, $name, $staff, $customer, $in) {
+            if ($customer !== null && ($l['holder_uuid'] ?? null) !== $customer['holder_uuid']) {
+                return ['status' => 404, 'code' => 'not_found', 'error' => 'No such licence for this holder.'];
+            }
+            if (EntitlementProjector::bool($l['is_basic'] ?? false)) {
+                return ['status' => 409, 'code' => 'basic_not_movable', 'error' => 'The Basic plan covers every company of its holder: there is nothing to move.'];
+            }
+            if (self::scopeOf($l) !== 'company') {
+                return ['status' => 409, 'code' => 'not_company_licence', 'error' => 'This licence covers every company of its holder: there is nothing to move.'];
+            }
+            if (self::effectiveStatus($l) === 'expired') {
+                return ['status' => 409, 'code' => 'licence_not_live', 'error' => 'This licence has ended: renew it first.'];
+            }
+            $from = $l['cmp_id'] !== null ? (int) $l['cmp_id'] : null;
+            if ($from === $target) {
+                return ['status' => 409, 'code' => 'same_company', 'error' => $target === null ? 'This licence is not applied to a company.' : 'This licence is already applied to that company.'];
+            }
+            if ($target === null && empty($l['holder_uuid'])) {
+                return self::invalid(['cmp_id' => 'A licence with no holder always applies to a company: move it to another company instead.']);
+            }
+            $known = $target !== null ? $this->db()->query("SELECT company_name FROM engage_account_companies WHERE cmp_id = ? AND status = 'active'"
+                . ($l['account_id'] !== null ? ' AND account_id = ?' : ''), $l['account_id'] !== null ? [$target, (int) $l['account_id']] : [$target])->getRowArray() : null;
+            if ($staff !== null && $target !== null && $l['account_id'] !== null && ! $known) {
+                return self::invalid(['cmp_id' => "Company {$target} is not mapped to this licence's account. Map it first (Account → Manage companies)."]);
+            }
+            if ($target !== null) {
+                $this->db()->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:cmp:' . $target . ':' . $l['product_code']]);
+                if (! EntitlementProjector::bool($l['is_addon'] ?? false)
+                    && ($dup = $this->liveDuplicate(null, $target, (string) $l['product_code'], 'company', (string) $l['licence_ref'])) !== null) {
+                    return ['status' => 409, 'code' => 'company_has_licence', 'error' => "That company already has {$dup} for this product. Move that one elsewhere first, or wait until it ends.",
+                        'details' => ['licence_ref' => $dup]];
+                }
+            }
+            $toName = $name ?? ($known['company_name'] ?? null);
+            $summary = match (true) {
+                $from === null => 'Applied to ' . self::companyText($target, $toName),
+                $target === null => 'Taken off company ' . $from . ': not applied to a company',
+                default => 'Moved from company ' . $from . ' to ' . self::companyText($target, $toName),
+            };
+
+            return [['cmp_id' => $target], [['company_changed', $summary, ['cmp_id' => ['from' => $from, 'to' => $target]], self::reason($in)]]];
+        }, $actor);
     }
 
     public function assignSeat(string $ref, array $in, array $staff): array
@@ -951,19 +1107,20 @@ class LicenceService
      * @param callable(array): array $fn returns [set, events] — events: list of [type, summary, changes, reason?] —
      *                                   or an error result ['status' => 4xx, …]
      */
-    private function mutate(string $ref, array $in, string $action, ?array $staff, callable $fn): array
+    /** @param array{kind:string,id:?int,display:string}|null $actor who acts when it is neither staff nor the expiry job */
+    private function mutate(string $ref, array $in, string $action, ?array $staff, callable $fn, ?array $actor = null): array
     {
-        return S::strictTx($this->db(), fn () => $this->mutateTx($ref, $in, $action, $staff, $fn));
+        return S::strictTx($this->db(), fn () => $this->mutateTx($ref, $in, $action, $staff, $fn, $actor));
     }
 
-    private function mutateTx(string $ref, array $in, string $action, ?array $staff, callable $fn): array
+    private function mutateTx(string $ref, array $in, string $action, ?array $staff, callable $fn, ?array $actorIn = null): array
     {
         $expected = $in['version'] ?? null;
         if (! (is_int($expected) || (is_string($expected) && ctype_digit($expected))) || (int) $expected < 1) {
             return self::invalid(['version' => 'Send the licence version you are changing (optimistic lock).']);
         }
         $expected = (int) $expected;
-        $actor = $staff !== null ? self::staffActor($staff) : ['kind' => 'system', 'id' => null, 'display' => 'Engage (scheduled expiry)'];
+        $actor = $staff !== null ? self::staffActor($staff) : ($actorIn ?? ['kind' => 'system', 'id' => null, 'display' => 'Engage (scheduled expiry)']);
         $db = $this->db();
         $db->transBegin();
         try {
@@ -1038,7 +1195,7 @@ class LicenceService
         if (! empty($events[0][3])) {
             $meta['reason'] = $events[0][3];
         }
-        $this->audit('licence.' . $action, $l['licence_ref'], $meta, $staff === null);
+        $this->audit('licence.' . $action, $l['licence_ref'], $meta, $staff === null, $staff === null ? $actorIn : null);
 
         return ['status' => 200, 'data' => $this->staffDetail($l['licence_ref'])];
     }
@@ -1056,14 +1213,27 @@ class LicenceService
     {
         $holder = $after['holder_uuid'] ?? null;
         $keys = array_values(array_unique(array_merge($before !== [] ? EntitlementProjector::appKeysOf($before) : [], EntitlementProjector::appKeysOf($after))));
-        if ($holder !== null && $holder !== '') {
-            $keys = array_values(array_unique(array_merge($keys, $this->reconcileBasic($holder, (string) $after['product_code'], $actor))));
-        }
+        $basicKeys = $holder !== null && $holder !== '' ? $this->reconcileBasic($holder, (string) $after['product_code'], $actor) : [];
         if (in_array($action, ['issue', 'renew', 'change-offer'], true)) {
             LicenceHooks::afterLicenceWrite($this->db(), $action, $after, $in);
         }
-        (new EntitlementOutbox($this->db()))->enqueue($holder, $after['cmp_id'] !== null ? (int) $after['cmp_id'] : null, $keys,
-            $action === 'issue' ? 'licence.issued' : 'licence.' . $action, (string) $after['licence_ref']);
+        // Every subject the licence spoke for before or speaks for now (docs/LICENSING.md §3.6): its holder's workspace,
+        // or the company it is applied to — a company licence that moved speaks for two — plus the holder's workspace
+        // when their Basic changed. A company licence not applied to a company is in no subject.
+        $subjects = [];
+        foreach ([$before, $after] as $row) {
+            if ($row !== [] && ($sub = EntitlementProjector::subjectOf($row)) !== null) {
+                $subjects[EntitlementProjector::subjectKey($sub[0], $sub[1])] = $sub;
+            }
+        }
+        if ($basicKeys !== []) {
+            $subjects[EntitlementProjector::subjectKey($holder, null)] ??= [$holder, null];
+        }
+        $outbox = new EntitlementOutbox($this->db());
+        foreach ($subjects as [$h, $c]) {
+            $outbox->enqueue($h, $c, $h !== null ? array_values(array_unique(array_merge($keys, $basicKeys))) : $keys,
+                $action === 'issue' ? 'licence.issued' : 'licence.' . $action, (string) $after['licence_ref']);
+        }
     }
 
     /**
@@ -1080,8 +1250,10 @@ class LicenceService
         if (! $basic) {
             return [];
         }
+        // Only a WORKSPACE licence covers what Basic covers: a company licence is for one company, and the holder's
+        // other companies still need Basic (docs/LICENSING.md §3.6).
         $covering = $this->db()->query("SELECT licence_ref FROM engage_licences WHERE holder_uuid = ? AND product_code = ? AND NOT is_basic
-            AND status = 'active' AND (ends_at IS NULL OR ends_at > NOW()) ORDER BY id LIMIT 1", [$holder, $product])->getRowArray();
+            AND scope = 'workspace' AND status = 'active' AND (ends_at IS NULL OR ends_at > NOW()) ORDER BY id LIMIT 1", [$holder, $product])->getRowArray();
         if ($covering && $basic['status'] === 'active') {
             $to = 'superseded';
             $set = "status = 'superseded', superseded_at = NOW()";
@@ -1157,7 +1329,13 @@ class LicenceService
         $code = (string) $offer['offer_code'];
         $actor = self::sellerActor($seller);
         $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:' . $holder . ':' . $product]);
-        $liveSql = " AND NOT l.is_basic AND l.status IN ('issued','active','suspended') AND (l.ends_at IS NULL OR l.ends_at > NOW())";
+        if (($offer['licence_scope'] ?? 'workspace') === 'company') {
+            // A licence for one company (docs/LICENSING.md §3.6): a new licence every time, not applied to a company yet —
+            // the customer chooses the company in Manage (and may move it later). Nothing it could clash with until then.
+            return $this->issueFromUnitTx($unit, $offer, $holder, $seller, $actor, $invoiceRef);
+        }
+        // Workspace licences renew or clash among the holder's workspace licences only.
+        $liveSql = " AND l.scope = 'workspace' AND NOT l.is_basic AND l.status IN ('issued','active','suspended') AND (l.ends_at IS NULL OR l.ends_at > NOW())";
         $same = $db->query(self::SELECT . ' WHERE l.holder_uuid = ? AND l.offer_code = ?' . $liveSql . ' ORDER BY l.ends_at DESC NULLS FIRST, l.id DESC LIMIT 1 FOR UPDATE OF l',
             [$holder, $code])->getRowArray();
         if (! $same) {
@@ -1172,7 +1350,7 @@ class LicenceService
                     'details' => ['licence_ref' => $other['licence_ref'], 'offer_code' => $other['offer_code']]];
             }
         }
-        $target = $same ?: ($db->query(self::SELECT . " WHERE l.holder_uuid = ? AND l.offer_code = ? AND NOT l.is_basic
+        $target = $same ?: ($db->query(self::SELECT . " WHERE l.holder_uuid = ? AND l.offer_code = ? AND NOT l.is_basic AND l.scope = 'workspace'
             AND (l.status = 'expired' OR (l.status IN ('issued','active') AND l.ends_at IS NOT NULL AND l.ends_at <= NOW()))
             ORDER BY l.ends_at DESC, l.id DESC LIMIT 1 FOR UPDATE OF l", [$holder, $code])->getRowArray() ?: null);
         if ($target === null) {
@@ -1202,19 +1380,20 @@ class LicenceService
         $endsAt = S::addTerm($now, (int) $offer['term_months'], (int) $offer['term_days']);
         $seats = $offer['seats'] !== null ? (int) $offer['seats'] : null;
         $invoiceRefs = $invoiceRef !== null && $invoiceRef !== '' ? [$invoiceRef] : [];
+        $scope = ($offer['licence_scope'] ?? 'workspace') === 'company' ? 'company' : 'workspace';
         $id = (int) $db->query(
             "INSERT INTO engage_licences (licence_ref, cmp_id, holder_uuid, account_id, offer_id, offer_code, offer_version, offer_snapshot, product_code,
                 licence_type_code, plan_code, app_keys, seats_total, starts_at, ends_at, status, invoice_refs, source, notes, version, activated_at,
-                created_by, is_basic, is_addon, seller_id, order_ref)
-             VALUES (?, NULL, ?, NULL, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, 'active', ?::text[], 'seller', ?, 1, ?, NULL, FALSE, FALSE, ?, ?) RETURNING id",
+                created_by, is_basic, is_addon, seller_id, order_ref, scope)
+             VALUES (?, NULL, ?, NULL, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::text[], ?, ?, ?, 'active', ?::text[], 'seller', ?, 1, ?, NULL, FALSE, FALSE, ?, ?, ?) RETURNING id",
             [$ref, $holder, (int) $offer['id'], $offer['offer_code'], (int) $offer['version'], json_encode(OfferService::snapshot($offer)), $offer['product_code'],
                 $offer['licence_type_code'], $offer['plan_code'], S::pgArray(S::fromJsonArray($offer['app_keys_json'])), $seats, $now, $endsAt,
-                S::pgArray($invoiceRefs), 'Sold by ' . $seller['seller_code'] . ' (' . $unit['unit_ref'] . ')', $now, (int) $seller['id'], (string) $unit['unit_ref']]
+                S::pgArray($invoiceRefs), 'Sold by ' . $seller['seller_code'] . ' (' . $unit['unit_ref'] . ')', $now, (int) $seller['id'], (string) $unit['unit_ref'], $scope]
         )->getRow()->id;
         $termText = $endsAt ? ' from ' . S::displayDate($now) . ' to ' . S::displayDate(self::lastDay($endsAt)) : ' from ' . S::displayDate($now);
-        $this->event($id, $ref, null, $holder, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText . ' — sold by ' . $actor['display'], null, [
+        $this->event($id, $ref, null, $holder, 'issued', $actor, 'Licence issued: ' . $offer['label'] . $termText . self::scopeText($scope, null) . ' — sold by ' . $actor['display'], null, [
             'offer' => ['code' => $offer['offer_code'], 'version' => (int) $offer['version']], 'starts_at' => S::iso($now), 'ends_at' => S::iso($endsAt),
-            'seats_total' => $seats, 'invoice_refs' => $invoiceRefs, 'licence_unit' => $unit['unit_ref'],
+            'seats_total' => $seats, 'invoice_refs' => $invoiceRefs, 'licence_unit' => $unit['unit_ref'], 'scope' => $scope,
         ], 1);
         $this->event($id, $ref, null, $holder, 'activated', $actor, 'Licence activated', null, ['status' => ['from' => 'issued', 'to' => 'active']], 1);
         $db->query("INSERT INTO engage_holders (holder_uuid, source) VALUES (?, 'staff') ON CONFLICT (holder_uuid) DO NOTHING", [$holder]);
@@ -1336,10 +1515,13 @@ class LicenceService
         return ['status' => 422, 'code' => 'validation_failed', 'error' => 'Please correct the request.', 'details' => $details];
     }
 
-    private function audit(string $event, string $ref, array $meta, bool $system = false): void
+    private function audit(string $event, string $ref, array $meta, bool $system = false, ?array $actor = null): void
     {
         $opts = ['subject_kind' => 'licence', 'subject_id' => $ref, 'metadata' => $meta, 'fanout_console' => true];
-        if ($system) {
+        if ($actor !== null && ($actor['kind'] ?? '') === 'customer') {
+            // The holder, acting in Manage: Manage signed the request (manage:<their uuid>).
+            $opts += ['actor_email' => 'manage:' . ($actor['uuid'] ?? 'holder'), 'actor_role' => 'customer'];
+        } elseif ($system) {
             $opts += ['actor_email' => 'system:engage', 'actor_role' => 'system'];
         }
         Services::auditService()->log($event, $opts);

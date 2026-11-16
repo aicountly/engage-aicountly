@@ -11,7 +11,7 @@ import { LICENSING_ADMIN, formatDateIN, formatPaise, paiseToRupees, parseJsonFie
 
 const EMPTY = {
   offer_code: '', product_code: '', licence_type_code: '', plan_code: '', label: '', description: '',
-  price: '', price_basis: '', gst_rate: '', sac: '', term_months: 0, term_days: 0, seats: '', app_keys: '',
+  price: '', price_basis: '', gst_rate: '', sac: '', term_months: 0, term_days: 0, seats: '', app_keys: '', licence_scope: 'workspace',
   entitlementsText: '[]', displayText: '{}', valid_from: '', valid_to: '', is_default: false, channels: CHANNELS.map((c) => c.code),
 }
 
@@ -61,7 +61,7 @@ export default function Offers() {
         product_code: d.product_code, licence_type_code: d.licence_type_code, plan_code: d.plan_code || null,
         label: d.label, description: d.description, price_paise: price, price_basis: d.price_basis, gst_rate: d.gst_rate,
         sac: d.sac, term_months: Number(d.term_months || 0), term_days: Number(d.term_days || 0),
-        seats: d.seats === '' ? null : Number(d.seats), app_keys: d.app_keys,
+        seats: d.seats === '' ? null : Number(d.seats), app_keys: d.app_keys, licence_scope: d.licence_scope || 'workspace',
         entitlements: parseJsonField(d.entitlementsText, 'Entitlements', { expect: 'array' }),
         display: parseJsonField(d.displayText, 'Display'),
         valid_from: d.valid_from || null, valid_to: d.valid_to || null, is_default: !!d.is_default, channels: d.channels || [],
@@ -80,7 +80,7 @@ export default function Offers() {
     id: o.id, offer_code: o.offer_code, version: o.version, product_code: o.product.code, licence_type_code: o.licence_type.code,
     plan_code: o.plan?.code || '', label: o.label, description: o.description || '', price: paiseToRupees(o.price_paise),
     price_basis: o.price_basis, gst_rate: o.gst_rate, sac: o.sac || '', term_months: o.term_months, term_days: o.term_days,
-    seats: o.seats ?? '', app_keys: (o.app_keys || []).join(', '), entitlementsText: JSON.stringify(o.entitlements || [], null, 2),
+    seats: o.seats ?? '', app_keys: (o.app_keys || []).join(', '), licence_scope: o.licence_scope || 'workspace', entitlementsText: JSON.stringify(o.entitlements || [], null, 2),
     displayText: JSON.stringify(o.display || {}, null, 2), valid_from: dateOnly(o.valid_from), valid_to: dateOnly(o.valid_to),
     is_default: !!o.is_default, channels: o.channels || [],
   })
@@ -168,6 +168,7 @@ export default function Offers() {
                     <div><span className="text-neutral-400">SAC:</span> {o.sac || '—'}</div>
                     <div><span className="text-neutral-400">Term:</span> {termText(o.term_months, o.term_days)}</div>
                     <div><span className="text-neutral-400">Seats:</span> {o.seats ?? 'No limit'}</div>
+                    <div><span className="text-neutral-400">Covers:</span> {o.licence_scope === 'company' ? 'One company (customer chooses)' : 'Every company of the customer'}</div>
                     <div><span className="text-neutral-400">Apps:</span> {(o.app_keys || []).join(', ')}</div>
                     <div><span className="text-neutral-400">On sale:</span> {o.valid_from ? formatDateIN(o.valid_from) : 'now'} → {o.valid_to ? formatDateIN(o.valid_to) : 'open'}</div>
                     <div className="col-span-2"><span className="text-neutral-400">Sold on:</span> <ChannelChips channels={o.channels} /></div>
@@ -219,6 +220,14 @@ export default function Offers() {
             <div><div className="engage-label">App keys (comma separated)</div><input className="engage-input font-mono" placeholder="defaults to the product" value={draft.app_keys} onChange={set('app_keys')} /></div>
           </div>
           <div className="text-xs text-neutral-500 -mt-2">Term 0 months + 0 days = no end date. App keys are Manage's keys (books, inventory, billing, notes, docs …); publishing refuses a key Manage does not know. A priced offer needs a SAC of the form 99xxxx.</div>
+          <div>
+            <div className="engage-label">A licence of this offer covers</div>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="flex items-center gap-2"><input type="radio" checked={draft.licence_scope !== 'company'} onChange={() => setDraft({ ...draft, licence_scope: 'workspace' })} /> Every company the customer owns (whole workspace)</label>
+              <label className="flex items-center gap-2"><input type="radio" checked={draft.licence_scope === 'company'} disabled={!!draft.is_default} onChange={() => setDraft({ ...draft, licence_scope: 'company' })} /> One company — the customer applies it to a company in Manage and can move it</label>
+            </div>
+            <div className="text-xs text-neutral-500 mt-1">Seats are the people who use the plan; anyone else the owner shares with is a free user on Basic. Every version of an offer covers the same — make a new offer for the other kind. The Basic plan always covers every company.</div>
+          </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!draft.is_default} onChange={(e) => setDraft({ ...draft, is_default: e.target.checked })} /> Basic (default) plan of this product — free, no end date, complimentary type; every signed-up user gets it (one published per product)</label>
           <div className="grid grid-cols-2 gap-3">
             <div><div className="engage-label">On sale from / with effect from (optional)</div><input className="engage-input" type="date" value={draft.valid_from} onChange={set('valid_from')} /></div>
