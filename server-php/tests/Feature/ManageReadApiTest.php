@@ -55,9 +55,12 @@ final class ManageReadApiTest extends LicensingTestCase
         $this->assertNull($x['plan']);
         $this->assertSame(['total' => 3, 'assigned' => 0], $x['seats']);
         $this->assertSame(['AIC/26-27/000001'], $x['invoice_refs']);
-        foreach (['cmp_id', 'account', 'notes', 'status_reason', 'offer_snapshot', 'order_ref'] as $internal) {
+        foreach (['account', 'notes', 'status_reason', 'offer_snapshot', 'order_ref'] as $internal) {
             $this->assertArrayNotHasKey($internal, $x, $internal);
         }
+        // Additive (docs/LICENSING.md §3.6): a company-level licence says it is for this one company.
+        $this->assertSame('company', $x['scope']);
+        $this->assertSame(42, $x['cmp_id']);
 
         $d = $this->data($this->s2s('get', 'manage/companies/42/licences/' . $l['licence_ref']))['data'];
         $this->assertSame($x, $d);

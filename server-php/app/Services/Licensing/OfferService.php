@@ -50,6 +50,9 @@ class OfferService
 
     public const CHANNELS = ['website', 'manage', 'seller'];
 
+    /** What a licence of an offer covers: every company the customer owns, or one company at a time (docs/LICENSING.md §3.6). */
+    public const SCOPES = ['workspace', 'company'];
+
     private const SELECT = "SELECT o.*, to_jsonb(o.app_keys) AS app_keys_json, to_jsonb(o.channels) AS channels_json, p.name AS product_label,
             t.label AS licence_type_label, t.lifecycle_kind, pl.name AS plan_label,
             EXISTS (SELECT 1 FROM engage_offers n WHERE n.offer_code = o.offer_code AND n.status = 'scheduled'
@@ -106,6 +109,8 @@ class OfferService
             'term_months'  => (int) $o['term_months'],
             'term_days'    => (int) $o['term_days'],
             'seats'        => $o['seats'] !== null ? (int) $o['seats'] : null,
+            // workspace: every company the customer owns; company: one company at a time (docs/LICENSING.md §3.6).
+            'licence_scope' => (string) ($o['licence_scope'] ?? 'workspace'),
             'app_keys'     => S::fromJsonArray($o['app_keys_json'] ?? '[]'),
             'is_default'   => in_array($o['is_default'] ?? false, [true, 't', 'true', 1, '1'], true),
             'entitlements' => S::json($o['entitlements']),
@@ -350,6 +355,14 @@ class OfferService
                 $f['seats'] = (int) $s;
             }
         }
+        if (array_key_exists('licence_scope', $in) || $creating) {
+            // Who the licence covers: every company the customer owns, or one company at a time (docs/LICENSING.md §3.6).
+            $sc = strtolower(trim((string) ($in['licence_scope'] ?? 'workspace')));
+            if (! in_array($sc, self::SCOPES, true)) {
+                $e['licence_scope'] = 'licence_scope must be workspace (every company the customer owns) or company (one company).';
+            }
+            $f['licence_scope'] = $sc;
+        }
         if (array_key_exists('app_keys', $in) || $creating) {
             $keys = $in['app_keys'] ?? null;
             if (is_string($keys)) {
@@ -435,6 +448,10 @@ class OfferService
         $to = array_key_exists('valid_to', $f) ? $f['valid_to'] : ($current['valid_to'] ?? null);
         if ($from && $to && strtotime($to) <= strtotime($from)) {
             $e['valid_to'] = 'valid_to must be after valid_from.';
+        }
+        $isDefault = array_key_exists('is_default', $f) ? (bool) $f['is_default'] : self::bool($current['is_default'] ?? false);
+        if ($isDefault && ($f['licence_scope'] ?? ($current['licence_scope'] ?? 'workspace')) !== 'workspace') {
+            $e['licence_scope'] = 'A Basic (default) offer covers every company of the holder: it cannot be for one company.';
         }
 
         return [$f, $e];
@@ -553,6 +570,15 @@ class OfferService
         if ($e !== []) {
             return ['status' => 422, 'error' => 'Please correct the offer.', 'details' => $e];
         }
+        if (array_key_exists('licence_scope', $f) && $f['licence_scope'] !== ($o['licence_scope'] ?? 'workspace')) {
+            // Licences of every version renew and change plan within one offer code: they must all cover the same.
+            $other = $this->db()->query("SELECT version FROM engage_offers WHERE offer_code = ? AND id <> ? AND status <> 'draft' AND licence_scope <> ? ORDER BY version DESC LIMIT 1",
+                [$o['offer_code'], $id, $f['licence_scope']])->getRow();
+            if ($other) {
+                return ['status' => 422, 'error' => 'Please correct the offer.', 'details' => ['licence_scope' => "v{$other->version} of {$o['offer_code']} covers "
+                    . ($f['licence_scope'] === 'company' ? 'every company' : 'one company') . ': every version of an offer covers the same. Create a new offer for the other kind.']];
+            }
+        }
         if ($f !== []) {
             $sets = [];
             $binds = [];
@@ -600,7 +626,7 @@ class OfferService
         $max = (int) $this->db()->query('SELECT MAX(version) AS v FROM engage_offers WHERE offer_code = ?', [$o['offer_code']])->getRow()->v;
         $copy = [];
         foreach (['offer_code', 'product_code', 'licence_type_code', 'plan_code', 'label', 'description', 'price_paise', 'currency', 'price_basis',
-            'gst_rate', 'sac', 'term_months', 'term_days', 'seats', 'entitlements', 'display', 'valid_from', 'valid_to', 'is_default'] as $k) {
+            'gst_rate', 'sac', 'term_months', 'term_days', 'seats', 'licence_scope', 'entitlements', 'display', 'valid_from', 'valid_to', 'is_default'] as $k) {
             $copy[$k] = $o[$k];
         }
         $copy['is_default'] = in_array($copy['is_default'], [true, 't', 'true', 1, '1'], true);
@@ -722,7 +748,7 @@ class OfferService
             $max = (int) $db->query('SELECT MAX(version) AS v FROM engage_offers WHERE offer_code = ?', [$code])->getRow()->v;
             $copy = [];
             foreach (['offer_code', 'product_code', 'licence_type_code', 'plan_code', 'label', 'description', 'currency', 'sac', 'term_months',
-                'term_days', 'seats', 'entitlements', 'display', 'valid_to'] as $k) {
+                'term_days', 'seats', 'licence_scope', 'entitlements', 'display', 'valid_to'] as $k) {
                 $copy[$k] = $o[$k];
             }
             $copy += [
@@ -1114,6 +1140,9 @@ class OfferService
         }
         if (! $type || $type['lifecycle_kind'] !== 'complimentary') {
             return 'The Basic (default) offer uses a complimentary licence type.';
+        }
+        if (($o['licence_scope'] ?? 'workspace') !== 'workspace') {
+            return 'The Basic (default) offer covers every company of the holder: set "Applies to" to the whole workspace.';
         }
 
         return null;

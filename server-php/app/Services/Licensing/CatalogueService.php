@@ -85,6 +85,9 @@ class CatalogueService
             'price'        => self::price($o),
             'term'         => ['months' => $v['term_months'], 'days' => $v['term_days'], 'cycle' => $cycle],
             'seats'        => $v['seats'],
+            // Additive (docs/LICENSING.md §3.6): workspace = every company the customer owns; company = one company at a
+            // time, which the customer chooses in Manage and may move.
+            'licence_scope' => $v['licence_scope'],
             'entitlements' => $v['entitlements'],
             'attributes'   => $attributes,
             'display'      => $v['display'],

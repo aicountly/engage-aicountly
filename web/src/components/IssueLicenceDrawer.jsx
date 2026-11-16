@@ -9,8 +9,10 @@ const pickRows = (r) => r.data?.data?.items || r.data?.data || []
 
 /**
  * Issue a licence from a published offer — to a HOLDER (the my.aicountly account owner; D-L2, the default) or, for
- * legacy company-level licences, to a mapped Manage company. Each opening of the drawer carries one Idempotency-Key,
- * so a double click or a retry after a network error never issues twice.
+ * legacy company-level licences, to a mapped Manage company. The offer decides what a holder's licence covers
+ * (docs/LICENSING.md §3.6): every company they own, or one company — applied now to a mapped company, or left for the
+ * customer to apply in Manage. Each opening of the drawer carries one Idempotency-Key, so a double click or a retry
+ * after a network error never issues twice.
  */
 export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId = null, cmpId = null, holderUuid = null }) {
   const qc = useQueryClient()
@@ -45,6 +47,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
     return list.find((m) => String(m.id) === String(f.mapping)) || (cmpId ? list.find((m) => m.cmp_id === Number(cmpId)) : null) || (list.length === 1 ? list[0] : null)
   }, [mappings.data, f.mapping, cmpId])
   const offer = (offers.data || []).find((o) => String(o.id) === String(f.offer_id))
+  const companyOffer = offer?.licence_scope === 'company'
   const knownHolder = (holders.data || []).find((h) => h.holder_uuid === f.holder_uuid.trim())
 
   const issue = useMutation({
@@ -77,7 +80,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
       footer={<button className="engage-btn-primary" disabled={issue.isPending} onClick={() => { if (window.confirm('Issue this licence? Manage receives the new plan automatically within a minute.')) issue.mutate() }}>Issue licence</button>}>
       <ErrorNote error={error} />
       <div className="flex gap-4 text-sm">
-        <label className="flex items-center gap-2"><input type="radio" checked={f.target === 'holder'} onChange={() => set({ target: 'holder' })} /> Holder (account owner — every company they own)</label>
+        <label className="flex items-center gap-2"><input type="radio" checked={f.target === 'holder'} onChange={() => set({ target: 'holder' })} /> Holder (the my.aicountly account owner)</label>
         <label className="flex items-center gap-2"><input type="radio" checked={f.target === 'company'} onChange={() => set({ target: 'company' })} /> One Manage company (legacy)</label>
       </div>
       {f.target === 'holder' ? <>
@@ -111,8 +114,10 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
           <div><div className="engage-label">How did you verify this uuid? (required for a holder Engage has not heard of)</div><input className="engage-input" placeholder="e.g. the owner read it out from my.aicountly on a call" value={f.holder_note} onChange={(e) => set({ holder_note: e.target.value })} /></div>
         ) : null}
         {(mappings.data || []).length ? (
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.also_company} onChange={(e) => set({ also_company: e.target.checked })} /> Also record a mapped Manage company{f.also_company && chosenMapping ? `: ${chosenMapping.cmp_id}` : ''}</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.also_company} onChange={(e) => set({ also_company: e.target.checked })} />
+            {companyOffer ? 'Apply it to a mapped company now' : 'Also record a mapped Manage company (for information — the licence still covers every company)'}{f.also_company && chosenMapping ? `: ${chosenMapping.cmp_id}` : ''}</label>
         ) : null}
+        {companyOffer && !f.also_company ? <div className="text-xs text-sky-800 bg-sky-50 border border-sky-200 rounded-md px-2 py-1">Not applied to a company yet: the customer applies it to one of their companies in Manage (Plans &amp; billing → Licences). It grants nothing until then.</div> : null}
       </> : null}
       {f.target === 'company' || f.also_company ? (
         <div>
@@ -130,7 +135,7 @@ export default function IssueLicenceDrawer({ open, onClose, onIssued, accountId 
           <option value="">Choose…</option>
           {(offers.data || []).map((o) => <option key={o.id} value={o.id}>{o.label}{o.is_default ? ' (Basic)' : ''} · {o.offer_code} v{o.version} · {formatPaise(o.price_paise)}</option>)}
         </select>
-        {offer ? <div className="text-xs text-neutral-600 mt-1">{offer.product.label} · {offer.licence_type.label} · {termText(offer.term_months, offer.term_days)} · seats {offer.seats ?? 'no limit'} · apps {(offer.app_keys || []).join(', ')}</div> : null}
+        {offer ? <div className="text-xs text-neutral-600 mt-1">{offer.product.label} · {offer.licence_type.label} · {termText(offer.term_months, offer.term_days)} · seats {offer.seats ?? 'no limit'} · apps {(offer.app_keys || []).join(', ')} · covers {companyOffer ? 'one company' : 'every company of the holder'}</div> : null}
         {offer?.is_default ? <div className="text-xs text-amber-700 mt-1">This is the product's Basic plan — holders get it automatically at sign-up.</div> : null}
       </div>
       <div className="grid grid-cols-2 gap-3">

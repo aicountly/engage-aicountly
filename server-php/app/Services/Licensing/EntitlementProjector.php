@@ -10,8 +10,12 @@ use Config\Database;
 
 /**
  * The FULL entitlement state of one subject for one Manage app key (contract §3.3) — what Manage stores in
- * ghm_plan_entitlement. A subject is a holder (my.aicountly uuid, D-L2), or a company for a legacy company-only
- * licence (pushed with holder_uuid null and cmp_id; Manage resolves the company's owner).
+ * ghm_plan_entitlement. A subject is a holder (my.aicountly uuid, D-L2) for the holder's WORKSPACE licences (every
+ * company they own), or a company for its COMPANY licences (docs/LICENSING.md §3.6) — a holder's licence for one
+ * company, or a legacy company-only licence. A company subject is pushed with holder_uuid null and cmp_id, as legacy
+ * company licences always were; `scope` says which kind of subject a push is about, and `licence_holder_uuid` who
+ * holds the company licence that applies (null for a legacy one). A company licence not applied to a company yet is
+ * in no subject: it grants nothing until the holder applies it.
  *
  * Which licence speaks for (subject, app) — app_keys normalised with ManageAppRegistry (drive → docs):
  *   1. an effectively active paid (non-Basic) licence; several → the one ending last (open-ended wins), then newest;
@@ -39,6 +43,21 @@ class EntitlementProjector
         return $holderUuid !== null && $holderUuid !== '' ? 'holder:' . $holderUuid : 'cmp:' . (int) $cmpId;
     }
 
+    /**
+     * The subject a licence row speaks for, as [holder_uuid, cmp_id] (one of them null) — or null for a company licence
+     * not applied to a company yet, which is in no subject.
+     *
+     * @return array{0:?string, 1:?int}|null
+     */
+    public static function subjectOf(array $l): ?array
+    {
+        if (($l['scope'] ?? 'workspace') === 'company' || ($l['holder_uuid'] ?? null) === null || $l['holder_uuid'] === '') {
+            return isset($l['cmp_id']) && $l['cmp_id'] !== null && (int) $l['cmp_id'] > 0 ? [null, (int) $l['cmp_id']] : null;
+        }
+
+        return [(string) $l['holder_uuid'], null];
+    }
+
     /** @return list<string> Manage app keys a licence row covers */
     public static function appKeysOf(array $l): array
     {
@@ -58,10 +77,11 @@ class EntitlementProjector
     {
         $sql = 'SELECT l.*, to_jsonb(l.app_keys) AS app_keys_json FROM engage_licences l WHERE ';
         if ($holderUuid !== null && $holderUuid !== '') {
-            return $this->db()->query($sql . 'l.holder_uuid = ? ORDER BY l.id', [$holderUuid])->getResultArray();
+            return $this->db()->query($sql . "l.holder_uuid = ? AND l.scope = 'workspace' ORDER BY l.id", [$holderUuid])->getResultArray();
         }
 
-        return $this->db()->query($sql . 'l.cmp_id = ? AND l.holder_uuid IS NULL ORDER BY l.id', [(int) $cmpId])->getResultArray();
+        // Every company licence applied to the company: a holder's, or a legacy one with no holder.
+        return $this->db()->query($sql . "l.cmp_id = ? AND l.scope = 'company' ORDER BY l.id", [(int) $cmpId])->getResultArray();
     }
 
     /** @return list<string> every app key any licence of the subject covers */
@@ -120,8 +140,13 @@ class EntitlementProjector
     {
         $b = ['holder_uuid' => $holderUuid !== null && $holderUuid !== '' ? $holderUuid : null, 'app_key' => $appKey];
         if ($b['holder_uuid'] === null) {
-            // Legacy company-only licence: Manage resolves the holder through the company's owner (additive field).
+            // A company subject (additive fields): Manage resolves the company's owner itself, as it did for legacy
+            // company-only licences; licence_holder_uuid names who holds the licence that applies (view()).
             $b['cmp_id'] = (int) $cmpId;
+            $b['scope'] = 'company';
+            $b['licence_holder_uuid'] = null;
+        } else {
+            $b['scope'] = 'workspace';
         }
 
         return $b;
@@ -139,8 +164,12 @@ class EntitlementProjector
         }
         $planCode = $snap['plan']['code'] ?? $l['plan_code'] ?? null;
         $planLabel = $snap['plan']['label'] ?? null;
+        $base = $this->base($holderUuid, $cmpId, $appKey);
+        if (array_key_exists('licence_holder_uuid', $base)) {
+            $base['licence_holder_uuid'] = ($l['holder_uuid'] ?? null) !== '' ? ($l['holder_uuid'] ?? null) : null;
+        }
 
-        return $this->base($holderUuid, $cmpId, $appKey) + [
+        return $base + [
             'plan' => [
                 'code'              => (string) ($planCode ?? $snap['offer_code'] ?? $l['offer_code']),
                 'label'             => (string) ($planLabel ?? $snap['label'] ?? $l['offer_code']),

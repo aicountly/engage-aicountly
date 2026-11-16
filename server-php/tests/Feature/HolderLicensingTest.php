@@ -123,7 +123,9 @@ final class HolderLicensingTest extends LicensingTestCase
         $rows = $this->outbox('u-1001');
         $this->assertCount(1, $rows);
         $p = $rows[0]['payload'];
-        $this->assertEqualsCanonicalizing(['event_id', 'holder_uuid', 'app_key', 'seq', 'plan', 'status', 'licence_ref', 'starts_at', 'ends_at', 'seats_total', 'entitlements', 'occurred_at'], array_keys($p));
+        // scope (docs/LICENSING.md §3.6) is additive: a holder subject speaks for the holder's workspace licences.
+        $this->assertEqualsCanonicalizing(['event_id', 'holder_uuid', 'app_key', 'seq', 'plan', 'status', 'licence_ref', 'starts_at', 'ends_at', 'seats_total', 'entitlements', 'occurred_at', 'scope'], array_keys($p));
+        $this->assertSame('workspace', $p['scope']);
         $this->assertSame('books', $p['app_key']);
         $this->assertSame(1, $p['seq']);
         $this->assertSame('active', $p['status']);

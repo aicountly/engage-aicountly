@@ -129,6 +129,7 @@ end, no seat limit, `is_default`, **no entitlements**). It never publishes: staf
 | Change seats | issued, active, suspended | `seats_total` (≥ seats assigned; null = no limit) | `seats_changed` |
 | Assign / release seat | assign: issued, active; release: any | within `seats_total`; one live seat per member | `seat_assigned` / `seat_released` |
 | Link invoice | any | append an invoice number to `invoice_refs` | `invoice_linked` |
+| Move to another company | issued, active, suspended — a licence for **one company** only (§3.6) | `POST licences/{ref}/company {version, cmp_id \| null, reason?}`: apply it to a company, move it to another, or (a holder's licence) take it off its company. Staff: only to a company mapped to the licence's account (a licence with no account — sold through a seller — takes any company). Refused: a workspace licence (409 `not_company_licence`), a Basic (409 `basic_not_movable`), an ended one (409 `licence_not_live`), the company it is on (409 `same_company`), a company with a live company licence of the product (409 `company_has_licence`, `details.licence_ref`) unless this one is an add-on | `company_changed` |
 | Change offer | issued, active, suspended | `POST licences/{ref}/change-offer {version, offer_code, offer_version?, term_mode keep\|restart, seats_total?, reason?, quote_ref?}`: move to another published, on-sale offer of the **same product** (upgrade or downgrade; `changes.direction` by price). `keep` (default) keeps `ends_at`; `restart` starts the new term now. Seats follow the new offer unless sent (≥ assigned). Never on a Basic licence (409 `basic_not_changeable` — issue the paid licence instead) and never **to** a default offer (revoke the paid licence: Basic returns). No proration is computed | `plan_changed` |
 | Supersede / reactivate (system) | Basic: active ⇄ superseded | in the same transaction as the paid licence's change (issue / activate / reinstate → superseded; revoke / expire / suspend → active again) | `superseded` / `reactivated` |
 | Expire (system) | issued, active, suspended with `ends_at ≤ now` | → expired | `expired` (actor system) |
@@ -140,6 +141,40 @@ Manage (§6) — all of it commits together or not at all (licensing writes run 
 on, so a failed statement can never be reported as success). A disallowed transition is **409
 `invalid_transition`**. Staff writes are also written to `engage_audit_logs` (`licence.*`, `offer.*`,
 `licence_type.*`, `licence.company_linked` / `_unlinked`) and fanned out to Console's central audit.
+
+### 3.6 One company, or the whole workspace
+
+What a licence covers is part of what is sold, so it is set on the **offer**: `licence_scope` `workspace` (the default,
+and what every licence covered before this existed — every company the holder owns) or `company` (one company at a
+time). It is immutable once a version leaves draft, every version of an offer covers the same (a draft of a later
+version cannot change it — make a new offer for the other kind), and a product's Basic is always `workspace`.
+
+Each licence copies it into `engage_licences.scope` when it is issued (staff, seller, provisioning); a licence with no
+holder (a legacy company-level licence) is `company` — the database sets it for any writer that does not say.
+
+| | `workspace` | `company` |
+|---|---|---|
+| Applies to | every company the holder owns | the company in `cmp_id`; while `cmp_id` is null it is **not applied to a company yet** and grants nothing |
+| Manage subject (§6) | `holder:<uuid>` | `cmp:<id>` — the subject legacy company licences already use |
+| Pauses the holder's Basic | yes, while active | **no**: the holder's other companies still need Basic |
+| Duplicate guard (409 `live_licence_exists`) | one live paid licence per (holder, product) among workspace licences | one per (company, product) among company licences applied to it; none while not applied |
+| `cmp_id` | the company the sale was recorded against (information only, staff screens) | the company it applies to |
+| Sold through a seller | renews the customer's live licence of the same offer, as before | always a **new** licence, not applied to a company — the customer applies it in Manage |
+
+A workspace licence and a company licence of the same product may both be live: Manage applies the company licence to
+its company and the workspace licence to the others (Manage decides; docs/PLANS_AND_ENTITLEMENTS.md in Manage).
+Changing the plan keeps what the licence covers (an offer of the other kind is refused 422: that is a new licence).
+
+The holder applies, moves or takes off their own company licences from Manage (Plans & billing → Licences) through
+`POST /api/v1/manage/holders/{holder_uuid}/licences/{licence_ref}/company` (§5); staff do the same from the licence
+page ("Move to another company"). Either way the event is `company_changed` (`changes.cmp_id {from, to}`; actor
+`customer` — shown to the customer as "Account owner" — or staff), and both companies' states are pushed to Manage in
+the same transaction: the old one falls back to whatever else applies there, the new one gets the licence.
+
+Who **uses** a licence — its seats — is Manage's to decide: the owner always holds one; the people they share a
+company or the workspace with fill the rest in the order they were given access unless the owner chooses; everyone
+beyond `seats_total` is a free user on Basic. Engage's own seat register (`engage_licence_seats`, the staff "Assign a
+seat" action) is a staff note and is not pushed.
 
 A live licence whose term has ended **reads as expired** everywhere (staff screens and Manage) even before the expiry
 job records it. Renew keeps the same `offer_code`; moving to another offer is `change-offer`.
@@ -236,13 +271,16 @@ All under `https://engage.aicountly.org/api/v1/manage/`, GET only, filter `aic-s
 | `companies/{cmp_id}/activity?limit=&cursor=` | events, newest first: `{event_id, seq, licence_ref, type{code,label}, summary, actor{kind, display}, changes, occurred_at}` + `page` |
 | `catalogue?cmp_id=` | offers on sale: `{offer{code,version}, label, description, product{code,label}, licence_type{code,label,lifecycle_kind}, plan, price{amount_paise,currency,basis,gst_rate,sac}, term{months,days,cycle}, seats, app_keys, is_default, entitlements, attributes, display, valid_from, valid_to}`. **`cmp_id` is optional** (Manage's hourly `plans_sync.php` reads the Basic defaults — `is_default: true` — without one); when given it is validated and the answer is the same |
 | `licence-types` | active types `{code, label, description, lifecycle_kind, display_schema}` |
-| `holders/{holder_uuid}/licences`, `…/licences/{licence_ref}`, `…/licences/{licence_ref}/seats`, `holders/{holder_uuid}/activity` | the same answers for the licences a **person** holds (D-L2: every Basic and every holder-level licence, which the company routes never list) — [SELLING_LICENCES.md §8](SELLING_LICENCES.md) |
+| `holders/{holder_uuid}/licences`, `…/licences/{licence_ref}`, `…/licences/{licence_ref}/seats`, `holders/{holder_uuid}/activity` | the same answers for the licences a **person** holds (D-L2: every Basic and every holder-level licence, which the company routes never list) — [SELLING_LICENCES.md §8](SELLING_LICENCES.md). With `?cmp_id=` (one of their companies): what applies to it — their workspace licences and the company licences applied to it; without: everything they hold, including company licences applied elsewhere or not applied yet (§3.6) |
+| **POST** `holders/{holder_uuid}/licences/{licence_ref}/company` `{cmp_id \| null, company_name?, reason?, actor?{uuid}}` | the one write, on the **quote** key: the holder applies a licence for one company to one of their companies, moves it, or takes it off (§3.6). Manage has checked that the signed-in person is the holder and owns `cmp_id`. 200 the licence; 404 `not_found` (not theirs); 409 `not_company_licence` · `basic_not_movable` · `licence_not_live` · `same_company` · `company_has_licence` (`details.licence_ref`); 422 `validation_failed` (`details.cmp_id`) |
 
 Licence (type-agnostic, contract §4): `{licence_ref, product{code,label}, licence_type{code,label,lifecycle_kind},
 plan{code,label}|null, offer{code,version,label}, status{code,label,tone}, term{starts_at,ends_at,cycle},
 seats{total,assigned}, entitlements[{code,label,value,unit}], attributes[{label,value}], app_keys[], invoice_refs[],
-issued_at, updated_at, version, sold_by}`. `status.tone` ∈ success | info | warning | danger | neutral. `sold_by` is
-`{kind: "seller", seller_code, name}` for a licence a seller applied, else null (also shown as a "Sold by" attribute).
+issued_at, updated_at, version, sold_by, is_basic, scope, cmp_id}`. `status.tone` ∈ success | info | warning | danger |
+neutral. `sold_by` is `{kind: "seller", seller_code, name}` for a licence a seller applied, else null (also shown as a
+"Sold by" attribute). `scope` is `workspace` | `company` (§3.6); `cmp_id` is the company a company licence applies to
+(null: not applied yet) and always null for a workspace licence. Catalogue items carry `licence_scope` likewise.
 
 - **Scope:** every company query is filtered by `cmp_id`. Another company's licence answers exactly like a missing
   one (**404 `not_found`**); a company with no licences gets **an empty list**, never 404.
@@ -262,7 +300,9 @@ issued_at, updated_at, version, sold_by}`. `status.tone` ∈ success | info | wa
   `manage.licence.seats`, `manage.activity.list`, `manage.catalogue.read`, `manage.licence_types.read`) with
   `actor_email = manage:<X-AIC-Actor>`, `actor_role = service:manage`, `subject_id = cmp_id`, and the request id,
   key id and path in metadata. `X-AIC-Actor` is recorded for audit only — it never authorises anything.
-- Any non-GET under `v1/manage/` with a read key → 403 `route_not_allowed_for_key`; no Manage write route exists.
+- Any non-GET under `v1/manage/` with a read key → 403 `route_not_allowed_for_key`. The only Manage writes are the
+  quote-key POSTs: coupons preview, upgrade requests, token orders (TOKEN_CONVERSIONS.md §12) and the company route of
+  a holder licence above.
 
 ## 5b. Basic provisioning (my.aicountly → Engage, contract §3.2)
 
@@ -315,8 +355,12 @@ POST {MANAGE_API_BASE_URL}/v1/inbound/engage/entitlements      AIC-S2S v1, X-AIC
 - **Dead-letter visibility:** `/health` `checks.entitlement_outbox` ("attention: N dead, M rejected …"),
   `checks.manage_outbound`; Licensing → **Manage sync** lists rows and **Re-queue** queues the CURRENT state again as
   a new event (next seq).
-- **Legacy company-only licences** (no holder) are pushed with `holder_uuid: null` and an extra `cmp_id`, seq per
-  company — Manage resolves the holder through the company's owner (contract: "push what you know").
+- **Company subjects** (§3.6): a company licence — a holder's licence for one company, or a legacy licence with no
+  holder — is pushed with `holder_uuid: null` and an extra `cmp_id`, seq per company, exactly as legacy company
+  licences always were; Manage resolves the company's owner. Additive fields on every push: `scope` (`workspace` for a
+  holder subject, `company` for a company subject) and, on a company subject, `licence_holder_uuid` (who holds the
+  licence that applies; null for a legacy one or when nothing applies). A company licence not applied to a company is
+  in no subject; moving one queues both companies.
 - **Dormant** until `MANAGE_API_BASE_URL` + `ENGAGE_OUTBOUND_MANAGE_KEY_ID` / `_SECRET` + `ENGAGE_S2S_ENVIRONMENT`
   are set: rows stay pending and are sent once configured.
 - `php spark engage:entitlements-reconcile [--holder=]` (daily, `jobs.txt`) is **report-only**: it reads Manage's
