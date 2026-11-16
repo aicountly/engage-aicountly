@@ -123,11 +123,34 @@ In Engage's `.env`:
 FINANCE_API_BASE_URL=https://finance.aicountly.org
 ENGAGE_OUTBOUND_FINANCE_S2S_KEY_ID=engage-issue-2026-11
 ENGAGE_OUTBOUND_FINANCE_S2S_SECRET=<64 hex>
-ENGAGE_INBOUND_FINANCE_KEY=<64 hex>          ; Finance → Engage payment events
+ENGAGE_GST_STATE_CODE=27                     ; Aicountly's GST state — must be the state of Finance's seller profile
+; Finance → Engage payment events are signed AIC-S2S as client `finance` (Finance's EngagePaymentEventOutbox):
+ENGAGE_INBOUND_FINANCE_KEY_IDS=finance-events-2026-11
+ENGAGE_INBOUND_FINANCE_SECRET_FINANCE_EVENTS_2026_11=<64 hex>   ; = Finance's FINANCE_OUTBOUND_ENGAGE_S2S_SECRET
+ENGAGE_INBOUND_FINANCE_SCOPE_FINANCE_EVENTS_2026_11=issue
+ENGAGE_INBOUND_FINANCE_KEY=<64 hex>          ; the older unsigned X-Finance-Key, still accepted
 ```
 
-Finance needs the matching inbound secret with scope `issue`, and its own
-`FINANCE_OUTBOUND_ENGAGE_S2S_*` pointing back at Engage.
+Finance needs the matching inbound secret with scope `issue`, its own `FINANCE_OUTBOUND_ENGAGE_S2S_*`
+(key id `finance-events-2026-11`) pointing back at Engage, its seller profile and current-FY invoice
+series, `GOTENBERG_URL` for the PDF, and `FINANCE_TOKENS_RETURN_URL=https://manage.aicountly.com/#/billing`
+so a customer lands back on Plans & billing after paying (unset: the gateway's own page).
+`ENGAGE_GST_STATE_CODE` different from Finance's seller state makes Finance refuse every GST split.
+
+**Real-money test (the owner's plan).**
+
+1. Engage → Coupons: `CREDIT500` — amount off ₹500, products `ai_credits`, per-customer limit 2 (or none);
+   `THIRTY` — 30 %, minimum list price ₹500, maximum discount ₹1,000, products `ai_credits`, per-customer
+   limit 2. Activate both (a second person approves).
+2. Manage → a company → Plans & billing → AI credits: "Only <this company>", ₹1,000, coupon `CREDIT500`,
+   your mobile number → pay ₹590 on the gateway page.
+3. Same screen: "All my companies", ₹1,000, coupon `THIRTY` → pay ₹826. (Both may be open at once.)
+4. Repeat 2 and 3 with the coupons swapped (₹1,000 with `THIRTY` = ₹826; with `CREDIT500` = ₹590).
+5. Each payment: the order goes `awaiting_payment → granted`, then "Credited" once AI Pulse has the
+   credits; the invoice appears under that company's **Invoices** (a line "… for <company> only" or
+   "… for all companies of the workspace"); the receipt e-mail `credits.purchase_receipt` arrives.
+6. Use AI in the company: the balance falls from the plan's allowance first, then this company's
+   credits, then the workspace pool. In another company only the allowance and the workspace pool move.
 
 **Verify.** Buy ₹1 of credits as a real customer in sandbox and watch it all the way through:
 an `engage_token_orders` row goes `quoted → awaiting_payment → granted`, a `fin_payment_links`

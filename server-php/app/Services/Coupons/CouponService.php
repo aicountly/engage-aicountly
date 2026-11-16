@@ -27,6 +27,13 @@ class CouponService
     public const STATUSES = ['draft', 'active', 'paused', 'expired', 'exhausted', 'retired'];
     public const MAX_BULK = 5000;
 
+    /**
+     * The product code that means "AI credits" in a coupon's applies_to.product_codes (it is not a licence product):
+     * ['ai_credits'] = a coupon for AI credit purchases only; ['ai_credits', 'books'] = credits and Books licences;
+     * no product codes at all = every purchase, credits included (docs/COUPONS.md §3).
+     */
+    public const AI_CREDITS = 'ai_credits';
+
     public function __construct(private ?BaseConnection $db = null)
     {
     }
@@ -366,6 +373,7 @@ class CouponService
             $e['applies_to'] = 'Lists of product, offer and licence type codes (lower case).';
         } elseif ($pc !== []) {
             $known = array_column($this->db()->table('engage_products')->select('code')->whereIn('code', $pc)->get()->getResultArray(), 'code');
+            $known[] = self::AI_CREDITS;
             $unknown = array_values(array_diff($pc, $known));
             if ($unknown !== []) {
                 $e['applies_to'] = 'Unknown product code(s): ' . implode(', ', $unknown) . '.';

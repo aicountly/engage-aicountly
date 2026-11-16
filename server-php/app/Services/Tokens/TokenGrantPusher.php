@@ -88,12 +88,17 @@ final class TokenGrantPusher
     {
         // Encoded once: the exact bytes are both signed and sent, because re-encoding
         // between the two is how a signature stops matching.
-        $body = json_encode([
+        $payload = [
             'holder_uuid' => (string) $g['holder_uuid'],
             'tokens'      => (int) $g['tokens'],
             'grant_ref'   => (string) $g['grant_ref'],
             'reason'      => (string) $g['reason'],
-        ], JSON_UNESCAPED_SLASHES);
+        ];
+        if (($g['cmp_id'] ?? null) !== null && (int) $g['cmp_id'] > 0) {
+            // Company credits: AI Pulse puts them in that company's bucket (spent before the workspace pool).
+            $payload['cmp_id'] = (int) $g['cmp_id'];
+        }
+        $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
 
         $headers = AicS2sSignature::headers('engage', $keyId, $secret, $environment, 'POST', self::PATH, '', $body, 'service');
 
@@ -114,8 +119,10 @@ final class TokenGrantPusher
                 );
                 // Only now is it true that the tokens are in the customer's wallet, so only
                 // now is it honest to say so. Telling them at redemption would mean telling
-                // them before Pulse had the grant.
-                $this->tellTheCustomer($g);
+                // them before Pulse had the grant. Pulse says what the bucket holds now.
+                $answer = json_decode((string) $res->getBody(), true);
+                $data = is_array($answer) ? ($answer['data'] ?? $answer) : [];
+                $this->tellTheCustomer($g, is_array($data) && isset($data['bucket_tokens']) && is_numeric($data['bucket_tokens']) ? (int) $data['bucket_tokens'] : null);
 
                 return true;
             }
@@ -157,15 +164,18 @@ final class TokenGrantPusher
      *
      * @param array<string,mixed> $g
      */
-    private function tellTheCustomer(array $g): void
+    private function tellTheCustomer(array $g, ?int $bucketTokens = null): void
     {
+        if ((string) $g['origin'] === 'purchase') {
+            $this->sendPurchaseReceipt($g, $bucketTokens);
+
+            return;
+        }
         if ((string) $g['origin'] !== 'voucher') {
-            // A purchase is announced with its invoice by the purchase flow, which knows
-            // the amount and the invoice number. Saying it twice would be worse than once.
             return;
         }
         try {
-            $notifier = new CustomerNotifier($this->db);
+            $notifier = new CustomerNotifier($this->db, $this->http);
             $holder = (string) $g['holder_uuid'];
             $contact = $notifier->contact($holder);
             $left = (int) ($this->db()->query(
@@ -184,6 +194,43 @@ final class TokenGrantPusher
             ], 'grant:' . (string) $g['grant_ref']);
         } catch (\Throwable $e) {
             log_message('warning', 'token grant {ref} delivered but the customer was not told: {m}', [
+                'ref' => $g['grant_ref'], 'm' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * "Invoice … — ₹X for AI tokens" (Console trigger credits.purchase_receipt, console-react-app migration 083): sent
+     * once AI Pulse has the credits — the payment was re-read by Finance and the invoice issued before Finance told
+     * Engage. To the payer's e-mail on the order, else the holder's. Never throws and never fails the delivery.
+     *
+     * @param array<string,mixed> $g
+     */
+    private function sendPurchaseReceipt(array $g, ?int $bucketTokens): void
+    {
+        try {
+            $o = $this->db()->table('engage_token_orders')->where('order_ref', (string) ($g['origin_ref'] ?? ''))->get()->getRowArray();
+            if ($o === null) {
+                return;
+            }
+            $notifier = new CustomerNotifier($this->db, $this->http);
+            $contact = $notifier->contact((string) $g['holder_uuid']);
+            if (($o['payer_email'] ?? '') !== '') {
+                $contact['email'] = (string) $o['payer_email'];
+            }
+            $company = ($o['company_name'] ?? '') !== '' ? (string) $o['company_name'] : 'your company';
+            $forWhom = ($o['credit_scope'] ?? 'workspace') === 'company' ? $company : $company . ' (credits for all your companies)';
+            $notifier->sendFirstAvailable('credits.purchase_receipt', ['email'], $contact, [
+                'payer_name'   => (string) ($o['payer_name'] ?: ($contact['name'] ?? 'there')),
+                'amount'       => '₹' . number_format(((int) $o['total_paise']) / 100, 2),
+                'company_name' => $forWhom,
+                'tokens_added' => number_format((float) $g['tokens']),
+                'tokens_left'  => $bucketTokens !== null ? number_format((float) $bucketTokens) : 'shown under Plans & billing',
+                'invoice_no'   => (string) ($o['invoice_no'] ?: 'being issued'),
+                'invoice_date' => (string) ($o['invoice_date'] ?: date('Y-m-d')),
+            ], 'receipt:' . (string) $g['grant_ref']);
+        } catch (\Throwable $e) {
+            log_message('warning', 'token grant {ref} delivered but the purchase receipt was not sent: {m}', [
                 'ref' => $g['grant_ref'], 'm' => $e->getMessage(),
             ]);
         }
