@@ -17,6 +17,11 @@ finance ──X-Finance-Key──▶ engage /api/v1/inbound/finance/payout-statu
 Binding contract: `SELLER-CONTRACTS.md` (the build's shared contract). Wire shapes of the seller-portal API:
 seller-aicountly `docs/ENGAGE_SELLER_API.md` — Engage implements it; differences are listed at the end.
 
+**Selling licences** (November 2026): staff can add a seller directly, and an active, KYC-verified seller can buy
+licences, keep them in stock and apply one to a customer's Aicountly account — a new licence or a renewal — earning
+commission through the same ledger and payouts. Everything about it is in [SELLING_LICENCES.md](SELLING_LICENCES.md)
+§7; this document only notes where it touches the programme.
+
 ## 1. Lifecycle
 
 **Application** (`engage_seller_applications`): `requested → under_review → approved | rejected`
@@ -35,6 +40,7 @@ seller-aicountly `docs/ENGAGE_SELLER_API.md` — Engage implements it; differenc
 
 | Step | What happens |
 |---|---|
+| Add directly | Staff add a seller without an application (`POST /api/v1/sellers`, super_admin \| seller_manager; Sellers → **+ Add seller**): the same seller and activation link as Approve, without a lead. 409 when the email is already a seller or has an open application ([SELLING_LICENCES.md §7.1](SELLING_LICENCES.md)). |
 | Approve | Seller `SLR-NNNNNN` created (sequence), linked to the application's lead, referral code = seller code. One-time **activation link** (72 h, single use, sha256 stored) `https://seller.aicountly.com/activate?token=…` is emailed when a seller mailer is configured; otherwise it is shown **once** to the approving staff member, with "No email was sent". |
 | Activation | Seller sets a password (`POST auth/activation`); status stays `onboarding`. |
 | Agreement | Seller signs in and accepts the **current** agreement version (`POST agreement/acceptances`, timestamp + IP + UA recorded) → `kyc_pending`. |
@@ -140,6 +146,11 @@ matched_on: "email"|"mobile"}`, plus `seller_attribution` and `lead.lead_code` a
   `hold_days` (default from setting `commission_default_hold_days` = 15) is the refund / clawback window.
 - **Payment confirmed** (lead page → "Seller & payments"; super_admin | sales_manager): `POST v1/leads/{id}/payments
   {amount, payment_ref, paid_at?, product_code?, notes?}` — idempotent on (lead, payment_ref).
+- **Licence sales.** When a seller applies a licence from their stock to a customer, Engage records the lead payment
+  itself (`source = seller_licence`, `seller_id`, the amount the seller paid for that licence, commission basis its
+  taxable value) on the customer's lead, which is attributed to the seller (`licence_sale`), and evaluates it like a
+  staff-confirmed payment. For the plan rules the sequence is per product (`commission_sequence`): the first licence
+  of a product sold to a customer is payment #1, each renewal the next ([SELLING_LICENCES.md §7.4](SELLING_LICENCES.md)).
 - **Accrual** (contract: lead converted + payment confirmed): each confirmed payment is evaluated **once** — when it is
   confirmed on a converted lead, or when its lead converts — against the plan active at that moment for the payment's
   product, for the lead's seller (not terminated). Result: one `engage_commission_entries` row per payment
@@ -279,6 +290,10 @@ max 6 h), dead after 12 attempts. Events queue even while Reach is unconfigured.
 | kyc_reviewer | 40 | view; KYC review (documents, verify, reject, reveal) |
 | member | 10 | nothing in the seller programme; the rest of Engage as before |
 
+Licence sales ([SELLING_LICENCES.md §10](SELLING_LICENCES.md)): adding a seller directly — super_admin, seller_manager;
+seeing sellers' licence orders and stock — super_admin, sales_manager, seller_manager; confirming a payment,
+cancelling an order, withdrawing an unused licence — super_admin, sales_manager.
+
 `ConsoleRoleSync::CATALOG` mirrors these; migration `2026-10-17-000090` adds the rows (and `engage_roles.level`).
 **Partner Master is now super_admin-only** (it was open to every signed-in role). Staff seller actions fan out to
 Console's central audit (`seller.*`, `commission.*`).
@@ -291,6 +306,9 @@ Public: `GET health`, `POST applications`, `POST auth/login`, `POST auth/login/o
 With `X-Seller-Session`: `GET|PATCH me`, `POST me/password`, `GET dashboard`, `GET agreement`,
 `POST agreement/acceptances`, `GET|PUT kyc`, `POST kyc/submission`, `POST kyc/documents`, `DELETE kyc/documents/{id}`,
 `GET leads`, `POST leads`, `GET commissions`, `GET payouts`, `GET payouts/{ref}`, `GET payouts/{ref}/statement`;
+licences ([SELLING_LICENCES.md §7.5](SELLING_LICENCES.md)): `GET licence-catalogue`, `GET|POST licence-orders`,
+`GET licence-orders/{ref}`, `POST licence-orders/{ref}/cancel`, `POST licence-orders/{ref}/payment-link`,
+`GET licence-stock`, `POST licence-stock/{ref}/apply`, `POST customers/lookup`, `GET customer-licences`;
 Engage extras: `GET referral`, `GET kyc/documents/{id}` (own file), `GET leads/{lead_code}`.
 Errors: `{ok: false, error, code, details?}`; codes per ENGAGE_SELLER_API.md (`portal_key_missing` 503 /
 `portal_key_invalid` 401, `session_invalid`, `invalid_credentials`, `account_locked`, `seller_suspended`,
@@ -372,10 +390,12 @@ The old Console **notify** mode (`ENGAGE_SELLER_MAILER=console_notify`) is depre
 30 4 * * 1 cd /path/to/api && php spark engage:seller-payout-run >> writable/logs/seller_payout_run.log 2>&1
 # payout batches to Finance — retries (every 5 minutes, offset from the other outboxes)
 3,8,13,18,23,28,33,38,43,48,53,58 * * * * cd /path/to/api && php spark engage:finance-payouts-deliver >> writable/logs/finance_payouts.log 2>&1
+# sellers' unpaid licence orders past their validity → expired (hourly; SELLING_LICENCES.md §7.3)
+53 * * * * cd /path/to/api && php spark engage:seller-orders-expire >> writable/logs/seller_orders_expire.log 2>&1
 ```
 
 Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage.reach_outcomes_deliver`,
-`engage.seller_cleanup`, `engage.seller_payout_run`, `engage.finance_payouts_deliver`) when `CONSOLE_CRON_MONITOR_KEY` is set; register those monitors in Console.
+`engage.seller_cleanup`, `engage.seller_payout_run`, `engage.finance_payouts_deliver`, `engage.seller_orders_expire`) when `CONSOLE_CRON_MONITOR_KEY` is set; register those monitors in Console.
 
 ## 12. Schema
 
@@ -387,6 +407,7 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
 | `2026-10-17-000093_CreateReachOutcomeOutbox` | `engage_reach_outcome_outbox` |
 | `2026-10-18-000094_CreateSellerPayouts` | `engage_payout_runs`, `engage_seller_payouts`, `engage_seller_payout_events`, `engage_finance_payout_outbox`; index on `engage_commission_entries.payout_item_ref` |
 | `2026-10-18-000095_AddFinanceMayHoldToPayoutOutbox` | `engage_finance_payout_outbox.finance_may_hold` (sticky; existing rows back-filled conservatively) — blocks Engage-side "Cancel batch" |
+| `2026-11-15-000200_SellerLicenceSales` | `engage_seller_licence_orders`, `engage_seller_licence_order_lines`, `engage_seller_licence_units`; `engage_licences.seller_id` and source `seller`; `engage_lead_payments` + `seller_id`, `commission_sequence`, `source`, `licence_unit_id`; settings `seller_order_validity_days`, `seller_order_payment_instructions` ([SELLING_LICENCES.md §7](SELLING_LICENCES.md)) |
 
 ## 13. Operator steps after deploy
 
@@ -395,7 +416,7 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
    `ENGAGE_SELLER_DOCS_PATH` (create the directory outside `public_html`, writable by PHP only),
    `REACH_API_BASE_URL` + `REACH_OUTCOME_TOKEN` (same as Reach's `REACH_INBOUND_ENGAGE_TOKEN`), and a seller mailer
    (default `console_providers` with Console's email providers for `engage`, § 10; or `ENGAGE_SELLER_MAILER=smtp` + `ENGAGE_SMTP_*`). `php check-env.php`.
-3. Add the five cron lines; register the Console cron monitors.
+3. Add the six cron lines (§ 11); register the Console cron monitors.
 4. In Console → Roles & Access assign sales_manager / seller_manager / kyc_reviewer.
 5. Engage → Sellers → Agreement: publish the seller agreement (approved sellers cannot finish activation without it).
 6. When the commission plan is decided: Sellers → Commission plans → create, check, publish.
@@ -406,3 +427,5 @@ Each reports to Console's Cron Job Monitor (`engage.commission_release`, `engage
    Finance's operator must confirm the TDS (194H) rate / threshold and GST settings there — Engage never computes them.
 8. `GET /health`: `seller_portal_key`, `seller_data_key`, `seller_mailer`, `reach_outcomes`, `finance_payouts`,
    `finance_inbound_key` should read ok.
+9. Licence sales: follow [SELLING_LICENCES.md §10](SELLING_LICENCES.md) (payment instructions for seller orders, a
+   commission plan for each product sold through sellers, the **Seller** channel on the offers to sell).

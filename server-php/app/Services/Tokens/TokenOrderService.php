@@ -214,13 +214,15 @@ class TokenOrderService
     /** What Finance needs to raise the payment link for this order. */
     public function financeRequest(array $o): array
     {
+        // The payer's state against Aicountly's decides the split; Finance recomputes it
+        // and refuses a disagreement, so it is sent exactly as Finance works it out
+        // (0/0/0 until ENGAGE_GST_STATE_CODE is set — which Finance refuses for a taxed line).
+        [$cgst, $sgst, $igst] = FinanceLinkClient::split((int) $o['gst_paise'], (string) $o['payer_state_code']);
         $fee = [
             'taxable_paise' => (int) $o['net_paise'],
-            // The buyer's state against the seller's decides the split; Finance
-            // recomputes it anyway and refuses a disagreement, which is the point.
-            'cgst_paise'    => 0,
-            'sgst_paise'    => 0,
-            'igst_paise'    => 0,
+            'cgst_paise'    => $cgst,
+            'sgst_paise'    => $sgst,
+            'igst_paise'    => $igst,
             'sac'           => (string) $o['sac'],
             'gst_rate'      => (string) $o['gst_rate'],
             'price_basis'   => 'exclusive',

@@ -21,8 +21,13 @@ What exists now:
 - **Entitlement push** (§6): every licence write queues the holder's full plan state per app in the same transaction;
   a worker pushes it to Manage. **This replaces the old manual `subscription_admin.php` step.**
 - **Upgrade / downgrade** (`change-offer`, §3).
+- **Selling licences** ([SELLING_LICENCES.md](SELLING_LICENCES.md)): price revisions with an effective date
+  (`scheduled` offer versions), where each offer is sold (`website` / `manage` / `seller`), the website catalogue for
+  www.aicountly.com, sellers buying licences and applying them to their customers' accounts for commission, and
+  holder-scoped Manage read routes.
 
-Still not built: checkout, Finance licence-order inbound, proration. `order_ref` and `source = 'order'` exist only so
+Still not built: customer checkout and proration (sellers' licence orders, SELLING_LICENCES.md §7, are paid offline
+or — once Finance accepts `purpose: licences` — by a Finance payment link). `order_ref` and `source = 'order'` exist only so
 that work needs no schema change. Coupons (rectification contract §4) are a separate stream; they plug into the
 extension point in §12.
 
@@ -34,7 +39,8 @@ programme, Finance payouts) are untouched.
 **Nothing commercial is hard-coded.** Licence types, offers, prices, GST rate, price basis, SAC, terms, seats, apps and
 entitlements are rows typed by staff. The API is type-agnostic: every label Manage shows comes from data. The only
 fixed vocabularies are system ones: `lifecycle_kind` (paid | trial | complimentary — what Manage's subscription
-understands), offer status (draft | published | retired) and licence status (below).
+understands), offer status (draft | scheduled | published | retired), sales channel (website | manage | seller) and
+licence status (below).
 
 ## 1. Model
 
@@ -67,7 +73,7 @@ Dates: a date typed by staff (`YYYY-MM-DD`) means 00:00 IST that day. A term is 
 (12 months from 18/10/2026 → `ends_at` 18/10/2027 00:00 IST, i.e. the licence runs **until 17/10/2027**). `ends_at`
 is exclusive; the API returns UTC ISO-8601 instants. Money is integer paise.
 
-## 2. Offers: draft → published → retired
+## 2. Offers: draft → (scheduled →) published → retired
 
 | Action | Rule |
 |---|---|
@@ -76,10 +82,17 @@ is exclusive; the API returns UTC ISO-8601 instants. Money is integer paise.
 | Publish | Draft only; the licence type must be active; a priced offer needs a SAC **Finance accepts (`99` + 4 digits, e.g. 997331)**; at least one app key and **every app key a Manage registry key** (§6.1; `drive` is saved as `docs`); `valid_to` in the future; a default offer must be Basic-shaped (below). Publishing **retires the previous published version** of the code in the same transaction |
 | Default (Basic) | `POST offers/{id}/default {is_default}` on a draft or a published version. A default offer must be **free (price 0), open-ended (term 0 + 0) and of a complimentary licence type**. At most one **published** default per product — a second answers **409 `default_offer_exists`** (also enforced by the database). A new version copies the flag |
 | New version | Copies any version into a new draft (one draft per code at a time) |
+| Revise price | `POST offers/{id}/revise {price_paise, price_basis?, gst_rate?, effective_from, note}` on the version in effect: a new version with only the price changed, **scheduled** for its effective date (or published at once when that is today). One pending revision per code; `cancel-schedule` withdraws it. Full rules: [SELLING_LICENCES.md §4](SELLING_LICENCES.md) |
+| Channels | `POST offers/{id}/channels {channels}` — where the version is listed (`website`, `manage`, `seller`); changeable without a new version ([SELLING_LICENCES.md §5](SELLING_LICENCES.md)) |
 | Retire | Published version only. Existing licences keep their snapshot |
 
-The catalogue Manage sees = published versions whose licence type is active and that are on sale now
-(`valid_from ≤ now < valid_to`, either may be empty).
+Publishing a draft whose `valid_from` is in the future **schedules** it instead: the version on sale stays on sale until
+that instant, then the new one replaces it (`engage:offers-activate` records the switch every minute; every read
+switches at the instant itself).
+
+The catalogue Manage sees = versions **in effect** now (`OfferService::onSaleSql()`: published, or scheduled with its
+date come; `valid_from ≤ now < valid_to`, either may be empty) whose licence type is active and that are on the
+`manage` channel — a product's Basic always is. Each item carries `upcoming` when a price revision is scheduled.
 
 `php spark engage:basic-offers --dry-run | --apply [--licence-type=<code>] [--create-type]` creates, for every
 product whose code Manage knows (Aicountly Academy course products are skipped) and that has no default offer yet, a
@@ -151,8 +164,8 @@ toggle; a licence has **Change plan**; **Manage sync** shows the outbox (pending
 **Re-queue**. Write buttons are hidden for read-only roles; the API enforces the same
 rule (`role:super_admin,sales_manager` in `Routes.php`).
 
-Staff API (`/api/v1`, staff JWT): `licence-types`, `offers` (+ `/{id}/publish|retire|new-version|default`, `DELETE` a
-draft), `account-companies` (+ `/{id}/unlink`), `licences` (`?holder_uuid=&is_basic=` filters; + `/{ref}/activate|renew|
+Staff API (`/api/v1`, staff JWT): `licence-types`, `offers` (+ `/{id}/publish|retire|new-version|default|revise|
+cancel-schedule|channels`, `offers/price-history/{offer_code}`, `DELETE` a draft), `account-companies` (+ `/{id}/unlink`), `licences` (`?holder_uuid=&is_basic=` filters; + `/{ref}/activate|renew|
 extend|suspend|reinstate|revoke|seats|seat-assignments|seat-assignments/{id}/release|invoice-refs|change-offer`),
 `holders` (`?q=` e-mail / name / uuid; `/{uuid}` with licences and pushes), `entitlements/outbox` (+ `/{id}/requeue`,
 write roles), `entitlement-codes` (read-only, below). Answers use Engage's usual `{ok, data}` /
@@ -223,11 +236,13 @@ All under `https://engage.aicountly.org/api/v1/manage/`, GET only, filter `aic-s
 | `companies/{cmp_id}/activity?limit=&cursor=` | events, newest first: `{event_id, seq, licence_ref, type{code,label}, summary, actor{kind, display}, changes, occurred_at}` + `page` |
 | `catalogue?cmp_id=` | offers on sale: `{offer{code,version}, label, description, product{code,label}, licence_type{code,label,lifecycle_kind}, plan, price{amount_paise,currency,basis,gst_rate,sac}, term{months,days,cycle}, seats, app_keys, is_default, entitlements, attributes, display, valid_from, valid_to}`. **`cmp_id` is optional** (Manage's hourly `plans_sync.php` reads the Basic defaults — `is_default: true` — without one); when given it is validated and the answer is the same |
 | `licence-types` | active types `{code, label, description, lifecycle_kind, display_schema}` |
+| `holders/{holder_uuid}/licences`, `…/licences/{licence_ref}`, `…/licences/{licence_ref}/seats`, `holders/{holder_uuid}/activity` | the same answers for the licences a **person** holds (D-L2: every Basic and every holder-level licence, which the company routes never list) — [SELLING_LICENCES.md §8](SELLING_LICENCES.md) |
 
 Licence (type-agnostic, contract §4): `{licence_ref, product{code,label}, licence_type{code,label,lifecycle_kind},
 plan{code,label}|null, offer{code,version,label}, status{code,label,tone}, term{starts_at,ends_at,cycle},
 seats{total,assigned}, entitlements[{code,label,value,unit}], attributes[{label,value}], app_keys[], invoice_refs[],
-issued_at, updated_at, version}`. `status.tone` ∈ success | info | warning | danger | neutral.
+issued_at, updated_at, version, sold_by}`. `status.tone` ∈ success | info | warning | danger | neutral. `sold_by` is
+`{kind: "seller", seller_code, name}` for a licence a seller applied, else null (also shown as a "Sold by" attribute).
 
 - **Scope:** every company query is filtered by `cmp_id`. Another company's licence answers exactly like a missing
   one (**404 `not_found`**); a company with no licences gets **an empty list**, never 404.
@@ -409,10 +424,13 @@ printf 'GET\n/v1/manage/companies/42/licences\nlimit=25&status=active\n179231040
 | `MANAGE_API_BASE_URL` | Manage's API base **including `/api`** (entitlement push, §6) |
 | `ENGAGE_OUTBOUND_MANAGE_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_SECRET` | the PUSH-scope key Manage issued to Engage (secret ≥ 32 bytes, never logged) |
 | `ENGAGE_OUTBOUND_MANAGE_READ_KEY_ID`, `ENGAGE_OUTBOUND_MANAGE_READ_SECRET` | the READ-scope key Manage issued for `engage:entitlements-reconcile` (Manage's push key may only POST; its read key may only GET). Unset: reconcile uses the push key and Manage answers 403 |
+| `ENGAGE_INBOUND_WEBSITE_KEY_IDS`, `_SECRET_<KEYID>`, `_SCOPE_<KEYID>=read` | www.aicountly.com's key for the website catalogue ([SELLING_LICENCES.md §6](SELLING_LICENCES.md)) |
+| `ENGAGE_GST_STATE_CODE`, `ENGAGE_SELLER_ORDER_PAYMENT_LINKS`, `ENGAGE_NOTIFY_SELLER_LICENCES`, `ENGAGE_INBOUND_FINANCE_KEY_IDS` … | selling licences through sellers and Finance ([SELLING_LICENCES.md §10](SELLING_LICENCES.md)) |
 
 A key id whose secret is missing or shorter than 32 bytes is not live. No environment or no live key → every route of
 that client answers 503 `inbound_not_configured`. `GET /health` reports `checks.manage_inbound`,
-`checks.myaicountly_inbound`, `checks.manage_outbound` and `checks.entitlement_outbox` (never a secret).
+`checks.myaicountly_inbound`, `checks.website_inbound`, `checks.manage_outbound` and `checks.entitlement_outbox`
+(never a secret).
 Rotation: add the new id to `KEY_IDS` with its secret, switch Manage to it, then remove the old id.
 
 ## 9. Runbook
@@ -439,7 +457,11 @@ The old interim step "also run Manage's `subscription_admin.php set …`" is **r
 6. Next day: read the `engage:entitlements-reconcile` output (cron log / Console monitor) for drift.
 
 A product whose Basic is published later: publish it, then `php spark engage:provision-basic --pending`. A new
-version of a Basic: publish it, then `php spark engage:entitlements-reproject --product=<code>`.
+version of a Basic: publish it, then `php spark engage:entitlements-reproject --product=<code>` (a Basic **revision**
+that takes effect on a date is re-projected by `engage:offers-activate` itself).
+
+Selling through sellers, the website catalogue and price revisions have their own switch-on order:
+[SELLING_LICENCES.md §10](SELLING_LICENCES.md).
 
 ### 9.2 Selling a paid plan (until checkout exists)
 
@@ -447,7 +469,9 @@ version of a Basic: publish it, then `php spark engage:entitlements-reproject --
    invoice number.
 2. **Catalogue (once per offer)** — create the licence type and the offer (Licensing → Offers → New offer: product,
    type, label, price in ₹, price basis, GST rate, SAC `99xxxx`, term, seats, Manage app keys, entitlements) and
-   **Publish**. To change it later: **New version** → edit → Publish.
+   **Publish**. To change the price later: **Revise price** with the date it takes effect (existing licences keep
+   theirs until renewal; open quotes keep theirs until they expire). To change anything else: **New version** → edit →
+   Publish. Tick where the offer is sold (**Website**, **Manage**, **Seller**).
 3. **Find the holder** — the owner of the workspace the plan is for (D-L2: every company the owner owns uses it). In
    *Issue licence* search the holder by e-mail or uuid (holders who signed up are known); for one Engage has not heard
    of, type the my.aicountly uuid and say how you verified it. Optionally also map and pick a Manage company (legacy).
@@ -476,7 +500,9 @@ Licensing: `tests/Unit/AicS2sSignatureTest.php`, `tests/Unit/LicensingSupportTes
 (holder licences, outbox atomicity and seq order, delivery / retry / dead letter, idempotency, duplicate guard,
 default-offer uniqueness, Basic supersede / reactivate, change-offer, provisioning, commands),
 `tests/Unit/LicensingAutomationUnitTest.php` (registry mirror, signature vectors, jobs.txt) (base
-`tests/_support/LicensingTestCase.php`).
+`tests/_support/LicensingTestCase.php`). Selling licences: `tests/Feature/OfferRevisionsTest.php`,
+`WebsiteCatalogueTest.php`, `SellerDirectCreateTest.php`, `SellerLicenceSalesTest.php`, `ManageHolderReadApiTest.php`
+([SELLING_LICENCES.md §10](SELLING_LICENCES.md)).
 
 ## 11. Deviations from the contract draft
 

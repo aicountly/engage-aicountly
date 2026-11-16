@@ -65,6 +65,7 @@ $routes->get('/health', static function () {
             'finance_payouts'     => \Config\Services::financePayouts()->status(),
             'manage_inbound'      => \App\Libraries\AicS2s\AicS2sConfig::forClient('manage')->status(),
             'myaicountly_inbound' => \App\Libraries\AicS2s\AicS2sConfig::forClient('myaicountly')->status(),
+            'website_inbound'     => \App\Libraries\AicS2s\AicS2sConfig::forClient('website')->status(),
             'manage_outbound'     => \Config\Services::entitlementOutbox()->client()->status(),
             'entitlement_outbox'  => \Config\Services::entitlementOutbox()->status(),
             'finance_inbound_key' => strlen(trim((string) env('ENGAGE_INBOUND_FINANCE_KEY', ''))) >= 32 ? 'ok' : 'ENGAGE_INBOUND_FINANCE_KEY missing or shorter than 32 characters — Finance payout status updates get 503',
@@ -130,13 +131,25 @@ $routes->group('v1', static function ($routes) {
         $routes->get('payouts',                       $P . 'EarningsController::payouts', $session);
         $routes->get('payouts/(:segment)',            $P . 'EarningsController::payout/$1', $session);
         $routes->get('payouts/(:segment)/statement',  $P . 'EarningsController::statement/$1', $session);
+        // Licences: buy, keep in stock, apply to a customer (docs/SELLING_LICENCES.md §7).
+        $routes->get('licence-catalogue',                       $P . 'LicencesController::catalogue', $session);
+        $routes->get('licence-orders',                          $P . 'LicencesController::index', $session);
+        $routes->post('licence-orders',                         $P . 'LicencesController::create', $sessionIdem);
+        $routes->get('licence-orders/(:segment)',               $P . 'LicencesController::show/$1', $session);
+        $routes->post('licence-orders/(:segment)/cancel',       $P . 'LicencesController::cancel/$1', $sessionIdem);
+        $routes->post('licence-orders/(:segment)/payment-link', $P . 'LicencesController::paymentLink/$1', $session);
+        $routes->get('licence-stock',                           $P . 'LicencesController::stock', $session);
+        $routes->post('licence-stock/(:segment)/apply',         $P . 'LicencesController::apply/$1', $sessionIdem);
+        $routes->post('customers/lookup',                       $P . 'LicencesController::lookup', $session);
+        $routes->get('customer-licences',                       $P . 'LicencesController::customerLicences', $session);
     });
 
     // finance.aicountly.org → Engage: payout status per item (X-Finance-Key = ENGAGE_INBOUND_FINANCE_KEY).
     $routes->post('inbound/finance/payout-status', 'Inbound\\FinanceController::payoutStatus', ['filter' => 'finance-inbound']);
     // Finance → Engage: a payment it has re-read from the provider and invoiced. For a
     // token order this is the signal that tokens may be granted.
-    $routes->post('inbound/finance/payment-events', 'Inbound\\FinanceController::paymentEvents', ['filter' => 'finance-inbound']);
+    // Finance signs these with AIC-S2S as client `finance` (its EngagePaymentEventOutbox); X-Finance-Key is still accepted.
+    $routes->post('inbound/finance/payment-events', 'Inbound\\FinanceController::paymentEvents', ['filter' => 'finance-events']);
 
     // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
     // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
@@ -166,10 +179,19 @@ $routes->group('v1', static function ($routes) {
         $routes->get('companies/(:segment)/licences/(:segment)',         $M . 'licence/$1/$2');
         $routes->get('companies/(:segment)/licences/(:segment)/seats',   $M . 'seats/$1/$2');
         $routes->get('companies/(:segment)/activity',                    $M . 'activity/$1');
+        // The licences a person holds (D-L2; docs/SELLING_LICENCES.md §8).
+        $routes->get('holders/(:segment)/licences',                      $M . 'holderLicences/$1');
+        $routes->get('holders/(:segment)/licences/(:segment)',           $M . 'holderLicence/$1/$2');
+        $routes->get('holders/(:segment)/licences/(:segment)/seats',     $M . 'holderSeats/$1/$2');
+        $routes->get('holders/(:segment)/activity',                      $M . 'holderActivity/$1');
         $routes->get('catalogue',                                        $M . 'catalogue');
         $routes->get('licence-types',                                    $M . 'licenceTypes');
         $routes->match(['POST', 'PUT', 'PATCH', 'DELETE'], '(:any)',     $M . 'noRoute');
     });
+
+    // www.aicountly.com (its PHP server) → Engage: the plans to show against each product (docs/SELLING_LICENCES.md §6).
+    // AIC-S2S v1, client website, read key; 503 inbound_not_configured until ENGAGE_INBOUND_WEBSITE_* is set.
+    $routes->get('website/catalogue', 'Inbound\\WebsiteCatalogueController::catalogue', ['filter' => 'aic-s2s:website,read']);
 
     // my.aicountly (server side) → Engage: Basic provisioning after sign-up (contract §3.2, docs/LICENSING.md §5b).
     // AIC-S2S v1, client myaicountly, key scope issue only (503 inbound_not_configured until
@@ -239,6 +261,7 @@ $routes->group('v1', static function ($routes) {
         $routes->post('seller-applications/(:num)/reject',  $S . 'SellerApplicationsController::reject/$1', $sellerAdmin);
 
         $routes->get('sellers',                              $S . 'SellersController::index', $sellerView);
+        $routes->post('sellers',                             $S . 'SellersController::create', $sellerAdmin);
         $routes->get('sellers/(:num)',                       $S . 'SellersController::show/$1', $sellerView);
         $routes->post('sellers/(:num)/suspend',              $S . 'SellersController::suspend/$1', $sellerAdmin);
         $routes->post('sellers/(:num)/reactivate',           $S . 'SellersController::reactivate/$1', $sellerAdmin);
@@ -275,6 +298,17 @@ $routes->group('v1', static function ($routes) {
         $routes->post('leads/(:num)/seller',                 $S . 'CommissionEntriesController::attribute/$1', ['filter' => 'role:super_admin,sales_manager,seller_manager']);
         $routes->get('status/reach-outcomes',                $S . 'CommissionEntriesController::outboxStatus');
 
+        // Licences sellers bought (docs/SELLING_LICENCES.md §7). View: super_admin | sales_manager | seller_manager;
+        // confirm an offline payment, cancel, withdraw an unused licence: super_admin | sales_manager.
+        $sloView  = ['filter' => 'role:super_admin,sales_manager,seller_manager'];
+        $sloAdmin = ['filter' => 'role:super_admin,sales_manager'];
+        $routes->get('seller-licence-orders',                            $S . 'SellerLicenceOrdersController::index', $sloView);
+        $routes->get('seller-licence-orders/(:segment)',                 $S . 'SellerLicenceOrdersController::show/$1', $sloView);
+        $routes->post('seller-licence-orders/(:segment)/confirm-payment', $S . 'SellerLicenceOrdersController::confirmPayment/$1', $sloAdmin);
+        $routes->post('seller-licence-orders/(:segment)/cancel',         $S . 'SellerLicenceOrdersController::cancel/$1', $sloAdmin);
+        $routes->get('seller-licence-units',                             $S . 'SellerLicenceOrdersController::units', $sloView);
+        $routes->post('seller-licence-units/(:segment)/void',            $S . 'SellerLicenceOrdersController::voidUnit/$1', $sloAdmin);
+
         // Weekly payouts (drafts for finance.aicountly.org). View: super_admin | sales_manager; run / re-send / cancel: super_admin.
         $payoutView  = ['filter' => 'role:super_admin,sales_manager'];
         $payoutAdmin = ['filter' => 'role:super_admin'];
@@ -296,6 +330,7 @@ $routes->group('v1', static function ($routes) {
         $routes->get('entitlement-codes',                     $L . 'EntitlementCodesController::index');
         $routes->get('offers',                                $L . 'OffersController::index');
         $routes->get('offers/basic-readiness',                $L . 'OffersController::basicReadiness');
+        $routes->get('offers/price-history/(:segment)',       $L . 'OffersController::priceHistory/$1');
         $routes->get('offers/(:num)',                         $L . 'OffersController::show/$1');
         $routes->post('offers',                               $L . 'OffersController::create', $licAdmin);
         $routes->put('offers/(:num)',                         $L . 'OffersController::update/$1', $licAdmin);
@@ -304,6 +339,10 @@ $routes->group('v1', static function ($routes) {
         $routes->post('offers/(:num)/retire',                 $L . 'OffersController::retire/$1', $licAdmin);
         $routes->post('offers/(:num)/new-version',            $L . 'OffersController::newVersion/$1', $licAdmin);
         $routes->post('offers/(:num)/default',                $L . 'OffersController::setDefault/$1', $licAdmin);
+        // Price revisions "with effect from" and sales channels (docs/SELLING_LICENCES.md §4, §5).
+        $routes->post('offers/(:num)/revise',                 $L . 'OffersController::revise/$1', $licAdmin);
+        $routes->post('offers/(:num)/cancel-schedule',        $L . 'OffersController::cancelSchedule/$1', $licAdmin);
+        $routes->post('offers/(:num)/channels',               $L . 'OffersController::channels/$1', $licAdmin);
         $routes->get('holders',                               $L . 'HoldersController::index');
         $routes->get('holders/(:segment)',                    $L . 'HoldersController::show/$1');
         $routes->get('entitlements/outbox',                   $L . 'EntitlementsController::outbox');

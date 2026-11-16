@@ -15,12 +15,16 @@ use Config\Services;
  *   422 validation_failed (paid without utr, bad amounts) · 404 not_found (unknown item_ref) · 409 conflict (transition
  *   not allowed, e.g. a failed payout reported paid). A repeat of a status already applied answers 200 unchanged.
  *
- *   POST v1/inbound/finance/payment-events
- *   {event_type: payment.succeeded|payment.refunded, source_ref (the order), payment_ref, invoice_no?, invoice_date?,
- *    paid_at?} → 200 {order_ref, status, tokens, duplicate?}
- *   Finance sends this only for a payment it has re-read from the provider and invoiced, so it is the signal that
- *   tokens may be granted. A repeat answers 200 duplicate: Finance retrying is correct, and an error would make it
- *   retry for ever.
+ *   POST v1/inbound/finance/payment-events      (filter finance-events: AIC-S2S client finance, or X-Finance-Key)
+ *   Finance's EngagePaymentEventOutbox body: {event_id, event_type: payment.succeeded|payment.refunded, lead_code (the
+ *   order the link was raised for — source_ref / order_ref are accepted too), payment_ref, amount_paise, paid_at, …}
+ *   → 200 {…, event_id}. Finance counts an event delivered only when the answer echoes its event_id, so it is echoed
+ *   for every event Engage acted on (a repeat answers the same, duplicate: true) and for none it did not.
+ *     TKO-…  a token order: payment.succeeded grants the tokens (TokenOrderService::settle)
+ *     SLO-…  a seller's licence order: payment.succeeded creates the seller's licence stock
+ *            (SellerLicenceOrderService::settle); payment.refunded is recorded for staff to withdraw unused licences
+ *   The amount must be the order's total: anything else is 409 amount_mismatch and nothing is granted.
+ *   Any other reference (e.g. an Academy fee on a lead) is acknowledged without event_id: Engage does not act on it.
  */
 class FinanceController extends BaseApiController
 {
@@ -42,9 +46,19 @@ class FinanceController extends BaseApiController
         }
 
         $type = (string) ($in['event_type'] ?? 'payment.succeeded');
-        $orderRef = trim((string) ($in['source_ref'] ?? $in['order_ref'] ?? ''));
+        $eventId = is_string($in['event_id'] ?? null) && $in['event_id'] !== '' ? mb_substr($in['event_id'], 0, 128) : null;
+        // Finance names the order its link was raised for in `lead_code` (the source_ref Engage sent).
+        $orderRef = trim((string) ($in['source_ref'] ?? $in['order_ref'] ?? $in['lead_code'] ?? ''));
+        $amount = isset($in['amount_paise']) && (is_int($in['amount_paise']) || (is_string($in['amount_paise']) && ctype_digit($in['amount_paise'])))
+            ? (int) $in['amount_paise'] : null;
+
+        if (str_starts_with($orderRef, 'SLO-')) {
+            return $this->sellerLicenceOrderEvent($orderRef, $type, $in, $eventId, $amount);
+        }
         if (! str_starts_with($orderRef, 'TKO-')) {
-            return $this->ok(['handled' => false, 'reason' => 'not_a_token_order']);
+            // Not an order Engage holds (e.g. an Academy fee on a lead): acknowledged, not acted on, and no event_id —
+            // Finance keeps it visible as undelivered rather than believing Engage did something with it.
+            return $this->ok(['handled' => false, 'reason' => 'not_an_order']);
         }
         if ($type !== 'payment.succeeded') {
             // A refund reverses tokens, which is a separate decision: the customer may
@@ -53,23 +67,59 @@ class FinanceController extends BaseApiController
 
             return $this->ok(['handled' => false, 'reason' => 'event_not_actionable', 'event_type' => $type]);
         }
+        $tokens = new \App\Services\Tokens\TokenOrderService();
+        $order = $tokens->findByRef($orderRef);
+        if ($order !== null && $amount !== null && $amount !== (int) $order['total_paise'] && ! in_array($order['status'], ['paid', 'granted'], true)) {
+            log_message('critical', 'token order {o}: payment of {a} paise does not match the order total {t}', ['o' => $orderRef, 'a' => $amount, 't' => $order['total_paise']]);
 
-        $r = (new \App\Services\Tokens\TokenOrderService())->settle($orderRef, [
+            return $this->relay(['status' => 409, 'code' => 'amount_mismatch', 'error' => 'The amount paid is not the order total. Nothing was granted.',
+                'details' => ['expected_paise' => (int) $order['total_paise'], 'received_paise' => $amount]]);
+        }
+
+        $r = $tokens->settle($orderRef, [
             'payment_ref'  => (string) ($in['payment_ref'] ?? ''),
             'invoice_no'   => $in['invoice_no'] ?? null,
             'invoice_date' => $in['invoice_date'] ?? null,
             'paid_at'      => $in['paid_at'] ?? null,
         ]);
 
-        return $this->relay($r);
+        return $this->relay($r, $eventId);
+    }
+
+    /** payment.succeeded settles a seller's licence order; payment.refunded is recorded for staff. */
+    private function sellerLicenceOrderEvent(string $ref, string $type, array $in, ?string $eventId, ?int $amount)
+    {
+        $orders = new \App\Services\SellerLicences\SellerLicenceOrderService();
+        if ($type === 'payment.refunded') {
+            $o = $orders->byRef($ref);
+            Services::auditService()->log('seller.licence_order_refund_reported', [
+                'actor_email' => 'system:finance', 'actor_role' => 'system', 'subject_kind' => 'seller_licence_order', 'subject_id' => $o['id'] ?? null,
+                'metadata' => ['order_ref' => $ref, 'payment_ref' => $in['payment_ref'] ?? null, 'refund' => $in['refund'] ?? null], 'fanout_console' => true,
+            ]);
+            log_message('critical', 'seller licence order {o}: Finance reports a refund — withdraw its unused licences (Sellers → Licence orders).', ['o' => $ref]);
+
+            return $this->ok(['handled' => false, 'reason' => 'refund_recorded_for_staff', 'order_ref' => $ref] + ($eventId !== null ? ['event_id' => $eventId] : []));
+        }
+        if ($type !== 'payment.succeeded') {
+            return $this->ok(['handled' => false, 'reason' => 'event_not_actionable', 'event_type' => $type]);
+        }
+
+        return $this->relay($orders->settle($ref, [
+            'payment_ref'  => (string) ($in['payment_ref'] ?? ''),
+            'amount_paise' => $amount,
+            'invoice_no'   => $in['invoice_no'] ?? null,
+            'invoice_date' => $in['invoice_date'] ?? null,
+            'paid_at'      => $in['paid_at'] ?? null,
+        ], 'finance'), $eventId);
     }
 
     /** @param array<string,mixed> $r */
-    private function relay(array $r)
+    private function relay(array $r, ?string $eventId = null)
     {
         $status = (int) ($r['status'] ?? 500);
         if ($status >= 200 && $status < 300) {
-            return $this->ok($r['data'] ?? [], $status);
+            // Finance's receipt check: the event it sent, echoed back.
+            return $this->ok(($r['data'] ?? []) + ($eventId !== null ? ['event_id' => $eventId] : []), $status);
         }
         $body = ['ok' => false, 'error' => $r['error'] ?? 'Request failed.', 'code' => $r['code'] ?? 'error'];
         if (isset($r['details'])) {

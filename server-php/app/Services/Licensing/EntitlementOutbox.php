@@ -49,6 +49,48 @@ class EntitlementOutbox
         return $this->client;
     }
 
+    /**
+     * Re-project holders' states and queue the ones that changed (unchanged states queue nothing): every holder with a
+     * licence (of $product when given; one holder when $holder is given). One transaction per holder, serialised with
+     * provisioning by the same advisory lock. Used after a NEW VERSION of a Basic takes effect — Basic holders are pushed
+     * with the current Basic limits — by `engage:entitlements-reproject` and `engage:offers-activate`.
+     *
+     * @return array{holders:int, queued:int, errors:list<string>}
+     */
+    public static function reproject(BaseConnection $db, ?string $holder = null, ?string $product = null, bool $dryRun = false): array
+    {
+        $where = ['holder_uuid IS NOT NULL'];
+        $binds = [];
+        if ($holder !== null && $holder !== '') {
+            $where[] = 'holder_uuid = ?';
+            $binds[] = $holder;
+        }
+        if ($product !== null && $product !== '') {
+            $where[] = 'product_code = ?';
+            $binds[] = $product;
+        }
+        $holders = array_column($db->query('SELECT DISTINCT holder_uuid FROM engage_licences WHERE ' . implode(' AND ', $where) . ' ORDER BY holder_uuid', $binds)->getResultArray(), 'holder_uuid');
+        $queued = 0;
+        $errors = [];
+        foreach ($holders as $h) {
+            $db->transException(true)->transBegin();
+            try {
+                $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['provision-holder:' . $h]);
+                $keys = (new EntitlementProjector($db))->appKeysOfSubject($h, null);
+                $queued += count((new self($db))->enqueue($h, null, $keys, 'reproject'));
+                $dryRun ? $db->transRollback() : $db->transCommit();
+            } catch (\Throwable $e) {
+                $db->transRollback();
+                $errors[] = "{$h}: " . $e->getMessage();
+            } finally {
+                $db->transException(false);
+                $db->resetTransStatus();
+            }
+        }
+
+        return ['holders' => count($holders), 'queued' => $queued, 'errors' => $errors];
+    }
+
     // ------------------------------------------------------------------ enqueue (inside the caller's transaction)
 
     /**

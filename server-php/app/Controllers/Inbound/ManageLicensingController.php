@@ -20,6 +20,16 @@ use Config\Services;
  *   GET v1/manage/companies/{cmp_id}/licences/{licence_ref}
  *   GET v1/manage/companies/{cmp_id}/licences/{licence_ref}/seats
  *   GET v1/manage/companies/{cmp_id}/activity ?limit=&cursor=
+ *   GET v1/manage/holders/{holder_uuid}/licences ?cmp_id=&is_basic=&status=&product_code=&limit=&cursor=
+ *   GET v1/manage/holders/{holder_uuid}/licences/{licence_ref} ?cmp_id=
+ *   GET v1/manage/holders/{holder_uuid}/licences/{licence_ref}/seats ?cmp_id=
+ *   GET v1/manage/holders/{holder_uuid}/activity ?cmp_id=&licence_ref=&limit=&cursor=
+ *       the licences a PERSON holds (D-L2: a licence names its holder — every Basic, and plans issued or sold to them,
+ *       which the company routes never list). Manage asks only for the owner of a company the signed-in user may see,
+ *       as it asks only for such a company on the company routes. With cmp_id (a company of that owner) the company's
+ *       legacy company-level licences are included: everything that applies to the company, one list, one cursor.
+ *       is_basic=true|false keeps or leaves out the free Basic plans; licence_ref narrows the activity to one licence
+ *       (docs/SELLING_LICENCES.md §8).
  *   GET v1/manage/catalogue ?cmp_id=   (cmp_id optional; every item carries is_default)
  *   GET v1/manage/licence-types
  *
@@ -81,6 +91,70 @@ class ManageLicensingController extends Controller
         });
     }
 
+    public function holderLicences($holder = null)
+    {
+        return $this->guard(function () use ($holder) {
+            $h = $this->holder($holder);
+            $status = $this->query('status');
+            if ($status !== null && ! in_array($status, LicenceService::STATUSES, true)) {
+                return $this->bad('status', 'status must be one of: ' . implode(', ', LicenceService::STATUSES) . '.');
+            }
+            $product = $this->query('product_code');
+            if ($product !== null && ! preg_match('/\A[a-z0-9][a-z0-9_\-]{0,63}\z/', $product)) {
+                return $this->bad('product_code', 'product_code is not valid.');
+            }
+            $cmpId = $this->optionalCmpId();
+            $basic = $this->optionalBool('is_basic');
+            [$limit, $cursor] = $this->paging();
+            $r = Services::manageLicensing()->holderLicences($h, ['status' => $status, 'product_code' => $product, 'is_basic' => $basic], $limit, $cursor, $cmpId);
+            $this->auditHolder('manage.holder_licences.list', $h, ['count' => count($r['items']), 'status' => $status, 'product_code' => $product,
+                'cmp_id' => $cmpId, 'is_basic' => $basic]);
+
+            return $this->okList($r, $limit);
+        });
+    }
+
+    public function holderLicence($holder = null, $ref = null)
+    {
+        return $this->guard(function () use ($holder, $ref) {
+            $h = $this->holder($holder);
+            $cmpId = $this->optionalCmpId();
+            $l = $this->validRef($ref) ? Services::manageLicensing()->holderLicence($h, (string) $ref, $cmpId) : null;
+            $this->auditHolder('manage.holder_licence.read', $h, ['licence_ref' => (string) $ref, 'found' => $l !== null, 'cmp_id' => $cmpId]);
+
+            return $l === null ? $this->error(404, 'not_found', 'No such licence for this holder.') : $this->ok($l);
+        });
+    }
+
+    public function holderSeats($holder = null, $ref = null)
+    {
+        return $this->guard(function () use ($holder, $ref) {
+            $h = $this->holder($holder);
+            $cmpId = $this->optionalCmpId();
+            $r = $this->validRef($ref) ? Services::manageLicensing()->holderSeats($h, (string) $ref, $cmpId) : null;
+            $this->auditHolder('manage.holder_licence.seats', $h, ['licence_ref' => (string) $ref, 'found' => $r !== null, 'cmp_id' => $cmpId]);
+
+            return $r === null ? $this->error(404, 'not_found', 'No such licence for this holder.') : $this->ok($r);
+        });
+    }
+
+    public function holderActivity($holder = null)
+    {
+        return $this->guard(function () use ($holder) {
+            $h = $this->holder($holder);
+            $cmpId = $this->optionalCmpId();
+            $ref = $this->query('licence_ref');
+            if ($ref !== null && ! $this->validRef($ref)) {
+                return $this->bad('licence_ref', 'licence_ref is not valid.');
+            }
+            [$limit, $cursor] = $this->paging();
+            $r = Services::manageLicensing()->holderActivity($h, $limit, $cursor, $cmpId, $ref);
+            $this->auditHolder('manage.holder_activity.list', $h, ['count' => count($r['items']), 'cmp_id' => $cmpId, 'licence_ref' => $ref]);
+
+            return $this->okList($r, $limit);
+        });
+    }
+
     public function catalogue()
     {
         return $this->guard(function () {
@@ -133,6 +207,56 @@ class ManageLicensingController extends Controller
         }
 
         return (int) $v;
+    }
+
+    /** The optional ?cmp_id= of the holder routes: null when absent, 400 when not a company id. */
+    private function optionalCmpId(): ?int
+    {
+        $raw = $this->query('cmp_id');
+
+        return $raw === null ? null : $this->cmpId($raw);
+    }
+
+    /** An optional true / false query parameter (also 1 / 0): null when absent, 400 otherwise. */
+    private function optionalBool(string $k): ?bool
+    {
+        $raw = $this->query($k);
+        if ($raw === null) {
+            return null;
+        }
+        $v = filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($v === null) {
+            throw new BadRequest($k, "{$k} must be true or false.");
+        }
+
+        return $v;
+    }
+
+    private function holder(mixed $v): string
+    {
+        if (! is_string($v) || ! LicenceService::validHolder($v)) {
+            throw new BadRequest('holder_uuid', 'holder_uuid must be a my.aicountly uuid.');
+        }
+
+        return $v;
+    }
+
+    private function auditHolder(string $event, string $holder, array $meta): void
+    {
+        $ctx = $this->request->aicS2s ?? [];
+        Services::auditService()->log($event, [
+            'actor_id'     => null,
+            'actor_email'  => 'manage:' . ($ctx['actor'] ?? 'unknown'),
+            'actor_role'   => 'service:manage',
+            'subject_kind' => 'holder',
+            'subject_id'   => null,
+            'metadata'     => $meta + [
+                'holder_uuid' => $holder,
+                'request_id'  => $ctx['request_id'] ?? null,
+                'key_id'      => $ctx['key_id'] ?? null,
+                'path'        => '/' . ltrim((string) $this->request->getPath(), '/'),
+            ],
+        ]);
     }
 
     private function query(string $k): ?string

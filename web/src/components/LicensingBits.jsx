@@ -7,7 +7,7 @@ export function LicenceStatusBadge({ status }) {
   return <span className={clsx('engage-pill', TONE_CLASSES[status.tone] || TONE_CLASSES.neutral)}>{status.label || status.code}</span>
 }
 
-const OFFER_TONES = { draft: 'warning', published: 'success', retired: 'neutral' }
+const OFFER_TONES = { draft: 'warning', scheduled: 'info', published: 'success', retired: 'neutral' }
 export function OfferStatusBadge({ status }) {
   const label = status ? status.charAt(0).toUpperCase() + status.slice(1) : ''
   return <span className={clsx('engage-pill', TONE_CLASSES[OFFER_TONES[status]] || TONE_CLASSES.neutral)}>{label}</span>

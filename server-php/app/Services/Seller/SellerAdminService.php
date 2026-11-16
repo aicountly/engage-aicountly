@@ -44,6 +44,8 @@ class SellerAdminService
             'agreement_version_id'  => $s['agreement_version_id'] !== null ? (int) $s['agreement_version_id'] : null,
             'agreement_accepted_at' => Clock::iso($s['agreement_accepted_at'] ?? null),
             'application_id'        => $s['application_id'] !== null ? (int) $s['application_id'] : null,
+            // No application behind it: added directly by staff (createDirect).
+            'added_directly'        => $s['application_id'] === null,
             'lead_id'               => $s['lead_id'] !== null ? (int) $s['lead_id'] : null,
             'created_at'            => Clock::iso($s['created_at'] ?? null),
         ];
@@ -102,6 +104,76 @@ class SellerAdminService
         $view['application'] = $s['application_id'] ? $db->table('engage_seller_applications')->where('id', (int) $s['application_id'])->get()->getRowArray() : null;
 
         return $view;
+    }
+
+    /**
+     * Staff add a seller directly, without a "request to become a seller" (docs/SELLING_LICENCES.md §7): the same seller
+     * an approved application creates — SLR-NNNNNN, referral code, status onboarding, one-time activation link emailed
+     * or shown once — then the usual agreement and KYC steps. 409 when the email already belongs to a seller, or to an
+     * open application (approve that instead, so its lead and history stay linked).
+     *
+     * Body: {name, email, mobile, business_name?, entity_type?, city?, state?, note?}
+     *
+     * @return array<string,mixed>
+     */
+    public function createDirect(array $in, array $staff): array
+    {
+        $errors = SellerApplicationService::validate($in);
+        $note = trim((string) ($in['note'] ?? ''));
+        if (mb_strlen($note) > 1000) {
+            $errors['note'] = 'Keep the note under 1000 characters.';
+        }
+        if ($errors !== []) {
+            return ['status' => 422, 'code' => 'validation_failed', 'error' => 'Please correct the highlighted fields.', 'details' => $errors];
+        }
+        $db = $this->accounts->db();
+        $email = strtolower(trim((string) $in['email']));
+        if ($this->accounts->findByEmail($email)) {
+            return ['status' => 409, 'code' => 'seller_exists', 'error' => 'A seller with this email address already exists.'];
+        }
+        $open = $db->query("SELECT id, application_code FROM engage_seller_applications WHERE LOWER(email) = ? AND status IN ('requested','under_review') LIMIT 1", [$email])->getRowArray();
+        if ($open) {
+            return ['status' => 409, 'code' => 'application_open', 'error' => "This person has an open request to become a seller ({$open['application_code']}). Approve it instead.",
+                'details' => ['application_id' => (int) $open['id'], 'application_code' => $open['application_code']]];
+        }
+        $str = static fn (mixed $v): ?string => is_scalar($v) && trim((string) $v) !== '' ? trim((string) $v) : null;
+
+        $db->transStart();
+        $code = $this->accounts->nextSellerCode();
+        $db->table('engage_sellers')->insert([
+            'seller_code'       => $code,
+            'application_id'    => null,
+            'lead_id'           => null,
+            'name'              => trim((string) $in['name']),
+            'email'             => $email,
+            'mobile'            => trim((string) $in['mobile']),
+            'organization'      => $str($in['business_name'] ?? $in['organization'] ?? null),
+            'entity_type'       => $str($in['entity_type'] ?? null),
+            'city'              => $str($in['city'] ?? null),
+            'state'             => $str($in['state'] ?? null),
+            'status'            => 'onboarding',
+            'status_reason'     => $note !== '' ? 'Added directly by staff: ' . $note : 'Added directly by staff',
+            'approved_by'       => (int) $staff['id'],
+            'status_changed_at' => Clock::now(),
+            'status_changed_by' => (int) $staff['id'],
+        ]);
+        $sellerId = (int) $db->insertID();
+        $db->table('engage_seller_referral_codes')->insert(['seller_id' => $sellerId, 'code' => $code, 'is_primary' => true]);
+        $db->transComplete();
+        if (! $db->transStatus()) {
+            return ['status' => 500, 'error' => 'Could not create the seller. Nothing was changed.'];
+        }
+        $seller = $this->accounts->find($sellerId);
+        $delivery = $this->deliverLink($seller, 'activation', (int) $staff['id']);
+        $this->audit('seller.created_directly', $seller, ['email_sent' => $delivery['email_sent'], 'note' => $note !== '' ? $note : null]);
+
+        return ['status' => 201, 'data' => [
+            'seller'     => self::staffView($seller),
+            'activation' => $delivery,
+            'warnings'   => $this->accounts->currentAgreement() === null
+                ? ['No seller agreement is published yet: the seller can set a password but cannot finish activation until one is published (Sellers → Agreement).']
+                : [],
+        ]];
     }
 
     /**
