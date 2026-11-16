@@ -62,12 +62,14 @@ seller.aicountly.com and apply them to their customers' accounts, earning commis
    (generic answer, as for lead registration). Otherwise the customer's lead is attributed to the selling seller.
 8. **Commission sequence per product**: for licence sales, the first sale of a product to a customer is "payment #1"
    for the plan rules and each renewal the next, so `percent_of_first_payment` pays on every new customer licence.
-9. **Payment.** Until Finance accepts `purpose: licences`, sellers pay by bank transfer / UPI (instructions are an
-   Engage setting) and a sales manager **confirms the payment** on the order with the UTR, Finance's invoice number and
-   the exact amount. The Finance payment-link request is built and ready (off until
-   `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1`); a confirmed payment from Finance settles the order through the same code.
-10. **Manage** gets holder-scoped read routes and a `sold_by` field; seller actions show the seller's name in a
-    licence's activity. Manage must call the holder routes to list holder-level licences (follow-up in Manage).
+9. **Payment.** By payment link: with `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1`, Engage asks Finance for the order's link
+   (`purpose: licences`, finance-aicountly migration 009); Finance invoices the seller's business and its payment event
+   settles the order. By bank transfer / UPI (instructions are an Engage setting, shown whenever an order has no link to
+   pay): a sales manager **confirms the payment** on the order with the UTR, the invoice number and the exact amount.
+   Both settle through the same code.
+10. **Manage** lists, per company, everything that applies to it — the owner's licences and the company's own older
+    ones — through holder-scoped read routes, and shows who sold a licence (`sold_by`); seller actions show the
+    seller's name in a licence's activity.
 
 
 ## 3. What was built
@@ -77,8 +79,10 @@ seller.aicountly.com and apply them to their customers' accounts, earning commis
 | Engage — offers | **Revise price** with an effective date (scheduled versions), cancel a pending revision, price history; where each offer is sold (channels) | §4, §5 |
 | Engage → www.aicountly.com | `GET /api/v1/website/catalogue`: the plans on sale on the website channel, with GST and any scheduled revision | §6 |
 | Engage — sellers | **Add a seller directly**; sellers buy licences (orders → stock), apply one to a customer's account (new licence or renewal) and earn commission; staff **Licence orders** screen | §7 |
-| Engage → Manage | Holder-scoped read routes (the licences a person holds), `sold_by`, `upcoming` price in the catalogue, the `manage` channel | §8 |
-| Finance ⇄ Engage | Payment events received the way Finance sends them; the GST split on payment links; the `purpose: licences` request, ready behind a switch | §9 |
+| Engage → Manage | Holder-scoped read routes (a person's licences; with `cmp_id` everything that applies to a company; `is_basic`; one licence's activity), `sold_by`, `upcoming` price in the catalogue, the `manage` channel | §8 |
+| Finance ⇄ Engage | Payment events received the way Finance sends them (with the invoice number); the GST split on payment links; seller orders paid by payment link (`purpose: licences`) | §9 |
+| manage.aicountly.com | Licences tab: the licences that apply to the company (the owner's and its own), "Sold by", free Basic plans left to the Plans tab; Plans tab: "From DD/MM/YYYY: ₹…" — manage-aicountly `docs/BILLING_INTEGRATION.md` | §8 |
+| finance.aicountly.org | `purpose: licences` links (order lines checked one by one, GSTIN state checked), the GST invoice to the seller's business (`buyer_kind` reseller), the invoice number in the event — finance-aicountly `docs/ACADEMY_PAYMENTS.md` | §9 |
 | seller.aicountly.com | Buy licences, Licence orders, Licence stock (apply to a customer), Customer licences — seller-aicountly `docs/ENGAGE_SELLER_API.md` → "Licences" | §7.5 |
 | www.aicountly.com | "Plans and pricing" on each live product page, a plans table on `/pricing`, schema.org offers — aicountly-com `includes/engage-catalogue.php` | §6 |
 
@@ -256,6 +260,10 @@ the customer's lead attributed to the seller → lead payment → commission ent
   paisa (409 `amount_mismatch`, nothing recorded); one payment settles one order (409 `payment_used`); the same payment
   again answers 200 `duplicate`. The units are created in the same transaction, the line's taxable value and GST split
   across them to the paisa.
+- **Paying.** With links on, the order's link is raised when the order is placed (and again from **Get the payment
+  link**). While an order has none — Finance or the gateway unavailable, or Finance refused the billing details — the
+  seller sees why in plain words (`payment.link_problem`) and the bank-transfer instructions; staff see Finance's own
+  answer (`link_error`).
 - **Rate limits** per seller: 30 orders an hour; 10 payment-link requests an hour per order.
 - **Staff** (Sellers → **Licence orders**, `/seller-licence-orders`; the seller's page links to theirs):
   `GET /api/v1/seller-licence-orders` (`?status=&seller_id=&q=`), `GET …/{ref}`,
@@ -311,25 +319,27 @@ What Engage now gives Manage (all `aic-s2s:manage`, read, same envelope, paging,
 
 | Route | Answer |
 |---|---|
-| `holders/{holder_uuid}/licences?status=&product_code=&limit=&cursor=` | the licences a **person** holds: every Basic, plans staff issued to them, plans sold to them by a seller |
-| `holders/{holder_uuid}/licences/{licence_ref}` | one licence (another holder's: 404 `not_found`) |
-| `holders/{holder_uuid}/licences/{licence_ref}/seats` | its seats |
-| `holders/{holder_uuid}/activity?limit=&cursor=` | its events, newest first |
+| `holders/{holder_uuid}/licences?cmp_id=&is_basic=&status=&product_code=&limit=&cursor=` | the licences a **person** holds: every Basic, plans staff issued to them, plans sold to them by a seller. With `cmp_id` (a company of that owner) the company's older company-level licences too: everything that applies to the company, one list, one cursor. `is_basic=false` leaves out the free Basic plans (`true`: only them) |
+| `holders/{holder_uuid}/licences/{licence_ref}?cmp_id=` | one licence (anyone else's: 404 `not_found`) |
+| `holders/{holder_uuid}/licences/{licence_ref}/seats?cmp_id=` | its seats |
+| `holders/{holder_uuid}/activity?cmp_id=&licence_ref=&limit=&cursor=` | their events, newest first; `licence_ref`: one licence's |
 
-- A malformed uuid is 400 `bad_request`. Audit: `manage.holder_licences.list`, `manage.holder_licence.read`,
-  `manage.holder_licence.seats`, `manage.holder_activity.list`.
+- A malformed uuid, `cmp_id`, `is_basic` or `licence_ref` is 400 `bad_request`. Audit: `manage.holder_licences.list`,
+  `manage.holder_licence.read`, `manage.holder_licence.seats`, `manage.holder_activity.list` (with `cmp_id`).
+- Every licence answer adds `is_basic`.
 - Every licence answer adds `sold_by: {kind: "seller", seller_code, name} | null`, and an attribute
   `{label: "Sold by", value: "‹name› (SLR-…)"}` so Manage's generic attribute list shows it without a code change.
 - The catalogue lists only offers on the `manage` channel (and every Basic), each with `upcoming` (version,
   effective_from, price) when a revision is scheduled.
 
-**Manage follow-ups** (manage-aicountly; not changed here):
+**In Manage** (manage-aicountly `src/Billing/EngageClient.php`, `docs/BILLING_INTEGRATION.md`):
 
-1. **Licences tab:** call `holders/{uuid}/licences` with the signed-in user's own my.aicountly uuid — as Manage asks
-   only for its own company today — and merge it with the company list on `licence_ref`. Until then every
-   holder-level licence (every Basic, and everything issued since D-L2, seller sales included) shows only as a plan
-   in the Plans tab, through the entitlement push.
-2. **Plans tab:** show `upcoming` ("₹14,160 from 1 January 2027").
+1. **Licences tab:** asks the holder routes for the company's **owner** (Manage's own record of who owns it, never
+   anything the browser sent) with `cmp_id` and `is_basic=false`: the licences bought or issued that apply to the
+   company. The free Basic plans stay on the Plans tab, and the tab says so. A licence a seller applied shows
+   "Sold by …". An Engage without the holder routes answers them 404 (which a list never is), and Manage then uses
+   the company routes as before — either side can be deployed first.
+2. **Plans tab:** an offer with a scheduled revision shows "From DD/MM/YYYY: ₹…" under today's price.
 
 ## 9. Finance
 
@@ -346,13 +356,14 @@ acknowledged without `event_id`.
 refuses. Links now carry SGST = ⌊GST / 2⌋ and CGST = the rest when the payer is in Aicountly's state
 (`ENGAGE_GST_STATE_CODE`), else IGST — Finance's own `GstCalculator` rule.
 
-**Payment links for seller orders (proposed contract).** With `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1`, Engage asks
-Finance for a link per order through the existing client (`POST /v1/inbound/engage/payment-links`, AIC-S2S, scope
-`issue`):
+**Payment links for seller orders.** With `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1`, Engage asks Finance for a link per
+order through the existing client (`POST /v1/inbound/engage/payment-links`, AIC-S2S, scope `issue`, `Idempotency-Key`
+= the order reference):
 
 ```json
-{ "purpose": "licences", "source_ref": "SLO-000123", "seller_code": "SLR-000045", "buyer_gstin": "27ABCDE1234F1Z5",
-  "payer": { "name": "RK Associates", "email": "accounts@rk.example", "mobile": "98XXXXXX10", "state_code": "27",
+{ "purpose": "licences", "source_ref": "SLO-000123", "seller_code": "SLR-000045", "buyer_gstin": "27AAPFU0939F1ZV",
+  "description": "Aicountly licences — order SLO-000123",
+  "payer": { "name": "RK Associates", "email": "accounts@rk.example", "mobile": "+91XXXXXXXX10", "state_code": "27",
              "address": "…", "pincode": "411001" },
   "amount_paise": 2360000,
   "lines": [ { "description": "Books Pro — 2 licences", "product_code": "books", "offer_code": "books-pro",
@@ -364,18 +375,25 @@ Finance for a link per order through the existing client (`POST /v1/inbound/enga
 ```
 
 Finance answers with the link as for `purpose: tokens`, and later sends `payment.succeeded` with `lead_code` =
-`SLO-000123`, which settles the order through the same code as a staff confirmation.
+`SLO-000123` — and `invoice_no` / `invoice_date` once the invoice exists — which settles the order through the same
+code as a staff confirmation.
 
-**Finance follow-ups** (finance-aicountly; not changed here):
+**In Finance** (finance-aicountly migration `009_licence_purchases`, `docs/ACADEMY_PAYMENTS.md`):
 
-1. Accept `purpose: licences` — today the purpose is a closed list in Finance's code and database (`tokens` only) —
-   and invoice per line (description, SAC, rate, CGST / SGST / IGST per line).
-2. Invoice the seller as a business: legal name and GSTIN, with no "client" record in Finance today.
-3. Payer mobile: Finance requires one; Engage sends the KYC mobile when there is one.
-4. Check at link creation that the GSTIN's state (its first two digits) matches `payer.state_code`.
+1. `purpose: licences` is accepted from Engage only. Every line is recomputed with Finance's `GstCalculator` for the
+   place of supply; any difference is `422 fee_breakdown_mismatch` with Finance's figures line by line. The lines are
+   kept with the link (immutable); one open and one paid link per order.
+2. The buyer is the seller's business: `buyer_kind` **reseller** (no Manage company, no licence holder), its legal
+   name, its GSTIN when registered, its address. The invoice has one line per plan with its quantity.
+3. A GSTIN must be registered in the state the order was priced for (`422 gstin_state_mismatch`); Engage prices a
+   registered seller at its GSTIN's state, so this only catches KYC that disagrees with itself. A registered buyer
+   needs its address and PIN (Rule 46(d)) — verified KYC always has them; `payer.mobile` is required — every seller
+   has one.
+4. The event to Engage carries the invoice number when the invoice exists by the time it is sent (normally so).
 
-Until then: `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=0`. Sellers pay by bank transfer / UPI quoting the order reference;
-Finance raises the invoice by hand; a sales manager confirms the payment on the order.
+**Bank transfer.** Sellers can always pay by bank transfer / UPI quoting the order reference, and a sales manager
+confirms it on the order. Finance's offline invoicing covers Manage companies only, so a seller's bank transfer is not
+invoiced in Finance by itself: payment links are the way to give sellers a GST invoice from Finance automatically.
 
 ## 10. Configuration, runbook, roles and tests
 
@@ -386,7 +404,7 @@ Finance raises the invoice by hand; a sales manager confirms the payment on the 
 | `ENGAGE_GST_STATE_CODE` | — | Aicountly's GST state (two digits): CGST + SGST or IGST on Finance links (tokens and seller orders) |
 | `ENGAGE_INBOUND_WEBSITE_KEY_IDS`, `…_SECRET_<KEYID>`, `…_SCOPE_<KEYID>=read` | — | the website catalogue (§6) |
 | `ENGAGE_INBOUND_FINANCE_KEY_IDS`, `…_SECRET_<KEYID>`, `…_SCOPE_<KEYID>=issue` | — | signed payment events from Finance (§9) |
-| `ENGAGE_SELLER_ORDER_PAYMENT_LINKS` | `0` | Finance payment links for seller orders (§9) |
+| `ENGAGE_SELLER_ORDER_PAYMENT_LINKS` | `0` | Finance payment links for seller orders (§9): `1` once finance-aicountly migration 009 is deployed. Needs `FINANCE_API_BASE_URL`, the outbound S2S key and `ENGAGE_GST_STATE_CODE` — which must be the state of Finance's seller profile, or Finance refuses every split |
 | `ENGAGE_NOTIFY_SELLER_LICENCES` | `0` | email the customer when a seller applies a licence (§7.4) |
 
 **Settings** (Engage → Settings, super_admin): `seller_order_validity_days` (7) — how long an unpaid order holds its
@@ -411,10 +429,13 @@ value changed on that screen before this release (the last attempt is in the row
 3. Website: set the key pair on both sides (§6), check Engage's `/health`, open a product page and `/pricing`.
 4. Sellers: set `seller_order_payment_instructions`; publish a commission plan for each product sellers will sell;
    tick **Seller** on those offers; tell sellers (a seller can buy once active and KYC-verified).
-5. When a seller pays: raise the invoice in Finance, then Sellers → Licence orders → the order → **Confirm payment**
-   (UTR, amount, Finance invoice number). The licences appear in the seller's stock at once.
-6. Later: Finance `purpose: licences` → `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1`; Manage's holder routes (§8);
-   `ENGAGE_NOTIFY_SELLER_LICENCES=1` once the `plan.changed` template is checked.
+5. Payment links: deploy Finance (migration 009) and Manage; check `ENGAGE_GST_STATE_CODE` is the state of
+   Finance's seller profile; set `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1`. Each new order then gets a link; Finance
+   invoices the seller and its event puts the licences in the seller's stock. (Finance's payment-event key —
+   `ENGAGE_INBOUND_FINANCE_KEY_IDS` … — must be live for that event, as for token orders.)
+6. A seller who pays by bank transfer: Sellers → Licence orders → the order → **Confirm payment** (UTR, amount, the
+   invoice number). The licences appear in the seller's stock at once. (Not invoiced in Finance by itself — §9.)
+7. `ENGAGE_NOTIFY_SELLER_LICENCES=1` once the `plan.changed` template is checked.
 
 **Roles** (Console → Roles & Access; no new role):
 
@@ -431,6 +452,10 @@ value changed on that screen before this release (the last attempt is in the row
 the job runs, the job, validation, cancel, publishing with a future date, immutability, quotes keep their price,
 channels), `WebsiteCatalogueTest` (dormant until configured, website offers with GST and `upcoming`, other clients' keys),
 `SellerDirectCreateTest`, `SellerLicenceSalesTest` (order → confirm → stock → apply / renew / conflict / protection →
-commission; Finance settlement and amount checks), `ManageHolderReadApiTest` (holder scope, `sold_by`),
-`SettingsUpdateTest`. seller-aicountly: `php server-php/tests/run.php` and `cd web && npm test`. aicountly-com:
-`tests/EngageCatalogueTest.php` (`vendor/bin/phpunit -c tests/phpunit.xml`).
+commission; Finance settlement and amount checks; the Finance request line by line; a failed link explained),
+`ManageHolderReadApiTest` (holder scope, a company's licences, `is_basic`, `sold_by`), `SettingsUpdateTest`.
+seller-aicountly: `php server-php/tests/run.php` and `cd web && npm test`. aicountly-com: `tests/EngageCatalogueTest.php`
+(`vendor/bin/phpunit -c tests/phpunit.xml`). manage-aicountly: `server-php/tests/billing_s2s_signer_test.php`,
+`billing_http_test.php` (holder routes, the older-Engage fallback), `web` `npx vitest run`. finance-aicountly:
+`php server-php/tests/run.php` (`academy-unit.php`: licence orders; `academy-db.php`: link → payment → invoice to the
+seller → event with the invoice number).

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Libraries\AicS2s\AicS2sSignature;
 use App\Libraries\Seller\SellerCrypto;
+use App\Services\SellerLicences\SellerLicenceOrderService;
 use CodeIgniter\Test\TestResponse;
 use Config\Services;
 use Tests\Support\SellerTestCase;
@@ -314,6 +315,68 @@ final class SellerLicenceSalesTest extends SellerTestCase
         $lead = $send(json_encode(['event_id' => 'evt-9', 'event_type' => 'payment.succeeded', 'lead_code' => 'ENG-20261115-0001', 'payment_ref' => 'x', 'amount_paise' => 100]));
         $this->assertSame(200, $this->code($lead));
         $this->assertArrayNotHasKey('event_id', $this->json($lead)['data']);
+    }
+
+    /**
+     * The payment-link request for an order is the one Finance accepts (finance-aicountly PaymentLinkInput::
+     * validateLicences, migration 009): purpose licences; a line per offer — unit price × quantity on its own basis,
+     * GST split by the seller's state as Finance's GstCalculator does; the totals; the seller's business as the buyer.
+     */
+    public function testTheFinanceRequestIsTheOneFinanceAccepts(): void
+    {
+        $this->setEnv('ENGAGE_GST_STATE_CODE', '27');
+        $this->offer('books-plus', ['label' => 'Books Plus', 'price_paise' => 100000, 'price_basis' => 'exclusive']);
+        $s = $this->verifiedSeller();
+        $o = $this->json($this->order($s['session'], [['offer_code' => 'books-pro', 'quantity' => 2], ['offer_code' => 'books-plus', 'quantity' => 1]]))['data'];
+        $row = $this->db()->table('engage_seller_licence_orders')->where('order_ref', $o['order_ref'])->get()->getRowArray();
+        $lines = $this->db()->table('engage_seller_licence_order_lines')->where('order_id', $row['id'])->orderBy('id')->get()->getResultArray();
+        $req = (new SellerLicenceOrderService())->financeRequest($row, $lines);
+
+        $this->assertSame(['licences', $o['order_ref'], 'Aicountly licences — order ' . $o['order_ref'], '27ABCPK1234F1Z5', 2478000],
+            [$req['purpose'], $req['source_ref'], $req['description'], $req['buyer_gstin'], $req['amount_paise']]);
+        $this->assertMatchesRegularExpression('/\ASLR-\d{6}\z/', $req['seller_code']);
+        $this->assertSame(['name' => 'Ravi Associates', 'email' => 'ravi@example.com', 'mobile' => '+919876543210', 'state_code' => '27',
+            'address' => '12 MG Road, Pune, Maharashtra', 'pincode' => '411001'], $req['payer'], 'the seller\'s business, from KYC');
+        $pick = static fn (array $l): array => array_intersect_key($l, array_flip(['offer_code', 'quantity', 'unit_price_paise', 'amount_paise', 'price_basis', 'gst_rate', 'sac',
+            'taxable_paise', 'cgst_paise', 'sgst_paise', 'igst_paise']));
+        $this->assertSame([
+            ['offer_code' => 'books-pro', 'quantity' => 2, 'unit_price_paise' => 1180000, 'amount_paise' => 2360000, 'price_basis' => 'inclusive', 'gst_rate' => '18', 'sac' => '997331',
+                'taxable_paise' => 2000000, 'cgst_paise' => 180000, 'sgst_paise' => 180000, 'igst_paise' => 0],
+            ['offer_code' => 'books-plus', 'quantity' => 1, 'unit_price_paise' => 100000, 'amount_paise' => 100000, 'price_basis' => 'exclusive', 'gst_rate' => '18', 'sac' => '997331',
+                'taxable_paise' => 100000, 'cgst_paise' => 9000, 'sgst_paise' => 9000, 'igst_paise' => 0],
+        ], array_map($pick, $req['lines']), 'each line on its own basis; CGST + SGST for a Maharashtra seller');
+        $this->assertSame(['taxable_paise' => 2100000, 'cgst_paise' => 189000, 'sgst_paise' => 189000, 'igst_paise' => 0], $req['fee'], 'the totals');
+
+        // Another state: IGST, line by line.
+        $this->setEnv('ENGAGE_GST_STATE_CODE', '29');
+        $igst = (new SellerLicenceOrderService())->financeRequest($row, $lines);
+        $this->assertSame([[0, 0, 360000], [0, 0, 18000]], array_map(static fn (array $l): array => [$l['cgst_paise'], $l['sgst_paise'], $l['igst_paise']], $igst['lines']));
+    }
+
+    /** A link Finance could not raise: the seller is told why in plain words and can pay by bank transfer meanwhile. */
+    public function testAFailedLinkSaysWhyAndOffersBankTransfer(): void
+    {
+        $this->setEnv('ENGAGE_SELLER_ORDER_PAYMENT_LINKS', '1');
+        $this->setEnv('ENGAGE_GST_STATE_CODE', '27');
+        $this->setEnv('FINANCE_API_BASE_URL', 'http://127.0.0.1:9/api');
+        $this->setEnv('ENGAGE_OUTBOUND_FINANCE_S2S_KEY_ID', 'engage-issue-2026-11');
+        $this->setEnv('ENGAGE_OUTBOUND_FINANCE_S2S_SECRET', str_repeat('s', 40));
+        $this->setEnv('FINANCE_S2S_ENVIRONMENT', 'local');
+        $this->setEnv('ENGAGE_S2S_ENVIRONMENT', 'local');
+        $this->db()->table('engage_settings')->where('key', 'seller_order_payment_instructions')->update(['value_json' => json_encode('HDFC Bank 50200012345678, IFSC HDFC0001234')]);
+        $s = $this->verifiedSeller();
+
+        $o = $this->json($this->order($s['session'], [['offer_code' => 'books-pro', 'quantity' => 1]]))['data'];
+        $this->assertSame(['link', null], [$o['payment']['mode'], $o['payment']['link_url']]);
+        $this->assertStringContainsString('could not be raised just now', (string) $o['payment']['link_problem'], 'Finance unreachable: try again');
+        $this->assertSame('HDFC Bank 50200012345678, IFSC HDFC0001234', $o['payment']['instructions'], 'bank transfer meanwhile');
+        $staff = $this->json($this->asStaff($this->sales, 'get', 'v1/seller-licence-orders/' . $o['order_ref']))['data'];
+        $this->assertStringStartsWith('finance_unreachable', (string) $staff['link_error'], 'staff see Finance\'s answer');
+
+        $this->db()->table('engage_seller_licence_orders')->where('order_ref', $o['order_ref'])->update(['link_error' => 'gstin_state_mismatch: The GSTIN is registered in …']);
+        $again = $this->json($this->portal('get', 'licence-orders/' . $o['order_ref'], [], $s['session']))['data']['order'];
+        $this->assertStringContainsString('billing details', (string) $again['payment']['link_problem'], 'refused: bank transfer or Aicountly');
+        $this->assertStringNotContainsString('GSTIN is registered', json_encode($again), 'Finance\'s own words stay with staff');
     }
 
     public function testVoidCancelAndExpiry(): void

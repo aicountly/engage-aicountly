@@ -288,6 +288,24 @@ class SellerLicenceOrderService
 
     // ------------------------------------------------------------------ payment
 
+    /**
+     * Why an order has no payment link, for the seller: Finance or the gateway was unavailable (try again), or Finance
+     * refused the order's billing details (bank transfer, or Aicountly). Null when no attempt failed yet.
+     */
+    private static function linkProblem(array $o): ?string
+    {
+        $err = (string) ($o['link_error'] ?? '');
+        if ($err === '') {
+            return null;
+        }
+        $code = strtok($err, ':') ?: '';
+        $refused = in_array($code, ['validation_failed', 'fee_breakdown_mismatch', 'gstin_state_mismatch', 'idempotency_conflict', 'bad_request'], true);
+
+        return $refused
+            ? 'The payment link could not be raised for this order\'s billing details. Pay by bank transfer as shown below, or contact Aicountly quoting ' . $o['order_ref'] . '.'
+            : 'The payment link could not be raised just now. Try again in a few minutes, or pay by bank transfer as shown below.';
+    }
+
     /** Ask Finance for this order's payment link; the order records the link or why it could not be raised. */
     public function raiseLink(int $orderId): array
     {
@@ -342,6 +360,7 @@ class SellerLicenceOrderService
         return [
             'purpose'      => 'licences',
             'source_ref'   => (string) $o['order_ref'],
+            'description'  => 'Aicountly licences — order ' . $o['order_ref'],
             'seller_code'  => (string) $this->db()->query('SELECT seller_code FROM engage_sellers WHERE id = ?', [(int) $o['seller_id']])->getRow()->seller_code,
             'buyer_gstin'  => $o['buyer_gstin'],
             'payer'        => array_filter([
@@ -592,7 +611,11 @@ class SellerLicenceOrderService
                 'mode'         => $o['payment_mode'],
                 'link_url'     => $payable && $o['payment_mode'] === 'link' ? $o['link_url'] : null,
                 'link_expires_at' => $payable ? S::iso($o['link_expires_at']) : null,
-                'instructions' => $payable && $o['payment_mode'] === 'offline' ? ($instructions !== '' ? $instructions : 'Aicountly will share the bank details for this order.') : null,
+                // Why there is no link yet, in words for the seller (staff see Finance's own answer as link_error).
+                'link_problem' => $payable && $o['payment_mode'] === 'link' && empty($o['link_url']) ? self::linkProblem($o) : null,
+                // Bank transfer whenever there is no link to pay: a sales manager confirms that payment either way.
+                'instructions' => $payable && ($o['payment_mode'] === 'offline' || empty($o['link_url']))
+                    ? ($instructions !== '' ? $instructions : 'Aicountly will share the bank details for this order.') : null,
                 'reference'    => $o['order_ref'],
                 'pay_by'       => $payable ? S::iso((string) $o['expires_at']) : null,
             ],
