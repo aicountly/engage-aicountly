@@ -391,7 +391,7 @@ eq(100, $q['json']['data']['price_paise_per_1000'] ?? null, '… at ₹1.00 per 
 step('l) the purchase: order → payment link → Finance confirms → paid, grant queued');
 
 $o = http('POST', "{$manageCreditUrl}/billing/token-orders?cmp_id={$c1}", $sess($H), ['amount_rupees' => '1000', 'coupon_code' => 'CREDIT20',
-    'payer' => ['name' => 'Asha Owner', 'email' => 'asha@e2e.test', 'state_code' => '27']]);
+    'payer' => ['name' => 'Asha Owner', 'email' => 'asha@e2e.test', 'state_code' => '27', 'mobile' => '9876543210']]);
 $order = $o['json']['data'] ?? [];
 $orderRef = (string) ($order['order_ref'] ?? '');
 eq([200, 'awaiting_payment', true], [$o['status'], $order['status'] ?? null, str_starts_with($orderRef, 'TKO-')],
@@ -411,7 +411,7 @@ ok(($req['refused'] ?? null) === null, '… Finance verified Engage\'s signature
 
 // Pressing Pay twice must not make a second link, on either side of the hop.
 $again = http('POST', "{$manageCreditUrl}/billing/token-orders?cmp_id={$c1}", $sess($H), ['amount_rupees' => '9999',
-    'payer' => ['name' => 'Asha Owner', 'state_code' => '27']]);
+    'payer' => ['name' => 'Asha Owner', 'state_code' => '27', 'mobile' => '9876543210']]);
 eq([$orderRef, true], [$again['json']['data']['order_ref'] ?? null, $again['json']['data']['existing'] ?? null],
     'a second Buy while one is unpaid returns the SAME order, at the price it was quoted at');
 eq(1, (int) $epdo->query("SELECT COUNT(*) FROM engage_token_orders WHERE holder_uuid = '{$H}'")->fetchColumn(), '… one order, one link');

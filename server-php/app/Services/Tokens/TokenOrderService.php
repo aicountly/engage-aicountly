@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\Services\Tokens;
 
+use App\Services\Coupons\CodeGenerator;
+use App\Services\Coupons\CouponService;
 use App\Services\Coupons\PricingService;
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
@@ -29,7 +31,10 @@ class TokenOrderService
 {
     public const STATUSES = ['quoted', 'awaiting_payment', 'paid', 'granted', 'cancelled', 'expired', 'failed'];
 
-    public function __construct(private ?BaseConnection $db = null)
+    /** Whose credits an order buys: every company of the owner (as before), or one company (docs/TOKEN_CONVERSIONS.md §4.3). */
+    public const SCOPES = ['workspace', 'company'];
+
+    public function __construct(private ?BaseConnection $db = null, private ?FinanceLinkClient $finance = null)
     {
     }
 
@@ -69,12 +74,28 @@ class TokenOrderService
             return self::fail(422, 'validation_failed', 'That is more tokens than anyone can buy at once.', ['tokens' => 'Too many.']);
         }
 
+        // Whose credits: the workspace (every company of the owner) or one company. The billing company is separate
+        // (create()'s cmp_id): the invoice goes to it whichever scope the credits have.
+        $scope = strtolower(trim((string) ($in['scope'] ?? 'workspace')));
+        if (! in_array($scope, self::SCOPES, true)) {
+            return self::fail(422, 'validation_failed', 'Say whose credits these are.', ['scope' => 'workspace (all companies) or company (one company).']);
+        }
+        $creditCmp = null;
+        if ($scope === 'company') {
+            $c = $in['cmp_id'] ?? null;
+            $creditCmp = (is_int($c) || (is_string($c) && ctype_digit($c))) && (int) $c > 0 ? (int) $c : null;
+            if ($creditCmp === null) {
+                return self::fail(422, 'validation_failed', 'Company credits need the company.', ['cmp_id' => 'The company these credits are for.']);
+            }
+        }
+
         $list = $rates->paiseForTokens($tokens);
         $discount = 0;
         $couponCode = null;
         $couponId = null;
 
-        $code = strtoupper(trim((string) ($in['coupon_code'] ?? '')));
+        // Normalised as the licence flow does: "save-500", "Save 500" and "SAVE500" are one code.
+        $code = CodeGenerator::normalise((string) ($in['coupon_code'] ?? ''));
         if ($code !== '') {
             $found = $this->coupon($code, $holderUuid);
             if ($found === null) {
@@ -82,6 +103,12 @@ class TokenOrderService
                     ['coupon_code' => 'Not recognised, no longer active, or already used as many times as it allows.']);
             }
             $c = $found['coupon'];
+            // A flat amount off needs a purchase worth more than the amount: ₹500 off a ₹500 purchase is not a
+            // discount but a giveaway (it would come to ₹1.18 at the ₹1 floor). A free grant is a voucher.
+            if ($c['discount_type'] === 'flat' && $list <= (int) $c['flat_paise']) {
+                return self::fail(422, 'below_min_order', 'This coupon needs a larger purchase.',
+                    ['coupon_code' => 'More than ' . number_format(((int) $c['flat_paise']) / 100, 2) . ' before GST.']);
+            }
             // The same arithmetic a licence quote uses, including its floor: a coupon
             // can never take the price to zero, because a zero invoice is meaningless
             // and Finance refuses one. A free grant is a voucher, not a coupon.
@@ -120,6 +147,8 @@ class TokenOrderService
             'coupon_code'          => $couponCode,
             'coupon_id'            => $couponId,
             'currency'             => 'INR',
+            'scope'                => $scope,
+            'credit_cmp_id'        => $creditCmp,
         ]];
     }
 
@@ -135,7 +164,8 @@ class TokenOrderService
      */
     public function create(array $in, string $holderUuid, int $cmpId, array $payer, string $source = 'manage'): array
     {
-        $q = $this->quote($in, $holderUuid);
+        // Company credits are for the company the order is placed in (its owner is the holder: Manage checked that).
+        $q = $this->quote(['cmp_id' => $cmpId] + $in, $holderUuid);
         if (($q['status'] ?? 500) !== 200) {
             return $q;
         }
@@ -153,17 +183,31 @@ class TokenOrderService
         if ($cmpId <= 0) {
             $errors['cmp_id'] = 'The company this purchase belongs to.';
         }
+        // Finance opens the payment page with it, and refuses a link without one.
+        $mobile = self::mobile($payer['mobile'] ?? null);
+        if ($mobile === null) {
+            $errors['payer.mobile'] = 'An Indian mobile number (10 digits): the payment page needs one.';
+        }
         if ($errors !== []) {
             return self::fail(422, 'validation_failed', 'Please complete the billing details.', $errors);
         }
 
+        // One open order per holder and scope: a customer may buy this company's credits and the workspace's at the
+        // same time, never the same thing twice. An order whose payment page was opened is shown back (409 with the
+        // order: pay it or cancel it); one that never got a page (Finance could not be reached) cannot be paid, so it
+        // is replaced.
         $db = $this->db();
         $existing = $db->query(
-            "SELECT * FROM engage_token_orders WHERE holder_uuid = ? AND status IN ('quoted','awaiting_payment')",
-            [$holderUuid]
+            "SELECT * FROM engage_token_orders WHERE holder_uuid = ? AND credit_scope = ? AND COALESCE(credit_cmp_id, 0) = ?
+                AND status IN ('quoted','awaiting_payment')",
+            [$holderUuid, $d['scope'], (int) ($d['credit_cmp_id'] ?? 0)]
         )->getRowArray();
+        if ($existing !== null && ($existing['status'] === 'awaiting_payment' || ($existing['link_url'] ?? null) !== null)) {
+            return self::fail(409, 'open_order_exists', 'You already have an unpaid order for these credits: pay it or cancel it first.',
+                ['order' => $this->find((int) $existing['id'])]);
+        }
         if ($existing !== null) {
-            return ['status' => 200, 'data' => self::view($existing) + ['existing' => true]];
+            $this->cancel((string) $existing['order_ref'], 'Replaced by a new order before its payment page was opened.');
         }
 
         $ref = 'TKO-' . str_pad((string) $db->query("SELECT nextval('engage_token_order_ref_seq') AS n")->getRow()->n, 6, '0', STR_PAD_LEFT);
@@ -188,13 +232,16 @@ class TokenOrderService
                 'coupon_id'            => $d['coupon_id'],
                 'payer_name'           => mb_substr($name, 0, 120),
                 'payer_email'          => trim((string) ($payer['email'] ?? '')) ?: null,
-                'payer_mobile'         => trim((string) ($payer['mobile'] ?? '')) ?: null,
+                'payer_mobile'         => $mobile,
                 'payer_state_code'     => $state,
                 'payer_address'        => trim((string) ($payer['address'] ?? '')) ?: null,
                 'payer_pincode'        => trim((string) ($payer['pincode'] ?? '')) ?: null,
                 'buyer_gstin'          => strtoupper(trim((string) ($payer['gstin'] ?? ''))) ?: null,
                 'status'               => 'quoted',
                 'source'               => $source,
+                'credit_scope'         => $d['scope'],
+                'credit_cmp_id'        => $d['credit_cmp_id'],
+                'company_name'         => mb_substr(trim((string) ($in['company_name'] ?? '')), 0, 200) ?: null,
             ]);
             $id = (int) $db->insertID();
             if (($d['coupon_code'] ?? null) !== null) {
@@ -206,7 +253,8 @@ class TokenOrderService
 
             throw $e;
         }
-        $this->audit('token_order.create', $id, ['order_ref' => $ref, 'tokens' => $d['tokens'], 'total_paise' => $d['total_paise'], 'coupon' => $d['coupon_code']]);
+        $this->audit('token_order.create', $id, ['order_ref' => $ref, 'tokens' => $d['tokens'], 'total_paise' => $d['total_paise'], 'coupon' => $d['coupon_code'],
+            'scope' => $d['scope'], 'credit_cmp_id' => $d['credit_cmp_id']]);
 
         return ['status' => 201, 'data' => $this->find($id)];
     }
@@ -242,7 +290,10 @@ class TokenOrderService
             'token_count'  => (int) $o['tokens'],
             'buyer_gstin'  => $o['buyer_gstin'],
             'product_code' => 'manage',
-            'description'  => number_format((float) $o['tokens']) . ' Aicountly AI tokens',
+            'description'  => number_format((float) $o['tokens']) . ' Aicountly AI tokens — '
+                . (($o['credit_scope'] ?? 'workspace') === 'company'
+                    ? 'for ' . (($o['company_name'] ?? '') !== '' ? $o['company_name'] : 'company #' . (int) $o['credit_cmp_id']) . ' only'
+                    : 'for all companies of the workspace'),
             'payer'        => array_filter([
                 'name'       => (string) $o['payer_name'],
                 'email'      => $o['payer_email'],
@@ -333,6 +384,8 @@ class TokenOrderService
                 'origin'      => 'purchase',
                 'origin_ref'  => $orderRef,
                 'status'      => 'pending',
+                // Company credits land in that company's bucket at AI Pulse; workspace credits in the owner's pool.
+                'cmp_id'      => ($o['credit_scope'] ?? 'workspace') === 'company' ? (int) $o['credit_cmp_id'] : null,
             ]);
 
             // A coupon used on a purchase is spent when the money arrives, not when the
@@ -364,6 +417,23 @@ class TokenOrderService
         if (in_array($o['status'], ['paid', 'granted'], true)) {
             return self::fail(409, 'already_paid', 'That order is paid. Refund it rather than cancelling it.');
         }
+        if (in_array($o['status'], ['cancelled', 'expired'], true)) {
+            return ['status' => 200, 'data' => $this->find((int) $o['id']) + ['duplicate' => true]];
+        }
+        // The payment page goes first: an order cancelled here while its page could still be paid is money taken and
+        // nothing given. If Finance says it is already paid, the order is not cancelled — the payment is on its way.
+        if (($o['link_id'] ?? null) !== null && $o['link_id'] !== '') {
+            $c = ($this->finance ?? new FinanceLinkClient())->cancel((string) $o['link_id'], $reason);
+            if (! $c['ok'] && $c['code'] === 'already_paid') {
+                return self::fail(409, 'already_paid', 'That order has just been paid: the credits are on their way.');
+            }
+            if (! $c['ok']) {
+                // Finance unreachable or not configured: cancelled here anyway; should the page still be paid, the
+                // payment event is refused (order_closed) and Finance shows it for a refund.
+                log_message('warning', 'token order {o}: the payment link {l} could not be cancelled at Finance ({c}).',
+                    ['o' => $orderRef, 'l' => $o['link_id'], 'c' => $c['code']]);
+            }
+        }
         $db = $this->db();
         $db->transBegin();
         try {
@@ -387,16 +457,19 @@ class TokenOrderService
 
     // ------------------------------------------------------------------ reads
 
+    /** Orders with the state of their grant (delivered = the credits are in the wallet at AI Pulse). */
+    private const SELECT = 'SELECT o.*, g.status AS grant_status FROM engage_token_orders o LEFT JOIN engage_token_grants g ON g.grant_ref = o.grant_ref';
+
     public function find(int $id): ?array
     {
-        $r = $this->db()->table('engage_token_orders')->where('id', $id)->get()->getRowArray();
+        $r = $this->db()->query(self::SELECT . ' WHERE o.id = ?', [$id])->getRowArray();
 
         return $r === null ? null : self::view($r);
     }
 
     public function findByRef(string $ref): ?array
     {
-        $r = $this->db()->table('engage_token_orders')->where('order_ref', $ref)->get()->getRowArray();
+        $r = $this->db()->query(self::SELECT . ' WHERE o.order_ref = ?', [$ref])->getRowArray();
 
         return $r === null ? null : self::view($r);
     }
@@ -404,10 +477,21 @@ class TokenOrderService
     /** @return list<array<string,mixed>> */
     public function forHolder(string $holderUuid, int $limit = 50): array
     {
-        $rows = $this->db()->table('engage_token_orders')->where('holder_uuid', $holderUuid)
-            ->orderBy('created_at', 'DESC')->limit(max(1, min(200, $limit)))->get()->getResultArray();
+        $rows = $this->db()->query(self::SELECT . ' WHERE o.holder_uuid = ? ORDER BY o.created_at DESC LIMIT ?', [$holderUuid, max(1, min(200, $limit))])
+            ->getResultArray();
 
         return array_map(static fn (array $r): array => self::view($r), $rows);
+    }
+
+    /** "+91 98765-43210" | "919876543210" | "09876543210" | "9876543210" → "+919876543210"; null when not an Indian mobile. */
+    public static function mobile(mixed $v): ?string
+    {
+        if (! is_string($v) && ! is_int($v)) {
+            return null;
+        }
+        $d = (string) preg_replace('/[\s().-]/', '', (string) $v);
+
+        return preg_match('/\A(?:\+91|91|0)?([6-9][0-9]{9})\z/', $d, $m) === 1 ? '+91' . $m[1] : null;
     }
 
     // --------------------------------------------------------------- helpers
@@ -434,14 +518,14 @@ class TokenOrderService
         if ($r === null) {
             return null;
         }
-        // A coupon scoped to particular products or offers is for licences, not for
-        // tokens. Only an unscoped one applies here, so a "20% off Books Pro" coupon
-        // cannot quietly discount a token purchase.
+        // A coupon scoped to particular products, offers or licence types is for licences, not for tokens: only an
+        // unscoped one applies here — or one whose products name AI credits (CouponService::AI_CREDITS), which is how
+        // staff make a coupon for credits alone. So a "20% off Books Pro" coupon cannot quietly discount a purchase.
         $applies = json_decode((string) ($r['applies_to'] ?? '{}'), true);
-        foreach (['product_codes', 'offer_codes', 'licence_type_codes'] as $k) {
-            if (($applies[$k] ?? []) !== []) {
-                return null;
-            }
+        $products = (array) ($applies['product_codes'] ?? []);
+        if (($applies['offer_codes'] ?? []) !== [] || ($applies['licence_type_codes'] ?? []) !== []
+            || ($products !== [] && ! in_array(CouponService::AI_CREDITS, $products, true))) {
+            return null;
         }
         // How many times it has been used, counting a live reservation: somebody halfway
         // through a checkout has it, and a second tab must not be given it as well.
@@ -567,6 +651,12 @@ class TokenOrderService
             'gst_paise'            => (int) $r['gst_paise'],
             'total_paise'          => (int) $r['total_paise'],
             'coupon_code'          => $r['coupon_code'],
+            // Whose credits (docs/TOKEN_CONVERSIONS.md §4.3) and whether AI Pulse has them yet: status granted means paid
+            // and queued; grant_status delivered means the credits are in the wallet.
+            'scope'                => (string) ($r['credit_scope'] ?? 'workspace'),
+            'credit_cmp_id'        => isset($r['credit_cmp_id']) ? (int) $r['credit_cmp_id'] : null,
+            'company_name'         => $r['company_name'] ?? null,
+            'grant_status'         => $r['grant_status'] ?? null,
             'status'               => (string) $r['status'],
             'link_url'             => $r['link_url'],
             'link_expires_at'      => $r['link_expires_at'],

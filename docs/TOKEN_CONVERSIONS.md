@@ -348,7 +348,8 @@ somebody's decision, not a deploy's side effect.
 
 What a customer buys is tokens. ₹1 per 1,000 tokens, **exclusive of GST**, so ₹1,000 of credits
 collects ₹1,180. Bought tokens go to a separate bucket that does not expire and is spent only
-after the plan's own monthly allowance is used up.
+after the plan's own monthly allowance is used up — for **one company** or for **the whole
+workspace** (§12.5).
 
 ```
 Manage (the owner)  ──quote──▶  Engage prices it            rate × tokens, coupon, GST on the net
@@ -398,6 +399,80 @@ Scopes: the **quote** key (POST only, by `AicS2sConfig::SCOPE_METHODS`) prices, 
 and redeems; the **read** key serves the purchase history, because reading what somebody has
 already bought is a read like any other. Widening the quote scope to allow GET would widen it for
 everything the quote key can do.
+
+### 12.5 Whose credits: one company, or the workspace
+
+An order says whose credits it buys (`scope`, migration `2026-11-16-000100`):
+
+| `scope` | Credits | Spent by |
+|---|---|---|
+| `workspace` (default, as before) | the owner's pool | AI calls in any company the owner owns |
+| `company` (`credit_cmp_id`) | that company's bucket | AI calls in that company only |
+
+The **billing** company is separate: the order's `cmp_id` is the company the owner bought from, the
+invoice is made out to it and shows under its Invoices in Manage, whatever the scope. The invoice
+line says whose credits they are ("1,000,000 Aicountly AI tokens — for Acme Pvt Ltd only").
+
+The grant carries `cmp_id` for company credits; AI Pulse keeps a bucket per (owner, company) and,
+for an AI call made in a company, spends **the plan's allowance → that company's credits → the
+workspace pool** (pulse-aicountly `TokenWallet`). A call in another company never touches company
+A's credits.
+
+Manage → Engage: `POST manage/token-orders/quote` and `POST manage/token-orders` take
+`scope` (`workspace` | `company`) and, for an order, `payer.mobile` (required: Finance's payment page
+needs it; normalised to `+91…`) and `company_name` (the billing company's name, for the receipt).
+Every order view adds `scope`, `credit_cmp_id`, `company_name` and `grant_status` (`pending` = paid,
+on its way to AI Pulse; `delivered` = in the wallet).
+
+### 12.6 One open order per scope
+
+A holder may have one unpaid order per (scope, credit company) — this company's credits and the
+workspace's can be bought at the same time, never the same thing twice. Ordering again while an
+order's payment page is open answers **409 `open_order_exists`** with `details.order`, and Manage
+shows "pay it or cancel it" instead of quietly sending the customer to an older page. An order that
+never got a payment page (Finance could not be reached) cannot be paid, so a new attempt replaces it.
+
+**Cancelling** closes the payment page at Finance first (`POST …/payment-links/{link_id}/cancel`): an
+order cancelled while its page could still be paid is money taken and nothing given. If Finance
+answers that the page was just paid, the order is not cancelled (409 `already_paid`) — the payment is
+on its way. If Finance cannot be reached the order is cancelled anyway, and a payment made on the old
+page meanwhile is refused (`order_closed`) for Finance to refund.
+
+### 12.7 Coupons on credits
+
+A coupon applies to a credit purchase when its `applies_to` names no products at all (every purchase,
+licences included) or names **`ai_credits`** (`CouponService::AI_CREDITS`; the staff form offers it
+as "AI credits"). A coupon for products, offers or licence types otherwise is for licences only. The
+code is normalised as for licences (`credit-500` = `CREDIT500`). GST is charged on the price after
+discount. Two rules keep a coupon a discount:
+
+- a **flat** amount off applies only to a purchase worth **more** than the amount (₹500 off needs more
+  than ₹500 before GST) — otherwise it would come to ₹1.18 at the ₹1 floor;
+- a **percent** off honours its minimum price and its maximum discount.
+
+The owner's launch coupons, at ₹1 per 1,000 tokens and 18 % GST:
+
+| Coupon | Purchase (list) | Discount | Net + GST | Pays |
+|---|---|---|---|---|
+| ₹500 off, `ai_credits` | ₹1,000 | ₹500 | ₹500 + ₹90 | **₹590** |
+| ₹500 off | ₹500 | refused: needs more than ₹500 | — | — |
+| 30 % off, min ₹500, max ₹1,000 | ₹400 | refused: minimum ₹500 | — | — |
+| 30 % off, min ₹500, max ₹1,000 | ₹1,000 | ₹300 | ₹700 + ₹126 | **₹826** |
+| 30 % off, min ₹500, max ₹1,000 | ₹5,000 | ₹1,000 (capped) | ₹4,000 + ₹720 | **₹4,720** |
+
+One coupon per order. Using both coupons on both purchases takes four orders, so give each coupon a
+per-customer limit of at least 2 (or none).
+
+### 12.8 The receipt
+
+When AI Pulse confirms the grant — the payment was re-read by Finance and the invoice issued before
+Finance told Engage — Engage sends Console's `credits.purchase_receipt` e-mail (console-react-app
+migration 083) to the payer's e-mail on the order, else the holder's: `payer_name`, `amount`
+("₹1,180.00"), `company_name` (the billing company; "… (credits for all your companies)" for
+workspace credits), `tokens_added`, `tokens_left` (the bucket's balance AI Pulse reported),
+`invoice_no`, `invoice_date`. Once per grant (Console idempotency key `receipt:<grant_ref>`). The
+invoice PDF itself is under Plans & billing → Invoices in Manage. `credits.purchase_failed` exists
+only as a draft WhatsApp template and is not sent.
 
 | Route | Key | What it does |
 |---|---|---|

@@ -36,7 +36,7 @@ final class ManageTokenApiTest extends CouponTestCase
 
     private function payer(): array
     {
-        return ['name' => 'Priya Sharma', 'email' => 'priya@example.test', 'state_code' => '27'];
+        return ['name' => 'Priya Sharma', 'email' => 'priya@example.test', 'state_code' => '27', 'mobile' => '9876543210'];
     }
 
     // ── the envelope ───────────────────────────────────────────────────────

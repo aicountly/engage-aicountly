@@ -116,4 +116,43 @@ final class FinanceLinkClient
             return ['ok' => false, 'link' => null, 'code' => 'finance_unreachable', 'message' => 'Finance could not be reached. Nothing has been charged.'];
         }
     }
+
+    /**
+     * Cancel a payment link Engage asked for (POST /v1/inbound/engage/payment-links/{link_id}/cancel), so a page left
+     * open can no longer be paid. Finance answers 200 (also for one already cancelled) or 409 already_paid.
+     *
+     * @return array{ok:bool, code:?string, message:?string}
+     */
+    public function cancel(string $linkId, string $reason): array
+    {
+        if (! self::configured()) {
+            return ['ok' => false, 'code' => 'not_configured', 'message' => 'Finance is not configured here.'];
+        }
+        $base = rtrim((string) env('FINANCE_API_BASE_URL', ''), '/');
+        $keyId = (string) env('ENGAGE_OUTBOUND_FINANCE_S2S_KEY_ID', '');
+        $secret = (string) env('ENGAGE_OUTBOUND_FINANCE_S2S_SECRET', '');
+        $environment = (string) env('ENGAGE_S2S_ENVIRONMENT', 'production');
+        $path = self::PATH . '/' . rawurlencode($linkId) . '/cancel';
+        $body = json_encode(['reason' => mb_substr($reason, 0, 255)], JSON_UNESCAPED_SLASHES);
+        $headers = AicS2sSignature::headers('engage', $keyId, $secret, $environment, 'POST', $path, '', $body, 'service')
+            + ['Content-Type' => 'application/json'];
+
+        try {
+            $res = ($this->http ?? new Client(['timeout' => 15]))->request('POST', $base . '/api' . $path, [
+                'headers' => $headers, 'body' => $body, 'http_errors' => false,
+            ]);
+            $status = $res->getStatusCode();
+            if ($status >= 200 && $status < 300) {
+                return ['ok' => true, 'code' => null, 'message' => null];
+            }
+            $json = json_decode((string) $res->getBody(), true);
+            $code = is_array($json) ? (string) ($json['error']['code'] ?? $json['code'] ?? "http_{$status}") : "http_{$status}";
+
+            return ['ok' => false, 'code' => $code, 'message' => is_array($json) ? (string) ($json['error']['message'] ?? '') : null];
+        } catch (GuzzleException $e) {
+            log_message('warning', 'payment link {l}: Finance unreachable for the cancel: {m}', ['l' => $linkId, 'm' => $e->getMessage()]);
+
+            return ['ok' => false, 'code' => 'finance_unreachable', 'message' => 'Finance could not be reached.'];
+        }
+    }
 }

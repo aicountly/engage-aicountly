@@ -118,7 +118,7 @@ export default function CouponDetail() {
           <div className="font-semibold mb-1">Rule</div>
           <div><span className="text-neutral-400">Discount:</span> {ruleText(d, formatPaise)}</div>
           <div><span className="text-neutral-400">Minimum list price:</span> {d.min_order_paise !== null ? formatPaise(d.min_order_paise) : '—'}</div>
-          <div><span className="text-neutral-400">Products:</span> {d.applies_to.product_codes.join(', ') || 'any'}</div>
+          <div><span className="text-neutral-400">Products:</span> {d.applies_to.product_codes.map((c) => (c === 'ai_credits' ? 'AI credits' : c)).join(', ') || 'any (licences and AI credits)'}</div>
           <div><span className="text-neutral-400">Offers:</span> {d.applies_to.offer_codes.join(', ') || 'any'}</div>
           <div><span className="text-neutral-400">Licence types:</span> {d.applies_to.licence_type_codes.join(', ') || 'any'}</div>
           <div><span className="text-neutral-400">For:</span> {d.new_or_renewal === 'any' ? 'new and renewal' : d.new_or_renewal}</div>

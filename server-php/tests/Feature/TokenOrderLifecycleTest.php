@@ -2,7 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Services\Tokens\FinanceLinkClient;
 use App\Services\Tokens\TokenOrderService;
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Response;
 use Tests\Support\LicensingTestCase;
 
 /**
@@ -24,7 +30,7 @@ final class TokenOrderLifecycleTest extends LicensingTestCase
 
     private function payer(): array
     {
-        return ['name' => 'Priya Sharma', 'email' => 'priya@example.test', 'state_code' => '27'];
+        return ['name' => 'Priya Sharma', 'email' => 'priya@example.test', 'state_code' => '27', 'mobile' => '98765 43210'];
     }
 
     private function order(array $in = [], string $holder = self::HOLDER): array
@@ -91,14 +97,118 @@ final class TokenOrderLifecycleTest extends LicensingTestCase
     }
 
     /** Two live checkouts is how somebody pays twice for one intention. */
-    public function testOneOpenOrderPerHolder(): void
+    /**
+     * One unpaid order per holder and scope. An order whose payment page was opened comes back as 409 with the order,
+     * so Manage shows "pay it or cancel it" rather than silently sending the customer to an older page; buying this
+     * company's credits is a different purchase from buying the workspace's, so both may be open.
+     */
+    public function testOneOpenOrderPerHolderAndScope(): void
+    {
+        $first = $this->order();
+        $this->svc()->linkRaised((int) $first['data']['id'], ['link_id' => 'fin_pl_OPEN1', 'url' => 'https://pay.example/1']);
+
+        $second = $this->order(['tokens' => 2000000]);
+        $this->assertSame(409, $second['status']);
+        $this->assertSame('open_order_exists', $second['code']);
+        $this->assertSame([$first['data']['order_ref'], 'https://pay.example/1'], [$second['details']['order']['order_ref'], $second['details']['order']['link_url']]);
+
+        $company = $this->order(['scope' => 'company']);
+        $this->assertSame(201, $company['status'], 'company credits alongside workspace credits');
+        $this->assertSame(['company', self::CMP], [$company['data']['scope'], $company['data']['credit_cmp_id']]);
+    }
+
+    /** An order Finance never opened a page for cannot be paid, so a new attempt replaces it. */
+    public function testAnOrderWithoutAPaymentPageIsReplaced(): void
     {
         $first = $this->order();
         $second = $this->order(['tokens' => 2000000]);
 
-        $this->assertSame(200, $second['status'], 'the existing order comes back rather than an error');
-        $this->assertTrue($second['data']['existing'] ?? false);
-        $this->assertSame($first['data']['order_ref'], $second['data']['order_ref']);
+        $this->assertSame(201, $second['status']);
+        $this->assertSame('cancelled', $this->svc()->findByRef($first['data']['order_ref'])['status']);
+    }
+
+    public function testAMobileNumberIsNeededForThePaymentPage(): void
+    {
+        $r = $this->svc()->create(['tokens' => 1000000], self::HOLDER, self::CMP, ['name' => 'Priya', 'state_code' => '27', 'mobile' => '12345']);
+        $this->assertSame(422, $r['status']);
+        $this->assertArrayHasKey('payer.mobile', $r['details']);
+
+        $ok = $this->svc()->create(['tokens' => 1000000], self::HOLDER, self::CMP, ['name' => 'Priya', 'state_code' => '27', 'mobile' => '098765-43210']);
+        $this->assertSame(201, $ok['status']);
+        $row = $this->db()->table('engage_token_orders')->where('order_ref', $ok['data']['order_ref'])->get()->getRowArray();
+        $this->assertSame('+919876543210', $row['payer_mobile'], 'normalised as Finance wants it');
+        $this->assertSame('+919876543210', $this->svc()->financeRequest($row)['payer']['mobile']);
+    }
+
+    public function testScopeIsWorkspaceOrOneCompany(): void
+    {
+        $this->assertSame(['scope'], array_keys($this->svc()->quote(['tokens' => 1000000, 'scope' => 'galaxy'])['details']));
+        $this->assertSame(['cmp_id'], array_keys($this->svc()->quote(['tokens' => 1000000, 'scope' => 'company'])['details']));
+        $q = $this->svc()->quote(['tokens' => 1000000, 'scope' => 'company', 'cmp_id' => 77]);
+        $this->assertSame(['company', 77], [$q['data']['scope'], $q['data']['credit_cmp_id']]);
+        $this->assertSame(['workspace', null], [($w = $this->svc()->quote(['tokens' => 1000000]))['data']['scope'], $w['data']['credit_cmp_id']]);
+    }
+
+    /** Company credits go to that company's bucket at AI Pulse; workspace credits to the owner's pool. */
+    public function testCompanyCreditsAreGrantedToTheirCompany(): void
+    {
+        $o = $this->order(['scope' => 'company', 'company_name' => 'Acme Pvt Ltd'])['data'];
+        $row = $this->db()->table('engage_token_orders')->where('order_ref', $o['order_ref'])->get()->getRowArray();
+        $this->assertSame('1,000,000 Aicountly AI tokens — for Acme Pvt Ltd only', $this->svc()->financeRequest($row)['description'], 'the invoice line says whose credits');
+        $this->assertSame(self::CMP, $this->svc()->financeRequest($row)['cmp_id'], 'billed to the company the order was placed in');
+        $this->svc()->settle($o['order_ref'], ['payment_ref' => 'pay_CMP1']);
+        $grant = $this->db()->table('engage_token_grants')->where('origin_ref', $o['order_ref'])->get()->getRowArray();
+        $this->assertSame(self::CMP, (int) $grant['cmp_id']);
+
+        $w = $this->order([], 'holder-workspace-1')['data'];
+        $this->svc()->settle($w['order_ref'], ['payment_ref' => 'pay_WS1']);
+        $this->assertNull($this->db()->table('engage_token_grants')->where('origin_ref', $w['order_ref'])->get()->getRowArray()['cmp_id']);
+        $this->assertSame('pending', $this->svc()->findByRef($w['order_ref'])['grant_status'], 'paid, not yet in the wallet');
+    }
+
+    /** Cancelling closes the payment page at Finance first; a page paid meanwhile keeps the order. */
+    public function testCancellingClosesThePaymentPageAtFinance(): void
+    {
+        $this->setEnv('FINANCE_API_BASE_URL', 'https://finance.example.test');
+        $this->setEnv('ENGAGE_OUTBOUND_FINANCE_S2S_KEY_ID', 'engage-issue-2026-11');
+        $this->setEnv('ENGAGE_OUTBOUND_FINANCE_S2S_SECRET', str_repeat('s', 40));
+        $history = [];
+        $stack = HandlerStack::create(new MockHandler([
+            new Response(200, [], (string) json_encode(['success' => true, 'data' => ['status' => 'cancelled']])),
+            new Response(409, [], (string) json_encode(['success' => false, 'error' => ['code' => 'already_paid', 'message' => 'Paid.']])),
+        ]));
+        $stack->push(Middleware::history($history));
+        $svc = new TokenOrderService($this->db(), new FinanceLinkClient(new Client(['handler' => $stack])));
+
+        $o = $svc->create(['tokens' => 1000000], self::HOLDER, self::CMP, $this->payer())['data'];
+        $svc->linkRaised((int) $o['id'], ['link_id' => 'fin_pl_CANCEL1', 'url' => 'https://pay.example/c1']);
+        $this->assertSame('cancelled', $svc->cancel($o['order_ref'], 'Changed my mind')['data']['status']);
+        $this->assertStringEndsWith('/api/v1/inbound/engage/payment-links/fin_pl_CANCEL1/cancel', (string) $history[0]['request']->getUri());
+
+        $p = $svc->create(['tokens' => 1000000, 'scope' => 'company'], self::HOLDER, self::CMP, $this->payer())['data'];
+        $svc->linkRaised((int) $p['id'], ['link_id' => 'fin_pl_CANCEL2', 'url' => 'https://pay.example/c2']);
+        $r = $svc->cancel($p['order_ref'], 'Too late');
+        $this->assertSame([409, 'already_paid'], [$r['status'], $r['code']]);
+        $this->assertSame('awaiting_payment', $svc->findByRef($p['order_ref'])['status'], 'the payment is on its way: nothing cancelled');
+    }
+
+    /** "₹500 off" and "30% off, minimum ₹500, at most ₹1,000" on AI credits — the owner's launch coupons. */
+    public function testTheLaunchCouponsOnCredits(): void
+    {
+        $this->activeCoupon('CREDIT500', 50000, ['product_codes' => ['ai_credits'], 'offer_codes' => [], 'licence_type_codes' => []]);
+        $q = $this->svc()->quote(['tokens' => 1000000, 'coupon_code' => 'credit-500']);
+        $this->assertSame(200, $q['status'], 'a coupon for AI credits, typed with a hyphen and in lower case');
+        $this->assertSame([100000, 50000, 50000, 9000, 59000], [$q['data']['list_paise'], $q['data']['discount_paise'], $q['data']['net_paise'], $q['data']['gst_paise'], $q['data']['total_paise']]);
+        $equal = $this->svc()->quote(['tokens' => 500000, 'coupon_code' => 'CREDIT500']);
+        $this->assertSame([422, 'below_min_order'], [$equal['status'], $equal['code']], '₹500 off a ₹500 purchase is a giveaway, not a discount');
+
+        $this->activeCoupon('THIRTY', 0, null, ['discount_type' => 'percent', 'flat_paise' => null, 'percent_bp' => 3000,
+            'min_order_paise' => 50000, 'max_discount_paise' => 100000]);
+        $this->assertSame('below_min_order', $this->svc()->quote(['tokens' => 400000, 'coupon_code' => 'THIRTY'])['code'], 'minimum ₹500');
+        $mid = $this->svc()->quote(['tokens' => 1000000, 'coupon_code' => 'THIRTY'])['data'];
+        $this->assertSame([30000, 70000, 12600, 82600], [$mid['discount_paise'], $mid['net_paise'], $mid['gst_paise'], $mid['total_paise']], '30% of ₹1,000');
+        $big = $this->svc()->quote(['tokens' => 5000000, 'coupon_code' => 'THIRTY'])['data'];
+        $this->assertSame([100000, 400000, 72000, 472000], [$big['discount_paise'], $big['net_paise'], $big['gst_paise'], $big['total_paise']], 'capped at ₹1,000');
     }
 
     public function testBillingDetailsAreRequiredBeforeAnInvoiceCanBeRaised(): void
@@ -321,7 +431,7 @@ final class TokenOrderLifecycleTest extends LicensingTestCase
     {
         $db = $this->db();
         $ref = 'CPN-' . substr(md5($code), 0, 6);
-        $db->table('engage_coupons')->insert([
+        $db->table('engage_coupons')->insert(array_merge([
             'coupon_ref'    => $ref,
             'code_kind'     => $codeKind,
             'label'         => $code,
@@ -330,7 +440,7 @@ final class TokenOrderLifecycleTest extends LicensingTestCase
             'applies_to'    => json_encode($appliesTo ?? ['product_codes' => [], 'offer_codes' => [], 'licence_type_codes' => []]),
             'status'        => 'active',
             'approved_at'   => date('Y-m-d H:i:sP'),
-        ] + $limits);
+        ], $limits));
         $db->table('engage_coupon_codes')->insert([
             'coupon_id' => (int) $db->insertID(), 'code' => $code, 'kind' => $codeKind, 'status' => 'available',
         ]);

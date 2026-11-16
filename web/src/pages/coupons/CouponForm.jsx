@@ -109,11 +109,16 @@ export default function CouponForm({ open, coupon, onClose, onSaved }) {
         <div><div className="engage-label">Minimum list price ₹ (optional)</div><input className="engage-input" inputMode="decimal" value={f.min_order} onChange={set('min_order')} /></div>
       </div>
       <div className="text-xs text-neutral-500">The discount comes off the offer price on its own basis (incl. or excl. GST); GST is charged on the price after
-        discount. The net never falls below ₹1 — a free plan is a complimentary licence, not a coupon.</div>
+        discount. The net never falls below ₹1 — a free plan is a complimentary licence, not a coupon. On AI credits, an amount off applies only to a
+        purchase worth more than that amount; a percentage off can be capped with a maximum discount and gated by a minimum price.</div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div><div className="engage-label">Products (codes, comma separated; empty = any)</div>
           <input className="engage-input font-mono" list="coupon-products" value={f.product_codes} onChange={set('product_codes')} />
-          <datalist id="coupon-products">{(products.data || []).map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}</datalist></div>
+          <datalist id="coupon-products">
+            <option value="ai_credits">AI credits (token purchases)</option>
+            {(products.data || []).map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
+          </datalist>
+          <div className="text-[11px] text-neutral-500 mt-1"><span className="font-mono">ai_credits</span> = AI credit purchases only; empty = credits and every licence.</div></div>
         <div><div className="engage-label">Offer codes (empty = any)</div><input className="engage-input font-mono" value={f.offer_codes} onChange={set('offer_codes')} /></div>
         <div><div className="engage-label">Licence types (empty = any)</div><input className="engage-input font-mono" value={f.licence_type_codes} onChange={set('licence_type_codes')} /></div>
       </div>
