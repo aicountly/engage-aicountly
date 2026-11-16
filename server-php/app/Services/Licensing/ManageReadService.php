@@ -35,27 +35,48 @@ class ManageReadService
      */
     public function licences(int $cmpId, array $filters, int $limit, ?array $cursor): array
     {
-        return $this->licencesWhere('l.cmp_id = ?', $cmpId, $filters, $limit, $cursor);
+        return $this->licencesWhere('l.cmp_id = ?', [$cmpId], $filters, $limit, $cursor);
     }
 
     /**
      * Licences a person holds (holder_uuid — the my.aicountly uuid of the owner, D-L2): the Basic of each app, plans
      * staff issued to them and plans sold to them through a seller. Same shape, filters and paging as the company list.
      *
-     * @param array{status?:?string, product_code?:?string} $filters
+     * With $cmpId — one of the companies this person owns, as Manage has verified — the company's legacy company-level
+     * licences are included too: everything that applies to that company, in one list with one cursor.
+     *
+     * @param array{status?:?string, product_code?:?string, is_basic?:?bool} $filters
      * @param array{d:string,id:int}|null $cursor
      * @return array{items: list<array<string,mixed>>, next_cursor: ?string}
      */
-    public function holderLicences(string $holder, array $filters, int $limit, ?array $cursor): array
+    public function holderLicences(string $holder, array $filters, int $limit, ?array $cursor, ?int $cmpId = null): array
     {
-        return $this->licencesWhere('l.holder_uuid = ?', $holder, $filters, $limit, $cursor);
+        [$sql, $binds] = self::holderScope('l', $holder, $cmpId);
+
+        return $this->licencesWhere($sql, $binds, $filters, $limit, $cursor);
     }
 
-    /** @return array{items: list<array<string,mixed>>, next_cursor: ?string} */
-    private function licencesWhere(string $subjectSql, int|string $subject, array $filters, int $limit, ?array $cursor): array
+    /**
+     * The licences of a holder, or of a holder and one of their companies.
+     *
+     * @return array{0:string, 1:list<int|string>}
+     */
+    private static function holderScope(string $a, string $holder, ?int $cmpId): array
+    {
+        return $cmpId === null ? ["{$a}.holder_uuid = ?", [$holder]] : ["({$a}.holder_uuid = ? OR {$a}.cmp_id = ?)", [$holder, $cmpId]];
+    }
+
+    /**
+     * @param list<int|string> $subjectBinds
+     * @return array{items: list<array<string,mixed>>, next_cursor: ?string}
+     */
+    private function licencesWhere(string $subjectSql, array $subjectBinds, array $filters, int $limit, ?array $cursor): array
     {
         $where = [$subjectSql, self::notCourseLicenceSql('l')];
-        $binds = [$subject];
+        $binds = $subjectBinds;
+        if (isset($filters['is_basic']) && is_bool($filters['is_basic'])) {
+            $where[] = $filters['is_basic'] ? 'l.is_basic' : 'NOT l.is_basic';
+        }
         if (! empty($filters['status'])) {
             // Filter on the status Manage is shown (a live licence past its end reads "expired").
             if ($filters['status'] === 'expired') {
@@ -89,19 +110,19 @@ class ManageReadService
         return $this->page($rows, $limit, [LicenceService::class, 'contractView']);
     }
 
-    /** One licence the holder holds; another holder's answers exactly like a missing one. */
-    public function holderLicence(string $holder, string $ref): ?array
+    /** One licence the holder holds (or, with $cmpId, their company holds); anyone else's answers like a missing one. */
+    public function holderLicence(string $holder, string $ref, ?int $cmpId = null): ?array
     {
-        $l = (new LicenceService($this->db()))->findForHolder($holder, $ref);
+        $l = (new LicenceService($this->db()))->findForHolder($holder, $ref, $cmpId);
 
         return $l && ! LicenceService::coversCourse($l) ? LicenceService::contractView($l) : null;
     }
 
     /** @return array<string,mixed>|null */
-    public function holderSeats(string $holder, string $ref): ?array
+    public function holderSeats(string $holder, string $ref, ?int $cmpId = null): ?array
     {
         $svc = new LicenceService($this->db());
-        $l = $svc->findForHolder($holder, $ref);
+        $l = $svc->findForHolder($holder, $ref, $cmpId);
         if (! $l || LicenceService::coversCourse($l)) {
             return null;
         }
@@ -115,15 +136,20 @@ class ManageReadService
     }
 
     /**
-     * Activity of every licence the holder holds, newest first (events are numbered per company, or per holder for a
-     * licence without one, so `seq` is informational here; the cursor orders the feed).
+     * Activity of every licence the holder holds (with $cmpId, and of that company's licences), newest first — or of one
+     * of those licences with $licenceRef. Events are numbered per company, or per holder for a licence without one, so
+     * `seq` is informational here; the cursor orders the feed.
      *
      * @return array{items: list<array<string,mixed>>, next_cursor: ?string}
      */
-    public function holderActivity(string $holder, int $limit, ?array $cursor): array
+    public function holderActivity(string $holder, int $limit, ?array $cursor, ?int $cmpId = null, ?string $licenceRef = null): array
     {
-        $where = ['e.licence_id IN (SELECT hl.id FROM engage_licences hl WHERE hl.holder_uuid = ? AND ' . self::notCourseLicenceSql('hl') . ')'];
-        $binds = [$holder];
+        [$scope, $binds] = self::holderScope('hl', $holder, $cmpId);
+        $where = ['e.licence_id IN (SELECT hl.id FROM engage_licences hl WHERE ' . $scope . ' AND ' . self::notCourseLicenceSql('hl') . ')'];
+        if ($licenceRef !== null) {
+            $where[] = 'e.licence_ref = ?';
+            $binds[] = $licenceRef;
+        }
         if ($cursor !== null) {
             $where[] = '(e.occurred_at, e.id) < (?::timestamptz, ?)';
             $binds[] = $cursor['d'];

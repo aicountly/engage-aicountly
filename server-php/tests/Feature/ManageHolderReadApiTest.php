@@ -71,6 +71,48 @@ final class ManageHolderReadApiTest extends LicensingTestCase
         $this->assertSame([], $this->data($this->s2s('get', 'manage/companies/42/licences'))['data']);
     }
 
+    /**
+     * What Manage's Licences tab asks for: everything that applies to one company of the owner — the owner's own
+     * licences and the company's legacy company-level ones — in one list, with the free Basic plans left out on request.
+     */
+    public function testWithACompanyTheListIncludesItsCompanyLicencesAndBasicCanBeLeftOut(): void
+    {
+        $this->configureManage();
+        $paid = $this->basicAndPaid();
+        $legacy = $this->issue(77);
+
+        $all = $this->data($this->s2s('get', 'manage/holders/10042/licences', 'cmp_id=77'));
+        $refs = array_column($all['data'], 'licence_ref');
+        $this->assertCount(3, $refs, 'the Basic, the paid plan and the company licence');
+        $this->assertContains($legacy['licence_ref'], $refs);
+        $this->assertContains($paid['licence_ref'], $refs);
+        $this->assertNotContains($legacy['licence_ref'], array_column($this->data($this->s2s('get', 'manage/holders/10042/licences'))['data'], 'licence_ref'),
+            'without cmp_id only the holder\'s own');
+
+        $bought = $this->data($this->s2s('get', 'manage/holders/10042/licences', 'cmp_id=77&is_basic=false'));
+        $this->assertEqualsCanonicalizing([$paid['licence_ref'], $legacy['licence_ref']], array_column($bought['data'], 'licence_ref'));
+        $this->assertSame([false, false], array_column($bought['data'], 'is_basic'));
+        $basic = $this->data($this->s2s('get', 'manage/holders/10042/licences', 'is_basic=true'));
+        $this->assertSame([true], array_column($basic['data'], 'is_basic'));
+
+        // Detail, seats and activity follow the same scope.
+        $this->assertSame(404, $this->code($this->s2s('get', 'manage/holders/10042/licences/' . $legacy['licence_ref'])));
+        $this->assertSame($legacy['licence_ref'], $this->data($this->s2s('get', 'manage/holders/10042/licences/' . $legacy['licence_ref'], 'cmp_id=77'))['data']['licence_ref']);
+        $this->assertSame(200, $this->code($this->s2s('get', 'manage/holders/10042/licences/' . $legacy['licence_ref'] . '/seats', 'cmp_id=77')));
+        $this->assertSame(404, $this->code($this->s2s('get', 'manage/holders/20077/licences/' . $paid['licence_ref'], 'cmp_id=78')), 'another holder, another company');
+
+        $one = $this->data($this->s2s('get', 'manage/holders/10042/activity', 'cmp_id=77&licence_ref=' . $legacy['licence_ref'] . '&limit=50'));
+        $this->assertNotSame([], $one['data']);
+        $this->assertSame([$legacy['licence_ref']], array_values(array_unique(array_column($one['data'], 'licence_ref'))));
+        $this->assertSame([], $this->data($this->s2s('get', 'manage/holders/10042/activity', 'licence_ref=' . $legacy['licence_ref']))['data'],
+            'a company licence is not in the holder\'s own feed');
+
+        foreach (['cmp_id=0', 'cmp_id=abc', 'is_basic=maybe'] as $q) {
+            $this->assertSame(400, $this->code($this->s2s('get', 'manage/holders/10042/licences', $q)), $q);
+        }
+        $this->assertSame(400, $this->code($this->s2s('get', 'manage/holders/10042/activity', 'licence_ref=' . str_repeat('x', 40))));
+    }
+
     public function testValidationAndKeys(): void
     {
         $this->configureManage(true);

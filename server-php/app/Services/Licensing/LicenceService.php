@@ -156,8 +156,10 @@ class LicenceService
             'issued_at'    => S::iso($l['created_at']),
             'updated_at'   => S::iso($l['updated_at']),
             'version'      => (int) $l['version'],
-            // Additive (docs/SELLING_LICENCES.md §8): the Aicountly seller this licence was sold through, or null.
+            // Additive (docs/SELLING_LICENCES.md §8): the Aicountly seller this licence was sold through, or null; and
+            // whether this is the free Basic plan of its app (D-L1), which Manage lists apart from licences bought.
             'sold_by'      => $soldBy,
+            'is_basic'     => EntitlementProjector::bool($l['is_basic'] ?? false),
         ];
     }
 
@@ -256,9 +258,12 @@ class LicenceService
     }
 
     /** Scoped read: another holder's licence is indistinguishable from a missing one. */
-    public function findForHolder(string $holder, string $ref): ?array
+    /** A licence the holder holds — or, with $cmpId, one of that company's (legacy company-level) licences. */
+    public function findForHolder(string $holder, string $ref, ?int $cmpId = null): ?array
     {
-        return $this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND l.holder_uuid = ?', [$ref, $holder])->getRowArray() ?: null;
+        return $cmpId === null
+            ? ($this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND l.holder_uuid = ?', [$ref, $holder])->getRowArray() ?: null)
+            : ($this->db()->query(self::SELECT . ' WHERE l.licence_ref = ? AND (l.holder_uuid = ? OR l.cmp_id = ?)', [$ref, $holder, $cmpId])->getRowArray() ?: null);
     }
 
     /** @return list<array<string,mixed>> */
