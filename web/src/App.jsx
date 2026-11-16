@@ -48,6 +48,7 @@ import CommissionPlans from './pages/sellers/CommissionPlans.jsx'
 import CommissionEntries from './pages/sellers/CommissionEntries.jsx'
 import ReachOutcomes from './pages/sellers/ReachOutcomes.jsx'
 import Payouts from './pages/sellers/Payouts.jsx'
+import SellerLicenceOrders from './pages/sellers/SellerLicenceOrders.jsx'
 
 // Licensing screens (docs/LICENSING.md) load on first use, keeping the main bundle as it was.
 const LicenceTypes = lazy(() => import('./pages/licensing/LicenceTypes.jsx'))
@@ -103,6 +104,7 @@ export default function App() {
         <Route path="/commission-entries" element={<CommissionEntries />} />
         <Route path="/reach-outcomes" element={<ReachOutcomes />} />
         <Route path="/seller-payouts" element={<Payouts />} />
+        <Route path="/seller-licence-orders" element={<SellerLicenceOrders />} />
         <Route path="/lead-sources" element={<LeadSources />} />
         <Route path="/campaigns" element={<Campaigns />} />
         <Route path="/token-conversions" element={lazyPage(<TokenConversions />)} />

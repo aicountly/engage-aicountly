@@ -8,3 +8,6 @@ export const PAYOUT_VIEW = ['super_admin', 'sales_manager']
 export const PAYOUT_ADMIN = ['super_admin']
 
 export const inr = (v) => (v === null || v === undefined || v === '' ? '—' : `₹${v}`)
+// Licences sellers bought (docs/SELLING_LICENCES.md §7): view, and confirm payment / cancel / withdraw a licence.
+export const SELLER_ORDER_VIEW = ['super_admin', 'sales_manager', 'seller_manager']
+export const SELLER_ORDER_ADMIN = ['super_admin', 'sales_manager']

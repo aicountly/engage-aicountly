@@ -4,6 +4,7 @@ import api, { pickRows } from '../../lib/api.js'
 import PageHeader from '../../components/PageHeader.jsx'
 import Drawer from '../../components/Drawer.jsx'
 import EntitlementCodePicker, { appKeysOf } from '../../components/EntitlementCodePicker.jsx'
+import { CHANNELS, ChannelChips, ChannelsDrawer, PriceHistoryDrawer, RevisePriceDrawer } from '../../components/OfferRevisionDrawers.jsx'
 import { ErrorNote, OfferStatusBadge, describeError } from '../../components/LicensingBits.jsx'
 import { useAuth } from '../../lib/auth.jsx'
 import { LICENSING_ADMIN, formatDateIN, formatPaise, paiseToRupees, parseJsonField, rupeesToPaise, termText } from '../../lib/licensing.js'
@@ -11,14 +12,16 @@ import { LICENSING_ADMIN, formatDateIN, formatPaise, paiseToRupees, parseJsonFie
 const EMPTY = {
   offer_code: '', product_code: '', licence_type_code: '', plan_code: '', label: '', description: '',
   price: '', price_basis: '', gst_rate: '', sac: '', term_months: 0, term_days: 0, seats: '', app_keys: '',
-  entitlementsText: '[]', displayText: '{}', valid_from: '', valid_to: '', is_default: false,
+  entitlementsText: '[]', displayText: '{}', valid_from: '', valid_to: '', is_default: false, channels: CHANNELS.map((c) => c.code),
 }
 
 const dateOnly = (iso) => (iso ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(iso)) : '')
 
 /**
  * The sellable catalogue. Every price, rate, SAC and term is typed by staff — nothing is pre-filled.
- * Versions: draft → published (immutable) → retired. Publishing a version retires the previous one.
+ * Versions: draft → published (immutable) → retired, or draft → scheduled → published for a price revision with an
+ * effective date: the current price stays on sale until then (docs/SELLING_LICENCES.md §4). Channels decide where a
+ * version is sold: website, Manage, seller portal.
  */
 export default function Offers() {
   const qc = useQueryClient()
@@ -27,6 +30,10 @@ export default function Offers() {
   const [draft, setDraft] = useState(null)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState('')
+  const [revising, setRevising] = useState(null)
+  const [historyOf, setHistoryOf] = useState(null)
+  const [channelsOf, setChannelsOf] = useState(null)
+  const [notice, setNotice] = useState(null)
   const offers = useQuery({ queryKey: ['offers', status], queryFn: () => api.get('/v1/offers', { params: status ? { status } : {} }).then((r) => r.data?.data?.items || []) })
   const products = useQuery({ queryKey: ['products'], queryFn: () => api.get('/v1/products').then(pickRows) })
   const plans = useQuery({ queryKey: ['plans'], queryFn: () => api.get('/v1/plans').then(pickRows) })
@@ -57,7 +64,7 @@ export default function Offers() {
         seats: d.seats === '' ? null : Number(d.seats), app_keys: d.app_keys,
         entitlements: parseJsonField(d.entitlementsText, 'Entitlements', { expect: 'array' }),
         display: parseJsonField(d.displayText, 'Display'),
-        valid_from: d.valid_from || null, valid_to: d.valid_to || null, is_default: !!d.is_default,
+        valid_from: d.valid_from || null, valid_to: d.valid_to || null, is_default: !!d.is_default, channels: d.channels || [],
       }
       return (d.id ? api.put(`/v1/offers/${d.id}`, body) : api.post('/v1/offers', { ...body, offer_code: d.offer_code })).then((r) => r.data?.data)
     },
@@ -75,7 +82,7 @@ export default function Offers() {
     price_basis: o.price_basis, gst_rate: o.gst_rate, sac: o.sac || '', term_months: o.term_months, term_days: o.term_days,
     seats: o.seats ?? '', app_keys: (o.app_keys || []).join(', '), entitlementsText: JSON.stringify(o.entitlements || [], null, 2),
     displayText: JSON.stringify(o.display || {}, null, 2), valid_from: dateOnly(o.valid_from), valid_to: dateOnly(o.valid_to),
-    is_default: !!o.is_default,
+    is_default: !!o.is_default, channels: o.channels || [],
   })
   const set = (k) => (e) => setDraft({ ...draft, [k]: e.target.value })
 
@@ -86,12 +93,13 @@ export default function Offers() {
         subtitle="Versioned catalogue Manage shows to customers. Published versions are immutable; change an offer by publishing a new version."
         actions={<>
           <select className="engage-input w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All statuses</option><option value="draft">Draft</option><option value="published">Published</option><option value="retired">Retired</option>
+            <option value="">All statuses</option><option value="draft">Draft</option><option value="scheduled">Scheduled</option><option value="published">Published</option><option value="retired">Retired</option>
           </select>
           {canEdit ? <button className="engage-btn-primary" onClick={() => { setError(null); setDraft({ ...EMPTY }) }}>+ New offer</button> : null}
         </>}
       />
       <ErrorNote error={!draft ? error : null} />
+      {notice ? <div className="mb-4 rounded-md bg-green-50 border border-green-200 text-green-900 text-sm px-3 py-2">{notice} <button className="engage-btn-secondary ml-2 text-xs" onClick={() => setNotice(null)}>Dismiss</button></div> : null}
       <BasicReadinessNote data={readiness.data} />
       {!offers.isLoading && grouped.length === 0 ? (
         <div className="engage-card text-sm text-neutral-600">
@@ -101,7 +109,10 @@ export default function Offers() {
       <div className="space-y-3">
         {grouped.map(([code, versions]) => (
           <div key={code} className="engage-card">
-            <div className="font-mono text-xs text-neutral-500 mb-2">{code}</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-mono text-xs text-neutral-500">{code}</div>
+              <button className="text-xs text-aicountly-700 hover:underline" onClick={() => setHistoryOf(code)}>Price history</button>
+            </div>
             <div className="space-y-2">
               {versions.map((o) => (
                 <div key={o.id} className="border border-neutral-100 rounded-md p-3">
@@ -110,6 +121,8 @@ export default function Offers() {
                       <span className="font-semibold">{o.label}</span>
                       <span className="font-mono text-xs">v{o.version}</span>
                       <OfferStatusBadge status={o.status} />
+                      {o.on_sale_now ? <span className="engage-pill bg-green-50 text-green-800 border-green-200">On sale now</span> : null}
+                      {o.status === 'scheduled' && !o.on_sale_now ? <span className="text-xs text-sky-800">takes effect {formatDateIN(o.valid_from)}</span> : null}
                       {o.is_default ? <span className="engage-pill bg-aicountly-50 text-aicountly-800 border-aicountly-200">Basic (default)</span> : null}
                     </div>
                     {canEdit ? (
@@ -117,8 +130,24 @@ export default function Offers() {
                         {o.status === 'draft' ? <>
                           <button className="engage-btn-secondary text-xs" onClick={() => { setError(null); edit(o) }}>Edit</button>
                           <button className="engage-btn-secondary text-xs" onClick={() => { if (window.confirm(`Discard draft ${code} v${o.version}?`)) act.mutate({ id: o.id, action: 'discard' }) }}>Discard</button>
-                          <button className="engage-btn-primary text-xs" onClick={() => { if (window.confirm(`Publish ${code} v${o.version}? It becomes immutable and goes on sale${versions.some((x) => x.status === 'published') ? '; the current published version is retired' : ''}.`)) act.mutate({ id: o.id, action: 'publish' }) }}>Publish</button>
+                          <button className="engage-btn-primary text-xs" onClick={() => {
+                            const future = o.valid_from && new Date(o.valid_from).getTime() > Date.now()
+                            const msg = future
+                              ? `Schedule ${code} v${o.version} to take effect on ${formatDateIN(o.valid_from)}? It becomes immutable; the version on sale now stays on sale until then.`
+                              : `Publish ${code} v${o.version}? It becomes immutable and goes on sale${versions.some((x) => x.status === 'published') ? '; the current published version is retired' : ''}.`
+                            if (window.confirm(msg)) act.mutate({ id: o.id, action: 'publish' })
+                          }}>{o.valid_from && new Date(o.valid_from).getTime() > Date.now() ? 'Schedule' : 'Publish'}</button>
                         </> : null}
+                        {o.on_sale_now && !versions.some((x) => x.status === 'draft' || (x.status === 'scheduled' && !x.on_sale_now)) ? (
+                          <button className="engage-btn-primary text-xs" onClick={() => { setError(null); setRevising(o) }}>Revise price</button>
+                        ) : null}
+                        {o.status === 'scheduled' && !o.on_sale_now ? (
+                          <button className="engage-btn-danger text-xs" onClick={() => {
+                            const reason = window.prompt(`Cancel the revision ${code} v${o.version} (due ${formatDateIN(o.valid_from)})? Say why:`)
+                            if (reason) act.mutate({ id: o.id, action: 'cancel-schedule', body: { reason } })
+                          }}>Cancel revision</button>
+                        ) : null}
+                        {o.status !== 'retired' && o.status !== 'draft' ? <button className="engage-btn-secondary text-xs" onClick={() => setChannelsOf(o)}>Channels</button> : null}
                         {o.status !== 'draft' && !versions.some((x) => x.status === 'draft') ? <button className="engage-btn-secondary text-xs" onClick={() => act.mutate({ id: o.id, action: 'new-version' })}>New version</button> : null}
                         {o.status !== 'retired' ? (
                           <button className="engage-btn-secondary text-xs" onClick={() => {
@@ -141,7 +170,10 @@ export default function Offers() {
                     <div><span className="text-neutral-400">Seats:</span> {o.seats ?? 'No limit'}</div>
                     <div><span className="text-neutral-400">Apps:</span> {(o.app_keys || []).join(', ')}</div>
                     <div><span className="text-neutral-400">On sale:</span> {o.valid_from ? formatDateIN(o.valid_from) : 'now'} → {o.valid_to ? formatDateIN(o.valid_to) : 'open'}</div>
+                    <div className="col-span-2"><span className="text-neutral-400">Sold on:</span> <ChannelChips channels={o.channels} /></div>
                   </div>
+                  {o.revision_note ? <div className="mt-1 text-xs text-neutral-600"><span className="text-neutral-400">Why:</span> {o.revision_note}</div> : null}
+                  {o.retired_reason ? <div className="mt-1 text-xs text-neutral-500">{o.retired_reason}</div> : null}
                   {o.entitlements?.length ? <div className="mt-1 text-xs text-neutral-600">{o.entitlements.map((e) => `${e.label}${e.value !== null && e.value !== undefined ? `: ${e.value}${e.unit ? ' ' + e.unit : ''}` : ''}`).join(' · ')}</div> : null}
                 </div>
               ))}
@@ -189,8 +221,21 @@ export default function Offers() {
           <div className="text-xs text-neutral-500 -mt-2">Term 0 months + 0 days = no end date. App keys are Manage's keys (books, inventory, billing, notes, docs …); publishing refuses a key Manage does not know. A priced offer needs a SAC of the form 99xxxx.</div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!draft.is_default} onChange={(e) => setDraft({ ...draft, is_default: e.target.checked })} /> Basic (default) plan of this product — free, no end date, complimentary type; every signed-up user gets it (one published per product)</label>
           <div className="grid grid-cols-2 gap-3">
-            <div><div className="engage-label">On sale from (optional)</div><input className="engage-input" type="date" value={draft.valid_from} onChange={set('valid_from')} /></div>
+            <div><div className="engage-label">On sale from / with effect from (optional)</div><input className="engage-input" type="date" value={draft.valid_from} onChange={set('valid_from')} /></div>
             <div><div className="engage-label">On sale until (optional)</div><input className="engage-input" type="date" value={draft.valid_to} onChange={set('valid_to')} /></div>
+          </div>
+          <div className="text-xs text-neutral-500 -mt-2">A future date schedules this version: the version on sale now stays on sale until 00:00 IST that day, then this one replaces it. For a price change alone, use <b>Revise price</b> on the version on sale.</div>
+          <div>
+            <div className="engage-label">Sold on</div>
+            <div className="flex flex-wrap gap-4">
+              {CHANNELS.map((c) => (
+                <label key={c.code} className="flex items-center gap-2 text-sm" title={c.help}>
+                  <input type="checkbox" checked={(draft.channels || []).includes(c.code)}
+                    onChange={(e) => setDraft({ ...draft, channels: e.target.checked ? [...(draft.channels || []), c.code] : (draft.channels || []).filter((x) => x !== c.code) })} />
+                  {c.label}
+                </label>
+              ))}
+            </div>
           </div>
           <div>
             <div className="engage-label">Entitlements (JSON list of {'{code, label, value, unit}'}; absent code = unlimited)</div>
@@ -207,6 +252,15 @@ export default function Offers() {
           </div>
         </> : null}
       </Drawer>
+      <RevisePriceDrawer offer={revising} onClose={() => setRevising(null)} onDone={(d) => {
+        setRevising(null)
+        setNotice(d.status === 'scheduled'
+          ? `${d.offer_code} v${d.version} is scheduled: ${formatPaise(d.price_paise)} with effect from ${formatDateIN(d.valid_from)}.`
+          : `${d.offer_code} v${d.version} is on sale now at ${formatPaise(d.price_paise)}.`)
+        invalidate()
+      }} />
+      <PriceHistoryDrawer code={historyOf} onClose={() => setHistoryOf(null)} />
+      <ChannelsDrawer offer={channelsOf} onClose={() => setChannelsOf(null)} onDone={() => { setChannelsOf(null); invalidate() }} />
     </>
   )
 }

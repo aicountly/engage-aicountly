@@ -40,6 +40,39 @@ final class FinanceLinkClient
     }
 
     /**
+     * Aicountly's own GST state as the supplier (ENGAGE_GST_STATE_CODE, two digits), or null when unset. Finance's
+     * payment-link check recomputes the split for the payer's state — CGST + SGST within the supplier's state, IGST
+     * otherwise — and refuses any other figures (422 fee_breakdown_mismatch), so Engage has to know it.
+     */
+    public static function supplierStateCode(): ?string
+    {
+        $s = trim((string) env('ENGAGE_GST_STATE_CODE', ''));
+
+        return preg_match('/\A\d{2}\z/', $s) === 1 ? $s : null;
+    }
+
+    /**
+     * [cgst, sgst, igst] of a tax amount for a payer in $payerState, exactly as Finance's GstCalculator::split:
+     * same state → SGST = floor(tax / 2) and CGST the rest (CGST carries the odd paisa); otherwise IGST. Without
+     * ENGAGE_GST_STATE_CODE the answer is [0, 0, 0] — what Engage sent before, which Finance refuses for a taxed line.
+     *
+     * @return array{0:int, 1:int, 2:int}
+     */
+    public static function split(int $tax, string $payerState): array
+    {
+        $supplier = self::supplierStateCode();
+        if ($supplier === null) {
+            return [0, 0, 0];
+        }
+        if ($supplier !== $payerState) {
+            return [0, 0, $tax];
+        }
+        $sgst = intdiv($tax, 2);
+
+        return [$tax - $sgst, $sgst, 0];
+    }
+
+    /**
      * @param array<string,mixed> $request what TokenOrderService::financeRequest() built
      * @return array{ok:bool, link:?array<string,mixed>, code:?string, message:?string}
      */
