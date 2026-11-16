@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Services\Seller;
 
+use App\Libraries\Email\AicountlyEmailConfig;
 use App\Libraries\Email\EmailDispatcher;
 
 /**
@@ -17,6 +18,9 @@ use App\Libraries\Email\EmailDispatcher;
  *             When Console gives no provider (not configured, refused, unreachable with no usable cache, or an
  *             empty list), Engage's own SMTP below is used if it is configured. When Console's providers were
  *             tried and none accepted, nothing else is tried: the answer is not sent, with each provider's reason.
+ *             With ENGAGE_EMAIL_PROVIDER=aicountly_email the "providers" are AICOUNTLY's central delivery API only
+ *             (transactional, Idempotency-Key = engage.<the caller's key>; Libraries/Email/AicountlyEmailTransport),
+ *             and Console need not be configured.
  *   smtp    — only CodeIgniter Email over ENGAGE_SMTP_HOST / _PORT / _USER / _PASS / _CRYPTO, from ENGAGE_MAIL_FROM.
  *   console_notify — DEPRECATED, explicit opt-in only: POST {CONSOLE_API_URL}/portal/notifications/send with
  *             notify.send + notify.direct. Engage's Console caller holds neither and Console delivers notify to
@@ -67,6 +71,12 @@ class SellerMailer
         return $this->consoleBase() !== '' && trim((string) env('CONSOLE_API_TOKEN', '')) !== '';
     }
 
+    /** ENGAGE_EMAIL_PROVIDER=aicountly_email: the dispatcher sends through the central delivery API, not Console. */
+    private static function aicountlyEmailSelected(): bool
+    {
+        return (new AicountlyEmailConfig())->selected();
+    }
+
     private static function smtpConfigured(): bool
     {
         return trim((string) env('ENGAGE_SMTP_HOST', '')) !== '' && trim((string) env('ENGAGE_MAIL_FROM', '')) !== '';
@@ -76,7 +86,7 @@ class SellerMailer
     public function channel(): ?string
     {
         return match (self::mode()) {
-            'console_providers' => $this->consoleConfigured() ? 'console_providers' : (self::smtpConfigured() ? 'smtp' : null),
+            'console_providers' => $this->consoleConfigured() || self::aicountlyEmailSelected() ? 'console_providers' : (self::smtpConfigured() ? 'smtp' : null),
             'smtp'              => self::smtpConfigured() ? 'smtp' : null,
             'console_notify'    => $this->consoleConfigured() ? 'console_notify' : null,
             default             => null,
@@ -94,7 +104,12 @@ class SellerMailer
         $mode = self::mode();
         $channel = $this->channel();
         if ($channel === 'console_providers') {
-            $line = $this->dispatcher()->resolver()->summary()['line'];
+            $summary = $this->dispatcher()->resolver()->summary();
+            $line    = $summary['line'];
+            if ($summary['source'] === AicountlyEmailConfig::PROVIDER_CODE || self::aicountlyEmailSelected()) {
+                return ($summary['providers'] !== [] ? 'ok' : 'not sending') . ' (AICOUNTLY Email delivery API: ' . $line
+                    . (self::smtpConfigured() ? '; SMTP fallback when it is not configured' : '') . ')';
+            }
 
             return 'ok (Console providers: ' . $line . (self::smtpConfigured() ? '; SMTP fallback when Console has none' : '') . ')';
         }
@@ -123,7 +138,7 @@ class SellerMailer
         }
         try {
             return match ($channel) {
-                'console_providers' => $this->viaProviders($trigger, $email, $name, $vars, ! empty($opts['resend'])),
+                'console_providers' => $this->viaProviders($trigger, $email, $name, $vars, ! empty($opts['resend']), $idempotencyKey),
                 'console_notify'    => $this->viaConsole($trigger, $email, $name, $vars, $idempotencyKey),
                 default             => $this->viaSmtp($trigger, $email, $name, $vars),
             };
@@ -145,7 +160,7 @@ class SellerMailer
     }
 
     /** @return array{sent:bool, channel:string, reason:?string, provider:?string} */
-    private function viaProviders(string $trigger, string $email, string $name, array $vars, bool $resend): array
+    private function viaProviders(string $trigger, string $email, string $name, array $vars, bool $resend, string $idempotencyKey = ''): array
     {
         $resolved = $this->dispatcher()->resolver()->resolve();
         if ($resolved['providers'] === []) {
@@ -161,8 +176,12 @@ class SellerMailer
         [$subject, $text] = self::compose($trigger, $vars);
         $html = '<p>' . str_replace("\n", "<br>\n", htmlspecialchars($text, ENT_QUOTES | ENT_HTML5, 'UTF-8')) . '</p>';
         $r = $this->dispatcher()->send([['email' => $email, 'name' => $name]], $subject, $html, $text, [
-            'resend'    => $resend,
-            'from_name' => self::fromName(),
+            'resend'          => $resend,
+            'from_name'       => self::fromName(),
+            // AICOUNTLY Email provider only: the same key always means the same message (a retry never sends twice).
+            'idempotency_key' => $idempotencyKey,
+            'category'        => 'transactional',
+            'template_ref'    => 'engage.' . $trigger,
         ]);
         if ($r['ok']) {
             return ['sent' => true, 'channel' => 'console_providers', 'reason' => null, 'provider' => $r['provider']];
