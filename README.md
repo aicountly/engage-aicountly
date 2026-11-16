@@ -27,6 +27,7 @@ Engage integrates with:
 | `www.aicountly.com` | Website catalogue: `GET /api/v1/website/catalogue` (AIC-S2S v1, client `website`, a read key; 503 until configured) — the plans on sale on the website channel, with GST and any price revision already scheduled — see [docs/SELLING_LICENCES.md § 6](docs/SELLING_LICENCES.md) | `ENGAGE_INBOUND_WEBSITE_KEY_IDS`, `ENGAGE_INBOUND_WEBSITE_SECRET_<KEYID>`, `ENGAGE_INBOUND_WEBSITE_SCOPE_<KEYID>=read` |
 | `finance.aicountly.org` | Payment events (`POST /api/v1/inbound/finance/payment-events`, AIC-S2S v1 client `finance` or `X-Finance-Key`) settle token orders and sellers' licence orders; payment links for sellers' licence orders (`purpose: licences`; `ENGAGE_SELLER_ORDER_PAYMENT_LINKS=1` once finance-aicountly migration 009 is deployed) — see [docs/SELLING_LICENCES.md § 9](docs/SELLING_LICENCES.md) | `ENGAGE_INBOUND_FINANCE_KEY_IDS`, `ENGAGE_INBOUND_FINANCE_SECRET_<KEYID>`, `ENGAGE_INBOUND_FINANCE_SCOPE_<KEYID>=issue`, `ENGAGE_GST_STATE_CODE`, `ENGAGE_SELLER_ORDER_PAYMENT_LINKS` |
 | `seller.aicountly.com` | Seller portal BFF → `/api/v1/seller-portal/*` (sellers, KYC, leads, commissions, payouts; buying licences and applying them to customers — [docs/SELLING_LICENCES.md § 7](docs/SELLING_LICENCES.md)) — see [docs/SELLER_PROGRAM.md](docs/SELLER_PROGRAM.md) | `SELLER_PORTAL_KEY`, `ENGAGE_DATA_KEY`, `ENGAGE_SELLER_DOCS_PATH`, `ENGAGE_SELLER_MAILER` (default `console_providers`: seller emails go through Console's email providers for `app_code=engage`, `CONSOLE_API_TOKEN` with `email.credentials`; `ENGAGE_SMTP_*` is the last resort — [docs/SELLER_PROGRAM.md § 10](docs/SELLER_PROGRAM.md)) |
+| `email.apis.aicountly.com` | AICOUNTLY Email central delivery API — **off by default**; `ENGAGE_EMAIL_PROVIDER=aicountly_email` sends Engage's own mail (`transactional`) and a company's mail from its verified domain (`business`) through `POST /v1/service/deliveries`; signed delivery events back on `POST /api/v1/inbound/email/delivery-events` — see [AICOUNTLY Email](#aicountly-email-central-delivery-api) | `ENGAGE_EMAIL_PROVIDER`, `AICOUNTLY_EMAIL_API_BASE_URL`, `AICOUNTLY_EMAIL_SERVICE_KEY`, `AICOUNTLY_EMAIL_WEBHOOK_SECRET` |
 
 ## Repository layout
 
@@ -444,6 +445,40 @@ audited and mirrored to Console.
   date (**Revise price** on an offer; `engage:offers-activate` every minute), where each offer is sold (website /
   Manage / seller), the website catalogue for www.aicountly.com, staff adding a seller directly, and sellers buying
   licences and applying them to their customers' accounts for commission (Sellers → **Licence orders**).
+- **AICOUNTLY Email** — see below.
+
+### AICOUNTLY Email (central delivery API)
+
+Contract: email-aicountly `docs/DELIVERY_API.md`. Selected only by configuration; with
+`ENGAGE_EMAIL_PROVIDER` unset or `console` nothing changes (Console's providers, as above).
+
+With `ENGAGE_EMAIL_PROVIDER=aicountly_email` every mail that goes through `EmailDispatcher`
+(seller activation / reset / sign-in codes under `ENGAGE_SELLER_MAILER=console_providers`, and
+`Gateways\Mailer`) is sent **only** to `POST {AICOUNTLY_EMAIL_API_BASE_URL}/service/deliveries`
+(`Libraries/Email/AicountlyEmailTransport`), as Engage itself (`X-Service-Key`, no actor):
+
+- **Category**: `transactional` (From `no-reply@aicountly.io`; `ENGAGE_MAIL_FROM` becomes the Reply-To),
+  or `business` when the caller passes `cmp_id` + `from_domain` (+ `from_local_part`) — a company's own
+  mail from one of its verified domains. Engage never sends `marketing`.
+- **Idempotency-Key**: `engage.<caller key>` (seller mail: `engage.seller-otp-<id>` etc.), else a hash of
+  the message — a retry never sends twice.
+- **Retries**: 429 / 503 / 5xx / no answer are retried with the **same** key (`AICOUNTLY_EMAIL_MAX_ATTEMPTS`,
+  waits Retry-After up to `AICOUNTLY_EMAIL_MAX_RETRY_WAIT`); 400 / 401 / 403 / 409 / 422 are not.
+  Executable attachments (`.exe .js .bat .ps1 .lnk .iso …`) are refused before any request.
+- **Events**: register the webhook once and store the secret it shows:
+
+  ```
+  curl -X PUT {AICOUNTLY_EMAIL_API_BASE_URL}/service/delivery-webhook \
+       -H "X-Service-Key: $AICOUNTLY_EMAIL_SERVICE_KEY" -H 'Content-Type: application/json' \
+       -d '{"url":"https://engage.aicountly.org/api/v1/inbound/email/delivery-events"}'
+  # → {"secret": "…"}  →  AICOUNTLY_EMAIL_WEBHOOK_SECRET
+  ```
+
+  Events are verified (`X-Aicountly-Signature` HMAC over `timestamp.raw_body`, 5-minute window), stored
+  once per `event_id` in `engage_email_delivery_events`, and applied to `engage_email_deliveries`
+  (summary + per-recipient status, DSN and bounce class; a late event never regresses a stronger state).
+
+Email side: `SERVICE_KEYS` holds `engage:<key>`; `DELIVERY_PRODUCTS` includes `engage:transactional,business`.
 
 ## Response contract
 
