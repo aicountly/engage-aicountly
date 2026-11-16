@@ -10,7 +10,8 @@ use App\Libraries\Email\EmailDispatcher;
  * Engage's transactional email — a facade over EmailDispatcher (copied from reach-aicountly).
  *
  * Providers come from Console's central registry (GET {CONSOLE_API_URL}/portal/email/providers,
- * cached; EmailProviderResolver). A normal send tries the primary, then each fallback; a resend
+ * cached; EmailProviderResolver), or — with ENGAGE_EMAIL_PROVIDER=aicountly_email — AICOUNTLY's central
+ * delivery API only (AicountlyEmailTransport). A normal send tries the primary, then each fallback; a resend
  * (opts['resend'] = true) tries the fallback first. When Console has no provider to give, nothing is
  * sent here; SellerMailer then falls back to Engage's own ENGAGE_SMTP_* settings.
  *
@@ -79,7 +80,11 @@ final class Mailer
 
     /**
      * @param string|array<int,array{email:string,name?:string}> $to
-     * @param array{resend?:bool, headers?:array<string,string>, reply_to?:string, from_name?:string} $opts
+     * @param array{resend?:bool, headers?:array<string,string>, reply_to?:string, from_name?:string, idempotency_key?:string,
+     *              category?:string, cmp_id?:int, from_domain?:string, from_local_part?:string, template_ref?:string,
+     *              send_at?:string, attachments?:list<array<string,string>>} $opts
+     *        the delivery options after from_name apply to the AICOUNTLY Email provider (ENGAGE_EMAIL_PROVIDER=aicountly_email):
+     *        category business + cmp_id + from_domain (+ from_local_part) sends a company's mail from its verified domain.
      */
     public static function send(string|array $to, string $subject, string $body, ?string $plainText = null, array $opts = []): bool
     {

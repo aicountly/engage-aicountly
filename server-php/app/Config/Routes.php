@@ -138,6 +138,10 @@ $routes->group('v1', static function ($routes) {
     // token order this is the signal that tokens may be granted.
     $routes->post('inbound/finance/payment-events', 'Inbound\\FinanceController::paymentEvents', ['filter' => 'finance-inbound']);
 
+    // AICOUNTLY Email → Engage: signed delivery events (X-Aicountly-Signature over the raw body; no filter).
+    // Register with PUT {AICOUNTLY_EMAIL_API_BASE_URL}/service/delivery-webhook; secret → AICOUNTLY_EMAIL_WEBHOOK_SECRET.
+    $routes->post('inbound/email/delivery-events', 'Inbound\\EmailDeliveryController::events');
+
     // manage.aicountly.com (server side) → Engage licensing reads (commerce contract v1 §4, docs/LICENSING.md).
     // AIC-S2S v1 HMAC (filter aic-s2s:manage); 503 inbound_not_configured until ENGAGE_S2S_ENVIRONMENT and a
     // ENGAGE_INBOUND_MANAGE_* key are set. Read keys may only GET; no write route exists in Phase A.

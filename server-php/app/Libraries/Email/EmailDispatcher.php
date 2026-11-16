@@ -23,9 +23,16 @@ namespace App\Libraries\Email;
  * the display name is opts from_name, else ENGAGE_MAIL_FROM_NAME, else the provider's from_name.
  *
  * Options: resend (bool), from_email, from_name, reply_to, headers (SMTP only, e.g. List-Unsubscribe).
+ * AICOUNTLY Email provider only (ENGAGE_EMAIL_PROVIDER=aicountly_email; other providers ignore them, passed as msg
+ * `delivery`): idempotency_key (stable per message), category (transactional | business), cmp_id, from_domain,
+ * from_local_part (business mail from the company's verified domain), template_ref, send_at,
+ * attachments [{filename, content_type, content_base64 | content}].
  */
 final class EmailDispatcher
 {
+    /** Options handed to the transport as msg['delivery'] (used by the AICOUNTLY Email provider). */
+    public const DELIVERY_OPTIONS = ['idempotency_key', 'category', 'cmp_id', 'from_domain', 'from_local_part', 'template_ref', 'send_at', 'attachments', 'resend'];
+
     private static ?self $instance = null;
 
     private EmailProviderResolver $resolver;
@@ -37,9 +44,11 @@ final class EmailDispatcher
     public function __construct(?EmailProviderResolver $resolver = null, ?callable $transportFactory = null)
     {
         $this->resolver         = $resolver ?? new EmailProviderResolver();
-        $this->transportFactory = $transportFactory ?? static fn (array $provider): object => $provider['type'] === 'smtp'
-            ? new SmtpProviderTransport()
-            : new HttpApiProviderTransport();
+        $this->transportFactory = $transportFactory ?? static fn (array $provider): object => match ($provider['type']) {
+            'smtp'                                => new SmtpProviderTransport(),
+            AicountlyEmailConfig::PROVIDER_CODE   => new AicountlyEmailTransport(),
+            default                               => new HttpApiProviderTransport(),
+        };
     }
 
     public static function instance(): self
@@ -188,6 +197,7 @@ final class EmailDispatcher
             'from_name'   => $fromName,
             'reply_to'    => $replyTo,
             'headers'     => is_array($opts['headers'] ?? null) ? $opts['headers'] : [],
+            'delivery'    => array_intersect_key($opts, array_flip(self::DELIVERY_OPTIONS)),
         ];
     }
 

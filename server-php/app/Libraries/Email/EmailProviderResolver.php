@@ -74,10 +74,21 @@ final class EmailProviderResolver
     /**
      * @return array{providers: list<array{code:string,type:string,priority:int,config:array<string,scalar|null>,secret:string,source:string}>,
      *               source: string, ttl_seconds: int, note: ?string}
-     *         source: console | console_stale | none
+     *         source: console | console_stale | aicountly_email | none
      */
     public function resolve(): array
     {
+        // ENGAGE_EMAIL_PROVIDER=aicountly_email: AICOUNTLY's central delivery API only (no Console lookup, no
+        // fallback to Console's providers). Unset / "console": unchanged.
+        $aicountly = new AicountlyEmailConfig($this->env);
+        if ($aicountly->selected()) {
+            $problem = $aicountly->problem();
+
+            return $problem === null
+                ? ['providers' => [$aicountly->provider()], 'source' => AicountlyEmailConfig::PROVIDER_CODE, 'ttl_seconds' => 0, 'note' => null]
+                : $this->noneResult('ENGAGE_EMAIL_PROVIDER=aicountly_email but ' . $problem);
+        }
+
         $base  = $this->consoleBase();
         $token = ($this->env)('CONSOLE_API_TOKEN');
         if ($base === '' || $token === '') {
