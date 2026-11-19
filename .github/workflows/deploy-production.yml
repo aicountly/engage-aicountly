@@ -34,6 +34,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify S01 deployment target
+        id: s01_target
+        env:
+          AIC_S01_TARGETS: '[{"domain":"engage.aicountly.org","account":"engageaicountly","root":"/home/engageaicountly/public_html","verified_blueprint":true,"ssh_login":"aicdc31bb7b20ace554c"}]'
+          AIC_TARGET_PROD_SFTP_HOST: ${{ secrets.PROD_SFTP_HOST }}
+          AIC_TARGET_PROD_SFTP_PORT: ${{ secrets.PROD_SFTP_PORT }}
+          AIC_TARGET_PROD_SFTP_REMOTE_ROOT: ${{ secrets.PROD_SFTP_REMOTE_ROOT }}
+          AIC_TARGET_PROD_SFTP_USER: ${{ secrets.PROD_SFTP_USER }}
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/s01-target-guard.py"
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
@@ -101,9 +111,9 @@ jobs:
           fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          if ! ssh-keyscan -T 15 -p "$PROD_SFTP_PORT" "$PROD_SFTP_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
-            echo "::warning::ssh-keyscan could not reach $PROD_SFTP_HOST:$PROD_SFTP_PORT — falling back to StrictHostKeyChecking=accept-new"
-            printf 'Host %s\n  Port %s\n  StrictHostKeyChecking accept-new\n' "$PROD_SFTP_HOST" "$PROD_SFTP_PORT" >> ~/.ssh/config
+          if ! python3 "$GITHUB_WORKSPACE/.github/scripts/s01-keyscan.py" -T 15 -p "$PROD_SFTP_PORT" "$PROD_SFTP_HOST" > ~/.ssh/known_hosts 2>/dev/null; then
+            { echo "::error::S01 host-key verification failed; deployment stopped."; exit 1; }
+            { echo "::error::S01 host-key verification failed; deployment stopped."; exit 1; }
             chmod 600 ~/.ssh/config
           fi
 
@@ -177,6 +187,7 @@ jobs:
       # with, replacing a hand-pasted `spark engage:console-audit-deliver` line. The job reports to
       # Console's Cron Job Monitor (engage.console_audit_deliver), so one that stops shows up OVERDUE.
       - name: Scheduled jobs (crontab + Cron Job Monitor key)
+        if: ${{ vars.S01_WEB_ONLY == '0' }}
         working-directory: .
         env:
           CONSOLE_CRON_MONITOR_KEY: ${{ secrets.CONSOLE_CRON_MONITOR_KEY }}
@@ -190,7 +201,7 @@ jobs:
           rc=${PIPESTATUS[1]}
           set -e
           case "$rc" in
-            0)  echo "Scheduled jobs installed; heartbeats go to Console's Cron Job Monitor." ;;
+            0)  echo "Scheduled-job hook completed; see its output above for installed or deferred status." ;;
             20) echo "::warning::The jobs are installed, but api/.env has no CONSOLE_CRON_MONITOR_KEY and the repo secret is empty — they run without reporting, so Console shows them OVERDUE. Add the CONSOLE_CRON_MONITOR_KEY repository secret and deploy again." ;;
             21) echo "::error::The crontab could not be installed on the host (output above). The release is live; the jobs are not scheduled."; exit 1 ;;
             *)  echo "::error::post-deploy-jobs.sh failed (exit $rc, output above)."; exit 1 ;;
