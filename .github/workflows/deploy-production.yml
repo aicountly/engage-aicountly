@@ -199,9 +199,11 @@ jobs:
       # ON THE SERVER (ops kit, identical to console-react-app ops/estate/kit): writes the Cron Job
       # Monitor key (repo secret CONSOLE_CRON_MONITOR_KEY, sent on STDIN, never an argument) into
       # api/.env — Console's production refuses the shared CONSOLE_SERVICE_KEY for heartbeats — then
-      # installs server-php/bin/ops/jobs.txt into the crontab with the PHP CLI the migrations above ran
-      # with, replacing a hand-pasted `spark engage:console-audit-deliver` line. The job reports to
-      # Console's Cron Job Monitor (engage.console_audit_deliver), so one that stops shows up OVERDUE.
+      # installs server-php/bin/ops/jobs.txt into the crontab, replacing a hand-pasted
+      # `spark engage:console-audit-deliver` line. The job reports to Console's Cron Job Monitor
+      # (engage.console_audit_deliver), so one that stops shows up OVERDUE. No --php: S01's deploy
+      # sandbox has no `php` on PATH, and the kit's own search (Remi /opt/remi/php8x first, PHP with
+      # jobs.txt's php-ext: pgsql) finds the same CLI the migrations above ran with.
       - name: Scheduled jobs (crontab + Cron Job Monitor key)
         if: ${{ vars.S01_WEB_ONLY == '0' }}
         working-directory: .
@@ -212,7 +214,7 @@ jobs:
           set +e
           printf '%s' "$CONSOLE_CRON_MONITOR_KEY" \
             | ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" \
-                "bash '${REMOTE_ROOT}/api/bin/ops/post-deploy-jobs.sh' --php=php" \
+                "bash '${REMOTE_ROOT}/api/bin/ops/post-deploy-jobs.sh'" \
             | tee /tmp/jobs.out
           rc=${PIPESTATUS[1]}
           set -e
