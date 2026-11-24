@@ -5,13 +5,18 @@ name: Deploy Production via SSH
 # writes into it is CONSOLE_CRON_MONITOR_KEY (step "Scheduled jobs", from the repo secret of that name).
 on:
   workflow_dispatch:
+    inputs:
+      configure_email_links:
+        description: Install the Email account-link service credential from Actions secrets
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: engage-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PROD_SFTP_HOST: ${{ secrets.PROD_SFTP_HOST }}
@@ -178,6 +183,17 @@ jobs:
           ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" \
             "chmod +x '${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh' && \
              bash '${REMOTE_ROOT}/api/cpanel-post-deploy-api.sh' '${REMOTE_ROOT}/api'"
+
+      - name: Configure Email account-link service
+        if: inputs.configure_email_links
+        working-directory: .
+        env:
+          EMAIL_ACCOUNT_LINK_SECRET: ${{ secrets.EMAIL_ACCOUNT_LINK_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$EMAIL_ACCOUNT_LINK_SECRET"
+          REMOTE_ROOT="${PROD_SFTP_REMOTE_ROOT%/}"
+          printf '%s' "$EMAIL_ACCOUNT_LINK_SECRET" | ssh -p "$PROD_SFTP_PORT" ${SSH_OPTS} "${PROD_SFTP_USER}@${PROD_SFTP_HOST}" "python3 '${REMOTE_ROOT}/api/bin/ops/configure-email-links.py' '${REMOTE_ROOT}/api/.env' engage"
 
       # Scheduled jobs (E8-OPS F160 — a README cron is not a worker). api/bin/ops/post-deploy-jobs.sh
       # ON THE SERVER (ops kit, identical to console-react-app ops/estate/kit): writes the Cron Job
