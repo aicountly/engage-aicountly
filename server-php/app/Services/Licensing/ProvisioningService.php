@@ -101,18 +101,23 @@ class ProvisioningService
             $keys = [];
             foreach ($defaults as $offer) {
                 $product = (string) $offer['product_code'];
-                $row = $licences->heldBasic($holder['holder_uuid'], $product, true);
+                $effectiveHolder = (new EmailAccountLinks($db))->canonicalHolder($holder['holder_uuid'], $product);
+                $row = $licences->heldBasic($effectiveHolder, $product, true);
                 if ($row === null) {
                     $last = $db->query('SELECT licence_ref, status FROM engage_licences WHERE holder_uuid = ? AND product_code = ? AND is_basic ORDER BY id DESC LIMIT 1',
-                        [$holder['holder_uuid'], $product])->getRowArray();
+                        [$effectiveHolder, $product])->getRowArray();
                     if ($last && $last['status'] === 'revoked') {
                         $out[] = $this->item($last['licence_ref'], $product, $offer, 'revoked');
 
                         continue;
                     }
-                    $row = $licences->insertBasic($holder['holder_uuid'], $offer, self::ACTOR);
+                    $row = $licences->insertBasic($effectiveHolder, $offer, self::ACTOR);
                     $created++;
-                    $keys = array_merge($keys, EntitlementProjector::appKeysOf($row));
+                    if ($effectiveHolder !== $holder['holder_uuid']) {
+                        (new EntitlementOutbox($db))->enqueue($effectiveHolder, null, EntitlementProjector::appKeysOf($row), 'email.linked_basic', $row['licence_ref']);
+                    } else {
+                        $keys = array_merge($keys, EntitlementProjector::appKeysOf($row));
+                    }
                 }
                 $snap = S::json($row['offer_snapshot']);
                 $out[] = $this->item($row['licence_ref'], $product, ['plan_code' => $snap['plan']['code'] ?? $row['plan_code'], 'offer_code' => $row['offer_code'],

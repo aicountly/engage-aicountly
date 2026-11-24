@@ -421,6 +421,7 @@ class LicenceService
         if (! $type || ! in_array($type['active'], [true, 't', 'true', 1, '1'], true)) {
             return self::invalid(['offer_code' => 'The licence type of this offer is inactive.']);
         }
+        $holder = (new EmailAccountLinks($this->db()))->canonicalHolder($holder, (string) $offer['product_code']);
         $isBasic = EntitlementProjector::bool($offer['is_default'] ?? false);
         if ($isBasic && $holder === '') {
             return self::invalid(['holder_uuid' => 'The Basic plan is held by a person: give the holder_uuid.']);
@@ -1281,6 +1282,7 @@ class LicenceService
     public function insertBasic(string $holder, array $offer, string $actorDisplay): array
     {
         $db = $this->db();
+        $holder = (new EmailAccountLinks($db))->canonicalHolder($holder, (string) $offer['product_code']);
         $actor = ['kind' => 'system', 'id' => null, 'display' => $actorDisplay];
         $now = gmdate('Y-m-d H:i:s') . '+00';
         $endsAt = S::addTerm($now, (int) $offer['term_months'], (int) $offer['term_days']);
@@ -1326,6 +1328,7 @@ class LicenceService
     {
         $db = $this->db();
         $product = (string) $offer['product_code'];
+        $holder = (new EmailAccountLinks($db))->canonicalHolder($holder, $product);
         $code = (string) $offer['offer_code'];
         $actor = self::sellerActor($seller);
         $db->query('SELECT pg_advisory_xact_lock(hashtext(?))', ['licence-subject:' . $holder . ':' . $product]);

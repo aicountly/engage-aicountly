@@ -60,3 +60,31 @@ jobs:
               checked += 1
           print(f'Validated {checked} tracked files')
           PY
+
+  email-licensing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: engage_test
+          POSTGRES_PASSWORD: engage_test
+          POSTGRES_DB: engage_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U engage_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: intl, mbstring, pgsql, pdo_pgsql
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist --no-scripts --no-plugins
+        working-directory: server-php
+      - name: Email linking and holder licence regression tests
+        working-directory: server-php
+        run: >-
+          env database.tests.hostname=127.0.0.1 database.tests.port=5432
+          database.tests.database=engage_test database.tests.username=engage_test database.tests.password=engage_test
+          php vendor/bin/phpunit --filter 'EmailAccountLinksTest|ManageAppRegistryTest|HolderLicensingTest'

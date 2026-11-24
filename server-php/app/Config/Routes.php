@@ -204,6 +204,8 @@ $routes->group('v1', static function ($routes) {
     // my.aicountly (server side) → Engage: Basic provisioning after sign-up (contract §3.2, docs/LICENSING.md §5b).
     // AIC-S2S v1, client myaicountly, key scope issue only (503 inbound_not_configured until
     // ENGAGE_INBOUND_MYAICOUNTLY_* is set).
+    $routes->post('email/account-links/preview', 'Inbound\\EmailAccountLinksController::preview', ['filter' => 'aic-s2s:email,issue']);
+    $routes->post('email/account-links/commit', 'Inbound\\EmailAccountLinksController::commit', ['filter' => 'aic-s2s:email,issue']);
     $routes->post('provisioning/accounts', 'Inbound\\ProvisioningController::accounts', ['filter' => 'aic-s2s:myaicountly,issue']);
 
     // Internal Reach ingest — validated by X-Portal-Token header.
