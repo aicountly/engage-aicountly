@@ -52,8 +52,20 @@ if ! grep -qE '^ENGAGE_INBOUND_FINANCE_KEY=.{32,}' .env; then
   echo "WARNING: ENGAGE_INBOUND_FINANCE_KEY is not set (>= 32 chars) — Finance payout status updates get 503."
 fi
 
+# Restricted S01 deployment logins do not inherit PHP-FPM's binary directory.
+PHP_CLI=""
+for candidate in "${PHP_BIN:-}" /opt/remi/php84/root/usr/bin/php /opt/remi/php83/root/usr/bin/php /opt/remi/php82/root/usr/bin/php /usr/local/bin/php /usr/bin/php; do
+  [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+  if "$candidate" -r 'exit(PHP_VERSION_ID >= 80200 && extension_loaded("pgsql") && extension_loaded("intl") && extension_loaded("mbstring") ? 0 : 1);' >/dev/null 2>&1; then
+    PHP_CLI="$candidate"
+    break
+  fi
+done
+[ -n "$PHP_CLI" ] || { echo "ERROR: no PHP 8.2+ CLI with pgsql, intl and mbstring was found."; exit 1; }
+echo "Using PHP CLI: $PHP_CLI"
+
 echo "---- Running database migrations ----"
-CI_ENVIRONMENT=production php spark migrate 2>&1
+CI_ENVIRONMENT=production "$PHP_CLI" spark migrate 2>&1
 
 MARKER="writable/.engage_seed_complete"
 if [ -f "$MARKER" ]; then
@@ -62,14 +74,14 @@ else
   echo "---- First deploy: running seeders ----"
   for seeder in RolesSeeder ProductsSeeder PipelineStagesSeeder BotActionsSeeder LeadSourcesSeeder SettingsSeeder OwnerSeeder; do
     echo "--- php spark db:seed ${seeder} ---"
-    CI_ENVIRONMENT=production php spark db:seed "$seeder"
+    CI_ENVIRONMENT=production "$PHP_CLI" spark db:seed "$seeder"
   done
   touch "$MARKER"
   chmod 644 "$MARKER"
   echo "Seeders complete. Marker created — future deploys will skip seeding."
 fi
 
-if php -r 'if (function_exists("opcache_reset")) { opcache_reset(); echo "OPcache reset\n"; }'; then
+if "$PHP_CLI" -r 'if (function_exists("opcache_reset")) { opcache_reset(); echo "OPcache reset\n"; }'; then
   :
 fi
 
