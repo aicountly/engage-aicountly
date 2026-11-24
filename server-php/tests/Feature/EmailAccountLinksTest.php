@@ -90,4 +90,21 @@ final class EmailAccountLinksTest extends LicensingTestCase
         $this->assertSame(401, $this->code($bad));
     }
 
+    public function testDuplicateBasicAllowancesDoNotStack(): void
+    {
+        $this->publishedOffer('email-basic-fixture', ['product_code' => 'email', 'app_keys' => ['email']]);
+        foreach (['child-1', 'main-1'] as $index => $holder) {
+            $this->issue(42 + $index, ['offer_code' => 'email-basic-fixture', 'holder_uuid' => $holder, 'holder_note' => 'Fixture verified']);
+        }
+        $this->db()->query("UPDATE engage_licences SET is_basic = TRUE WHERE product_code = 'email'");
+        $service = new EmailAccountLinks($this->db());
+        $input = ['link_id' => str_repeat('9',32), 'source_subject' => 'child-1', 'source_realm' => 'business', 'main_subject' => 'main-1'];
+        $preview = $service->process($input, false);
+        $result = $service->process($input + ['digest' => $preview['data']['digest']], true);
+        $this->assertSame(200, $result['status'], json_encode($result));
+        $rows = $this->db()->query("SELECT status, revoked_at, holder_uuid FROM engage_licences WHERE is_basic = TRUE")->getResultArray();
+        $this->assertCount(1, array_filter($rows, fn($r) => $r['status'] === 'revoked' && $r['revoked_at'] !== null));
+        $this->assertCount(2, array_filter($rows, fn($r) => $r['holder_uuid'] === 'main-1'));
+    }
+
 }
