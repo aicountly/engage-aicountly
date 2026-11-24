@@ -124,7 +124,7 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         $this->assertSame(['max_companies', 'max_users'], array_slice($codes, 0, 2), 'Manage-level codes first');
         foreach (EntitlementCodeCatalogue::CODES as $c) {
             $this->assertMatchesRegularExpression('/\A[a-z0-9][a-z0-9_.\-]{0,63}\z/', $c['code'], 'OfferService accepts the code shape');
-            $this->assertContains($c['unit'], ['count', 'mb', 'bool'], $c['code']);
+            $this->assertContains($c['unit'], ['count', 'mb', 'bytes', 'bool'], $c['code']);
             $this->assertNotSame('', $c['label']);
             if ($c['app'] === null) {
                 $this->assertSame('manage', $c['enforced_by']);
@@ -145,7 +145,7 @@ final class ManageAppRegistryTest extends CIUnitTestCase
             'contacts.max_contacts', 'remote.max_sessions_per_month', 'remote.max_devices', 'advisor.max_sessions_per_month',
             'advisor.max_consultations_per_month', 'appointments.max_staff', 'contracts.max_contracts', 'contracts.max_templates',
             'pay.max_payment_links_per_month', 'pay.max_api_keys', 'crm.max_customers', 'helpdesk.max_agents', 'receptionist.max_staff',
-            'valuations.max_engagements_per_month', 'email.max_mailboxes', 'email.max_domains', 'messaging.max_channels',
+            'valuations.max_engagements_per_month', 'email.max_mailboxes', 'email.max_users', 'email.storage_bytes_per_user', 'email.max_domains', 'messaging.max_channels',
             'messaging.max_messages_per_month', 'voice.max_numbers', 'voice.max_agents', 'integrate.max_apps',
             'benefits.max_open_applications', 'capital.max_open_applications',
             // Books, Inventory, Billing, Drive, Notes (enforced on main before the role files).
@@ -158,7 +158,7 @@ final class ManageAppRegistryTest extends CIUnitTestCase
         foreach (['edge.max_active_learners', 'aspire.max_workshops_per_month'] as $code) {
             $this->assertFalse(EntitlementCodeCatalogue::isKnown($code), $code);
         }
-        $this->assertCount(48, $codes);
+        $this->assertCount(50, $codes);
         $this->assertSame('mb', EntitlementCodeCatalogue::find(' DRIVE.storage_mb ')['unit'] ?? null);
         $this->assertNull(EntitlementCodeCatalogue::find('sales.max_rockets'));
     }

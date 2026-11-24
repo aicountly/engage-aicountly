@@ -64,6 +64,8 @@ final class EntitlementCodeCatalogue
         ['code' => 'receptionist.max_staff', 'label' => 'Desk staff', 'unit' => 'count', 'app' => 'receptionist', 'enforced_by' => 'product'],
         ['code' => 'valuations.max_engagements_per_month', 'label' => 'Engagements a month', 'unit' => 'count', 'app' => 'valuations', 'enforced_by' => 'product'],
         ['code' => 'email.max_mailboxes', 'label' => 'Mailboxes', 'unit' => 'count', 'app' => 'email', 'enforced_by' => 'product'],
+        ['code' => 'email.max_users', 'label' => 'Email users', 'unit' => 'count', 'app' => 'email', 'enforced_by' => 'product'],
+        ['code' => 'email.storage_bytes_per_user', 'label' => 'Email storage per user', 'unit' => 'bytes', 'app' => 'email', 'enforced_by' => 'product'],
         ['code' => 'email.max_domains', 'label' => 'Domains', 'unit' => 'count', 'app' => 'email', 'enforced_by' => 'product'],
         ['code' => 'messaging.max_channels', 'label' => 'Channel connections', 'unit' => 'count', 'app' => 'messaging', 'enforced_by' => 'product'],
         ['code' => 'messaging.max_messages_per_month', 'label' => 'Outgoing messages a month', 'unit' => 'count', 'app' => 'messaging', 'enforced_by' => 'product'],

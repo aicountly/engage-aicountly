@@ -17,7 +17,7 @@ use Config\Services;
  * as skipped; Aicountly Academy course products — academy, edge, aspire, any category Academy — are skipped as not
  * licensable) and that has NO default offer yet (draft or published), creates a DRAFT "Basic" offer:
  * offer_code <product>-basic, price 0, no term end, no seat limit, app_keys [Manage key], is_default, entitlements
- * EMPTY. Nothing is published: staff fill in the Basic limits (Licensing → Offers → the draft → entitlements),
+ * EMPTY except Email (three users and 100 MB storage per user). Nothing is published: staff fill in the Basic limits (Licensing → Offers → the draft → entitlements),
  * review and Publish. Idempotent — a product that already has a default offer, or an offer code <product>-basic,
  * is left alone.
  *
@@ -107,8 +107,11 @@ class BasicOffers extends BaseCommand
                 $db->query(
                     "INSERT INTO engage_offers (offer_code, version, product_code, licence_type_code, label, description, price_paise, currency, price_basis,
                         gst_rate, term_months, term_days, seats, app_keys, entitlements, display, status, is_default)
-                     VALUES (?, 1, ?, ?, 'Basic', ?, 0, 'INR', 'inclusive', 0, 0, 0, NULL, ?::text[], '[]'::jsonb, '{}'::jsonb, 'draft', TRUE)",
-                    [$code, $p['code'], $typeCode, 'Free Basic plan of ' . $p['name'] . ' — every signed-up user holds it. Set the Basic limits (entitlements), then publish.', '{' . $app . '}']
+                     VALUES (?, 1, ?, ?, 'Basic', ?, 0, 'INR', 'inclusive', 0, 0, 0, NULL, ?::text[], ?::jsonb, '{}'::jsonb, 'draft', TRUE)",
+                    [$code, $p['code'], $typeCode, 'Free Basic plan of ' . $p['name'] . ' — every signed-up user holds it. Set the Basic limits (entitlements), then publish.', '{' . $app . '}', json_encode($app === 'email' ? [
+                        ['code' => 'email.max_users', 'value' => 3],
+                        ['code' => 'email.storage_bytes_per_user', 'value' => 100000000],
+                    ] : [])]
                 );
                 Services::auditService()->log('offer.created', ['subject_kind' => 'offer', 'subject_id' => (int) $db->insertID(), 'actor_email' => 'system:engage', 'actor_role' => 'system',
                     'metadata' => ['offer_code' => $code, 'version' => 1, 'is_default' => true, 'by' => 'engage:basic-offers'], 'fanout_console' => true]);
